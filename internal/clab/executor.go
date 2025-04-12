@@ -10,14 +10,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/FloSch62/clab-api/internal/config" // Ensure config is imported
 	"github.com/charmbracelet/log"
 )
 
-const clabExecutable = "clab" // Assumes clab is in PATH
+const clabExecutable = "clab"          // Assumes clab is in PATH
 const defaultTimeout = 5 * time.Minute // Timeout for clab commands
 
 // RunClabCommand executes a clab command directly as the user running the API server.
 // It captures and returns stdout and stderr.
+// It now includes the configured --runtime flag if it's not the default 'docker'.
 // The 'username' parameter is now primarily for logging and potential labeling,
 // NOT for setting the execution user.
 func RunClabCommand(ctx context.Context, username string, args ...string) (stdout string, stderr string, err error) {
@@ -28,9 +30,33 @@ func RunClabCommand(ctx context.Context, username string, args ...string) (stdou
 		defer cancel()
 	}
 
-	// Construct the command: just 'clab <args...>'
-	commandString := fmt.Sprintf("%s %s", clabExecutable, strings.Join(args, " ")) // For logging
-	cmd := exec.CommandContext(ctx, clabExecutable, args...)
+	// --- Prepare final arguments including runtime ---
+	finalArgs := []string{}
+	if len(args) > 0 {
+		finalArgs = append(finalArgs, args[0]) // Add the subcommand (deploy, inspect, etc.)
+
+		// Add --runtime flag if needed (and not the default)
+		configuredRuntime := config.AppConfig.ClabRuntime
+		if configuredRuntime != "" && configuredRuntime != "docker" {
+			log.Debugf("Using non-default container runtime: %s", configuredRuntime)
+			finalArgs = append(finalArgs, "--runtime", configuredRuntime)
+		} else {
+			log.Debugf("Using default container runtime: docker")
+		}
+
+		// Add the rest of the original arguments
+		if len(args) > 1 {
+			finalArgs = append(finalArgs, args[1:]...)
+		}
+	} else {
+		// Should not happen with current usage, but handle gracefully
+		finalArgs = args
+	}
+	// --- End argument preparation ---
+
+	// Construct the command string for logging using the final arguments
+	commandString := fmt.Sprintf("%s %s", clabExecutable, strings.Join(finalArgs, " "))
+	cmd := exec.CommandContext(ctx, clabExecutable, finalArgs...) // Use finalArgs
 
 	// Working directory: Let clab run from the API server's CWD by default.
 	// If specific CWD is needed (e.g., for relative paths in non-temporary topologies),
@@ -42,7 +68,7 @@ func RunClabCommand(ctx context.Context, username string, args ...string) (stdou
 	cmd.Stderr = &errBuf
 
 	// Log which *authenticated* user triggered the command, even though it runs as the server user.
-	log.Debugf("Executing command", "triggered_by_user", username, "command", commandString, "cwd", cmd.Dir)
+	log.Debugf("Executing command", "triggered_by_user", username, "runtime", config.AppConfig.ClabRuntime, "command", commandString, "cwd", cmd.Dir)
 
 	startTime := time.Now()
 	err = cmd.Run()
@@ -80,14 +106,6 @@ func SanitizePath(relativePath string) (string, error) {
 		log.Warnf("Path traversal attempt blocked", "requested_path", relativePath, "cleaned_path", cleanedPath)
 		return "", fmt.Errorf("invalid path: '%s' must be relative and cannot start with '..'", relativePath)
 	}
-
-	// Security Check: Ensure the filename ends with .clab.yml or .clab.yaml if it's likely a topology file
-	// This check might be too strict depending on how the path is used. Consider removing if needed.
-	// if strings.Contains(cleanedPath, ".") && !strings.HasSuffix(cleanedPath, ".clab.yml") && !strings.HasSuffix(cleanedPath, ".clab.yaml") {
-	// 	log.Warnf("Path validation warning: Path '%s' does not have expected .clab suffix", cleanedPath)
-	// 	// Decide if this should be an error or just a warning
-	// 	// return "", fmt.Errorf("invalid topology filename: must end with .clab.yml or .clab.yaml")
-	// }
 
 	log.Debugf("Sanitized path: '%s' -> '%s'", relativePath, cleanedPath)
 	return cleanedPath, nil

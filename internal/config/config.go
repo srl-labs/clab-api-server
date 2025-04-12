@@ -12,6 +12,7 @@ type Config struct {
 	JWTSecret            string        `mapstructure:"JWT_SECRET"`
 	JWTExpirationMinutes time.Duration `mapstructure:"JWT_EXPIRATION_MINUTES"`
 	SuperuserGroup       string        `mapstructure:"SUPERUSER_GROUP"`
+	ClabRuntime          string        `mapstructure:"CLAB_RUNTIME"`
 }
 
 var AppConfig Config
@@ -24,6 +25,7 @@ func LoadConfig() error {
 	viper.SetDefault("JWT_SECRET", "default_secret_change_me")
 	viper.SetDefault("JWT_EXPIRATION_MINUTES", 60)
 	viper.SetDefault("SUPERUSER_GROUP", "")
+	viper.SetDefault("CLAB_RUNTIME", "docker")
 
 	err := viper.ReadInConfig()
 	// Ignore if .env file not found, rely on defaults/env vars

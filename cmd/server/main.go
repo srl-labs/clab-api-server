@@ -52,6 +52,7 @@ func main() {
 	log.Debugf("API Port: %s", config.AppConfig.APIPort)
 	log.Debugf("JWT Secret Loaded: %t", config.AppConfig.JWTSecret != "" && config.AppConfig.JWTSecret != "default_secret_change_me")
 	log.Debugf("JWT Expiration: %s", config.AppConfig.JWTExpirationMinutes)
+	log.Infof("Containerlab Runtime: %s", config.AppConfig.ClabRuntime)
 	if config.AppConfig.JWTSecret == "default_secret_change_me" {
 		log.Warn("Using default JWT secret. Change JWT_SECRET environment variable for production!")
 	}
@@ -60,14 +61,10 @@ func main() {
 	if _, err := exec.LookPath("clab"); err != nil {
 		log.Fatalf("'clab' command not found in PATH. Please install Containerlab (containerlab.dev).")
 	}
-	// No longer need sudo check
-	// if _, err := exec.LookPath("sudo"); err != nil {
-	// 	log.Fatalf("'sudo' command not found in PATH. Sudo is required for password validation.")
-	// }
 	log.Info("'clab' command found in PATH.")
-	log.Warn("Ensure the user running *this API server* has permissions to interact with the Docker daemon (e.g., is in the 'docker' group).")
+	log.Warn("Ensure the user running *this API server* has permissions to interact with the configured container runtime daemon (e.g., Docker daemon via 'docker' group).") // Updated warning
+	log.Warnf("Ensure the configured container runtime '%s' is installed and accessible.", config.AppConfig.ClabRuntime)                                                     // Added warning for runtime
 	log.Warn("Authentication uses PAM. Ensure the API server environment has necessary PAM libraries (e.g., libpam-dev) and configuration.")
-	// Removed sudo permission warning
 
 	// Initialize Gin router
 	// gin.SetMode(gin.ReleaseMode) // Uncomment for production
@@ -83,11 +80,12 @@ func main() {
 			"documentation":  "/swagger/index.html",
 			"login_endpoint": "POST /login",
 			"api_base_path":  "/api/v1",
+			"clab_runtime":   config.AppConfig.ClabRuntime,
 			"notes": []string{
 				"Runs clab commands as the API server's user.",
-				"Requires Docker permissions for the API server user.",
+				fmt.Sprintf("Requires %s permissions for the API server user.", config.AppConfig.ClabRuntime), // Dynamic note
 				"Uses PAM for user authentication.",
-				"Labs are associated with users via Docker labels.",
+				"Labs are associated with users via Docker labels.", // Note: clab still uses Docker labels even with other runtimes
 			},
 		})
 	})
