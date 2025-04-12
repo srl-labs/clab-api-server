@@ -1,0 +1,317 @@
+definitions:
+  models.ClabContainerInfo:
+    properties:
+      LabPath:
+        description: Path to the topology file used (often relative)
+        type: string
+      Owner:
+        description: Linux username who owns/ran the lab (CRUCIAL FOR FILTERING)
+        type: string
+      container_id:
+        description: Docker container ID (short)
+        type: string
+      deployment_status:
+        description: e.g., "deployed"
+        type: string
+      group:
+        description: Group assigned in topology
+        type: string
+      image:
+        description: Container image used
+        type: string
+      ipv4_address:
+        description: Management IPv4 Address/Mask
+        type: string
+      ipv6_address:
+        description: Management IPv6 Address/Mask
+        type: string
+      kind:
+        description: e.g., "srl", "linux"
+        type: string
+      lab_name:
+        description: Name of the lab this node belongs to
+        type: string
+      name:
+        description: Add fields you care about from the `clab inspect` output
+        type: string
+      state:
+        description: e.g., "running"
+        type: string
+    type: object
+  models.ClabInspectOutput:
+    properties:
+      Containers:
+        items:
+          $ref: '#/definitions/models.ClabContainerInfo'
+        type: array
+    type: object
+  models.DeployRequest:
+    properties:
+      topologyContent:
+        description: YAML content as a string
+        example: |-
+          name: my-lab
+          topology:
+            nodes:
+              srl1:
+                kind: srl
+                image: ghcr.io/nokia/srlinux
+        type: string
+    required:
+    - topologyContent
+    type: object
+  models.ErrorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  models.GenericSuccessResponse:
+    properties:
+      message:
+        type: string
+    type: object
+  models.LoginRequest:
+    properties:
+      password:
+        type: string
+      username:
+        type: string
+    required:
+    - password
+    - username
+    type: object
+  models.LoginResponse:
+    properties:
+      token:
+        type: string
+    type: object
+  models.TopologyListItem:
+    properties:
+      filename:
+        description: e.g., my-lab.clab.yml
+        type: string
+      relativePath:
+        description: Path relative to user's home (same as filename in this case)
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact:
+    email: support@swagger.io
+    name: API Support
+    url: https://swagger.io/support/
+  description: This is an API server to interact with Containerlab for authenticated
+    Linux users.
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  termsOfService: http://swagger.io/terms/
+  title: Containerlab API
+  version: "1.0"
+paths:
+  /api/v1/labs:
+    get:
+      description: Get details about all running labs for the authenticated user (filtered
+        by owner)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Filtered JSON output from 'clab inspect --all'
+          schema:
+            $ref: '#/definitions/models.ClabInspectOutput'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error or clab execution failed
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: List All Labs
+      tags:
+      - Labs
+    post:
+      consumes:
+      - application/json
+      description: Deploys a containerlab topology for the authenticated user
+      parameters:
+      - description: Topology Content
+        in: body
+        name: deploy_request
+        required: true
+        schema:
+          $ref: '#/definitions/models.DeployRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Raw JSON output from 'clab deploy' (or plain text on error)
+          schema:
+            type: object
+        "400":
+          description: Invalid input (e.g., empty topology content)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error (e.g., failed to create temp file, clab
+            execution failed)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Deploy Lab
+      tags:
+      - Labs
+  /api/v1/labs/{labName}:
+    delete:
+      description: Destroys a specific containerlab lab by name for the authenticated
+        user
+      parameters:
+      - description: Name of the lab to destroy
+        in: path
+        name: labName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.GenericSuccessResponse'
+        "400":
+          description: Invalid lab name
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Lab not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error or clab execution failed
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Destroy Lab
+      tags:
+      - Labs
+    get:
+      description: Get details about a specific running lab for the authenticated
+        user
+      parameters:
+      - description: Name of the lab to inspect
+        in: path
+        name: labName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Raw JSON output from 'clab inspect'
+          schema:
+            type: object
+        "400":
+          description: Invalid lab name
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Lab not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error or clab execution failed
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Inspect Lab
+      tags:
+      - Labs
+  /api/v1/topologies:
+    get:
+      description: Lists available .clab.yml/.clab.yaml files in the user's home directory
+        (non-recursive)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.TopologyListItem'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: List Topologies
+      tags:
+      - Topologies
+  /login:
+    post:
+      consumes:
+      - application/json
+      description: Authenticate user and return JWT token
+      parameters:
+      - description: User Credentials
+        in: body
+        name: credentials
+        required: true
+        schema:
+          $ref: '#/definitions/models.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.LoginResponse'
+        "400":
+          description: Invalid input
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Invalid credentials
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Login
+      tags:
+      - Auth
+schemes:
+- http
+- https
+securityDefinitions:
+  BearerAuth:
+    description: 'Type "Bearer" followed by a space and JWT token. Example: "Bearer
+      eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."'
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"
