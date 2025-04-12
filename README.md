@@ -13,7 +13,7 @@ This project provides a standalone RESTful API server written in Go to interact 
 *   **List Topologies:** List available `.clab.yml` files in the user's home directory.
 *   **Authentication:** JWT-based (login required).
 *   **Authorization:** API endpoints require a valid JWT.
-*   **User Context:** Executes `clab` commands as the authenticated Linux user via `sudo`.
+*   **User Context:** Executes `clab` commands as the authenticated Linux.
 *   **Swagger/OpenAPI:** Auto-generated API documentation.
 
 ## Prerequisites
@@ -65,14 +65,13 @@ This project provides a standalone RESTful API server written in Go to interact 
 5.  **Build and Run the Server:**
     ```bash
     task         # runs tidy, swag, and build
-    sudo ./clab-api-server
+    ./clab-api-server
     ```
     The server will typically start on port 8080 (or as configured in `.env`).
 
 ## Running the Server
 
 ```bash
-# Make sure you are running as the user configured in sudoers (e.g., 'apiuser' or 'root')
 ./clab-api-server
 ```
 # Server Information
@@ -148,6 +147,43 @@ Authorization: Bearer <your_jwt_token>
 
 1. Generate Swagger Docs: `task swag`
 2. Build the server: `task build`
-3. Run: `sudo ./clab-api-server` (Run as the user configured in `sudoers`, often root)
+3. Run: `./clab-api-server`
 4. Open Swagger: http://localhost:8080/swagger/index.html
 5. Use Postman, curl, or similar to log in and interact with endpoints
+
+
+# Privilege Model and Security Considerations
+
+## API Server Execution Model
+
+- Runs as the user who starts the server (not as authenticated users)
+- This user needs:
+  - Container runtime access (e.g., docker group membership)
+  - Execute permission for the `clab` binary
+  - Read/write access to authenticated users' home directories
+
+## Command Execution
+
+- All commands run directly as the API server user (no sudo)
+- Lab ownership tracked via container labels, not actual file ownership
+
+## Authentication & Authorization
+
+- PAM-based authentication against Linux user accounts
+- JWT tokens with configurable expiration (default 60 minutes)
+- User context tracked for authorization but not for execution
+- Optional superuser group can view/manage all labs
+
+## File Operations
+
+- Creates and manages files in `~/.clab/<labname>/` directories
+- Directory permissions: 0750 (rwxr-x---)
+- File permissions: 0640 (rw-r-----)
+- All files owned by API server user, not authenticated users
+
+## Security Considerations
+
+- Path sanitization prevents directory traversal attacks
+- Input validation prevents command injection (lab name regex: `^[a-zA-Z0-9_-]+$`)
+- Command execution has timeout protection (default 5 minutes)
+- No privilege separation/dropping occurs during execution
