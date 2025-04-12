@@ -6,17 +6,18 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/user"       // Needed to find user's home directory
-	"path/filepath" // Needed for joining paths
+	"os/user"
+	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
-	"gopkg.in/yaml.v3" // NEEDED for parsing topology name
+	"gopkg.in/yaml.v3"
 
 	"github.com/FloSch62/clab-api/internal/auth"
 	"github.com/FloSch62/clab-api/internal/clab"
+	"github.com/FloSch62/clab-api/internal/config"
 	"github.com/FloSch62/clab-api/internal/models"
 )
 
@@ -408,8 +409,29 @@ func InspectLabHandler(c *gin.Context) {
 // @Router /api/v1/labs [get]
 func ListLabsHandler(c *gin.Context) {
 	username := c.GetString("username") // Authenticated user
-	log.Debugf("ListLabs user '%s': Listing all labs and filtering by 'owner' field...", username)
 
+	// --- Check for Superuser Status ---
+	isSuperuser := false
+	if config.AppConfig.SuperuserGroup != "" {
+		inGroup, err := auth.IsUserInGroup(username, config.AppConfig.SuperuserGroup)
+		if err != nil {
+			// Log the error but proceed as a non-superuser
+			log.Errorf("ListLabs user '%s': Error checking superuser group membership for group '%s': %v. Proceeding with standard permissions.",
+				username, config.AppConfig.SuperuserGroup, err)
+		} else if inGroup {
+			isSuperuser = true
+			log.Infof("ListLabs user '%s': Identified as superuser (member of '%s'). Bypassing owner filtering.",
+				username, config.AppConfig.SuperuserGroup)
+		} else {
+			log.Debugf("ListLabs user '%s': Not a member of superuser group '%s'. Applying owner filtering.",
+				username, config.AppConfig.SuperuserGroup)
+		}
+	} else {
+		log.Debugf("ListLabs user '%s': No SUPERUSER_GROUP configured. Applying owner filtering.", username)
+	}
+	// --- End Superuser Check ---
+
+	log.Debugf("ListLabs user '%s': Listing labs via 'clab inspect --all'...", username)
 	args := []string{"inspect", "--all", "--format", "json"}
 	stdout, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...) // username for logging
 
@@ -418,19 +440,21 @@ func ListLabsHandler(c *gin.Context) {
 	}
 	if err != nil {
 		errMsg := err.Error()
+		// Check if the error indicates no labs exist at all
 		if strings.Contains(stdout, "no containers found") ||
 			strings.Contains(errMsg, "no containerlab labs found") ||
 			strings.Contains(stderr, "no containers found") {
-			log.Infof("ListLabs user '%s': No labs found at all.", username)
+			log.Infof("ListLabs user '%s': No labs found via clab inspect.", username)
 			c.JSON(http.StatusOK, models.ClabInspectOutput{Containers: []models.ClabContainerInfo{}}) // Return empty list
 			return
 		}
+		// Otherwise, it's a real error
 		log.Errorf("ListLabs failed for user '%s': clab inspect --all command failed: %v", username, err)
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to list labs: %s", err.Error())})
 		return
 	}
 
-	log.Debugf("ListLabs user '%s': inspect --all command successful, parsing and filtering...", username)
+	log.Debugf("ListLabs user '%s': inspect --all command successful, parsing...", username)
 
 	// Parse the full output
 	var fullResult models.ClabInspectOutput
@@ -440,36 +464,60 @@ func ListLabsHandler(c *gin.Context) {
 		return
 	}
 
-	// Filter the containers based on the owner field
-	filteredContainers := []models.ClabContainerInfo{}
-	labsFoundForUser := make(map[string]bool)
-	labsChecked := make(map[string]bool)
+	// --- Filter Results (or don't, if superuser) ---
+	var finalResult models.ClabInspectOutput
 
-	for _, cont := range fullResult.Containers {
-		if labsChecked[cont.LabName] {
-			continue
-		}
+	if isSuperuser {
+		log.Debugf("ListLabs user '%s': Superuser returning all %d containers from %d labs.", username, len(fullResult.Containers), countUniqueLabs(fullResult.Containers))
+		finalResult = fullResult // Superuser gets everything
+	} else {
+		// Filter the containers based on the owner field for regular users
+		filteredContainers := []models.ClabContainerInfo{}
+		labsFoundForUser := make(map[string]bool) // Keep track of unique lab names found for the user
 
-		// *** Check the Owner field ***
-		actualOwner := cont.Owner
-		if actualOwner == username {
-			log.Debugf("ListLabs user '%s': Found lab '%s' owned by user (owner='%s'), adding its containers.", username, cont.LabName, actualOwner)
-			labsFoundForUser[cont.LabName] = true
-			for _, labCont := range fullResult.Containers {
-				if labCont.LabName == cont.LabName {
-					if labCont.Owner == username {
-						filteredContainers = append(filteredContainers, labCont)
-					} else {
-						log.Warnf("ListLabs user '%s': Container '%s' in user's lab '%s' has inconsistent owner field ('%s' vs expected '%s'). Skipping this container.", username, labCont.Name, labCont.LabName, labCont.Owner, username)
-					}
+		for _, cont := range fullResult.Containers {
+			// Check the Owner field
+			if cont.Owner == username {
+				// Add the container if it belongs to the user
+				filteredContainers = append(filteredContainers, cont)
+				// Mark the lab name as found for this user
+				if !labsFoundForUser[cont.LabName] {
+					labsFoundForUser[cont.LabName] = true
+					log.Debugf("ListLabs user '%s': Found lab '%s' owned by user.", username, cont.LabName)
+				}
+			} else {
+				// Log only once per lab that doesn't belong to the user for clarity
+				_, checked := labsFoundForUser[cont.LabName]
+				if !checked && cont.Owner != "" { // Avoid logging for labs potentially not managed by clab-api
+					log.Debugf("ListLabs user '%s': Filtering out lab '%s' owned by '%s'.", username, cont.LabName, cont.Owner)
+					labsFoundForUser[cont.LabName] = false // Mark as checked, but not owned by user
 				}
 			}
-		} else {
-			log.Debugf("ListLabs user '%s': Filtering out lab '%s' owned by '%s'.", username, cont.LabName, actualOwner)
 		}
-		labsChecked[cont.LabName] = true
-	}
 
-	log.Infof("ListLabs user '%s': Found %d labs owned by user.", username, len(labsFoundForUser))
-	c.JSON(http.StatusOK, models.ClabInspectOutput{Containers: filteredContainers})
+		// Count how many labs were actually owned by the user
+		ownedLabCount := 0
+		for _, owned := range labsFoundForUser {
+			if owned {
+				ownedLabCount++
+			}
+		}
+
+		log.Infof("ListLabs user '%s': Found %d containers belonging to %d labs owned by the user.", username, len(filteredContainers), ownedLabCount)
+		finalResult.Containers = filteredContainers
+	}
+	// --- End Filtering ---
+
+	c.JSON(http.StatusOK, finalResult)
+}
+
+// Helper function to count unique lab names in a list of containers
+func countUniqueLabs(containers []models.ClabContainerInfo) int {
+	uniqueLabs := make(map[string]struct{})
+	for _, c := range containers {
+		if c.LabName != "" {
+			uniqueLabs[c.LabName] = struct{}{}
+		}
+	}
+	return len(uniqueLabs)
 }

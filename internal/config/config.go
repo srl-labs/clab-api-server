@@ -1,3 +1,4 @@
+// internal/config/config.go
 package config
 
 import (
@@ -7,9 +8,10 @@ import (
 )
 
 type Config struct {
-	APIPort             string        `mapstructure:"API_PORT"`
-	JWTSecret           string        `mapstructure:"JWT_SECRET"`
+	APIPort              string        `mapstructure:"API_PORT"`
+	JWTSecret            string        `mapstructure:"JWT_SECRET"`
 	JWTExpirationMinutes time.Duration `mapstructure:"JWT_EXPIRATION_MINUTES"`
+	SuperuserGroup       string        `mapstructure:"SUPERUSER_GROUP"`
 }
 
 var AppConfig Config
@@ -21,6 +23,7 @@ func LoadConfig() error {
 	viper.SetDefault("API_PORT", "8080")
 	viper.SetDefault("JWT_SECRET", "default_secret_change_me")
 	viper.SetDefault("JWT_EXPIRATION_MINUTES", 60)
+	viper.SetDefault("SUPERUSER_GROUP", "")
 
 	err := viper.ReadInConfig()
 	// Ignore if .env file not found, rely on defaults/env vars
