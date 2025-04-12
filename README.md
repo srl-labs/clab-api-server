@@ -60,21 +60,19 @@ This project provides a standalone RESTful API server written in Go to interact 
     task deps
     ```
 
-5.  **Build and Run the Server:**
+5.  **Build the Server:**
     ```bash
     task         # runs tidy, swag, and build
-    ./clab-api-server
     ```
-    The server will typically start on port 8080 (or as configured in `.env`).
 
 ## Running the Server
 
 ```bash
-./clab-api-server
+    sudo ./clab-api-server # sudo only needed in case of multiuser server
 ```
-# Server Information
 
-The server will start, typically on port **8080** (or as configured in `.env`).
+> [!NOTE]
+> The server will start, typically on port **8080** (or as configured in `.env`).
 
 ---
 
@@ -153,6 +151,7 @@ Authorization: Bearer <your_jwt_token>
 
 - All commands run directly as the API server user (no sudo)
 - Lab ownership tracked via container labels, not actual file ownership
+- Lab ownernship needs to bet set for the authenticated users (not done yet)
 
 ## Authentication & Authorization
 
@@ -166,7 +165,8 @@ Authorization: Bearer <your_jwt_token>
 - Creates and manages files in `~/.clab/<labname>/` directories
 - Directory permissions: 0750 (rwxr-x---)
 - File permissions: 0640 (rw-r-----)
-- All files owned by API server user, not authenticated users
+- All files owned by API server user, not authenticated users 
+- Permission will be changes soon, files should belong to the users
 
 ## Security Considerations
 
