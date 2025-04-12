@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/yourusername/clab-api/internal/config" // Adjust import path
+	"github.com/FloSch62/clab-api/internal/config" // Adjust import path
 )
 
 type Claims struct {

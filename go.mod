@@ -1,4 +1,4 @@
-module github.com/yourusername/clab-api
+module github.com/FloSch62/clab-api
 
 go 1.24.2
 
