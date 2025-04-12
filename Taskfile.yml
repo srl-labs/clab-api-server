@@ -1,5 +1,3 @@
-# https://taskfile.dev
-
 version: '3'
 
 tasks:
@@ -26,4 +24,7 @@ tasks:
 
   default:
     desc: Run all key steps (tidy, swag, build)
-    deps: [tidy, swag, build]
+    cmds:
+      - task tidy
+      - task swag
+      - task build

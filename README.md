@@ -2,7 +2,7 @@
 
 This project provides a standalone RESTful API server written in Go to interact with the [Containerlab](https://containerlab.dev/) command-line tool.
 
-**WARNING:** This API allows executing commands (`clab`) on the host system, potentially with elevated privileges (`sudo`). It includes **highly insecure placeholder authentication**. Use with extreme caution, understand the security implications, and **do not expose this API publicly without significant hardening**, proper authentication (PAM, LDAP, etc.), authorization controls, and HTTPS.
+**WARNING:** This API allows executing commands (`clab`) on the host system, potentially with elevated privileges.
 
 ## Features
 
@@ -26,29 +26,48 @@ This project provides a standalone RESTful API server written in Go to interact 
 
 1.  **Clone the repository:**
     ```bash
-    git clone <your-repo-url> clab-api
+    git clone https://github.com/flosch62/clab-api
     cd clab-api
     ```
-2.  **Install Go dependencies:**
+
+2.  **Install Task (Taskfile runner):**
+    You can install [Task](https://taskfile.dev) via the official script:
+    
     ```bash
-    go mod tidy
+    sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b ~/.local/bin
     ```
+    Then add this to your shell config if it's not already in your PATH:
+
+    ```bash
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+    source ~/.zshrc
+    ```
+    Verify with:
+    ```bash
+    task --version
+    ```
+
 3.  **Configure Environment:**
+
     Create a `.env` file in the project root (copy from `.env.example`) and **change `JWT_SECRET`** to a strong, random value.
     ```bash
     cp .env.example .env
-    # Edit .env and set a strong JWT_SECRET
     ```
-4.  **Generate Swagger Docs:**
+    
+    Edit .env and set a strong JWT_SECRET
+
+4.  **Install System Dependencies:**
+
     ```bash
-    # Install swag if you haven't already
-    # go install github.com/swaggo/swag/cmd/swag@latest
-    swag init -g cmd/server/main.go
+    task deps
     ```
-5.  **Build the server:**
+
+5.  **Build and Run the Server:**
     ```bash
-    go build -o clab-api-server ./cmd/server/
+    task         # runs tidy, swag, and build
+    sudo ./clab-api-server
     ```
+    The server will typically start on port 8080 (or as configured in `.env`).
 
 ## Running the Server
 
@@ -105,31 +124,30 @@ Authorization: Bearer <your_jwt_token>
 - **GET** `/api/v1/topologies`  
   List `.clab.yml` files in the user's home directory.
 
----
-
-## Security Considerations (Reminder)
-
-- **Sudo:** Requires careful, restrictive configuration. Running the API as root is common but increases risk.
-- **Authentication:** The default credential check is insecure. Implement PAM or other robust methods.
-- **Input Validation:** Sanitize all user inputs (filenames, lab names) to prevent injection attacks.
-- **HTTPS:** Absolutely essential for any non-local deployment. Use a reverse proxy (Nginx, Caddy) to handle TLS termination.
-- **Rate Limiting/Firewalling:** Protect the API from abuse.
-- **Error Handling:** Avoid leaking sensitive information in error messages.
-
----
 
 ## Development
 
-- Use `swag init -g cmd/server/main.go` to update Swagger docs after changing comments or models.
+- Use `task swag` to update Swagger docs after changing comments or models.
+- Use `task build` to rebuild the server.
+- Use `task deps` to install system dependencies.
 - Consider adding more robust error handling and logging.
-
 
 ---
 
-**5. Build and Run**
+## Taskfile Commands
 
-1.  **Generate Swagger Docs:** `swag init -g cmd/server/main.go`
-2.  **Build:** `go build -o clab-api-server ./cmd/server/`
-3.  **Run:** `sudo ./clab-api-server` (Run as the user configured in `sudoers`, often root for simplicity in managing `sudo -u`).
-4.  Access `http://localhost:8080/swagger/index.html` in your browser.
-5.  Use `curl` or a tool like Postman/Insomnia to interact with the API, starting with `/login`. Remember to include the `Authorization: Bearer <token>` header for protected endpoints. Place your `.clab.yml` files in the home directory of the user you log in as (e.g., `/home/myuser/test.clab.yml`).
+- `task tidy` – Run `go mod tidy`
+- `task swag` – Generate Swagger docs
+- `task build` – Compile the server
+- `task deps` – Install system dependencies (`build-essential`, `libpam-dev`)
+- `task` – Run the default task: tidy → swag → build
+
+---
+
+## Build and Run Summary
+
+1. Generate Swagger Docs: `task swag`
+2. Build the server: `task build`
+3. Run: `sudo ./clab-api-server` (Run as the user configured in `sudoers`, often root)
+4. Open Swagger: http://localhost:8080/swagger/index.html
+5. Use Postman, curl, or similar to log in and interact with endpoints
