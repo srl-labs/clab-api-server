@@ -3,20 +3,15 @@ package auth
 
 import (
 	"fmt"
-	// "bytes" // No longer needed
-	// "context" // No longer needed
-	// "os/exec" // No longer needed
 	"os/user"
-	// "strings" // No longer needed
-	// "time" // No longer needed
 
 	"github.com/charmbracelet/log"
-	"github.com/msteinert/pam" // Import the PAM library
+	"github.com/msteinert/pam"
 )
 
 // ValidateCredentials checks if the Linux user exists and validates the password using PAM.
 func ValidateCredentials(username, password string) (bool, error) {
-	// 1. Check if the user exists on the system (still useful)
+	// 1. Check if the user exists on the system
 	_, err := user.Lookup(username)
 	if err != nil {
 		if _, ok := err.(user.UnknownUserError); ok {
@@ -31,9 +26,6 @@ func ValidateCredentials(username, password string) (bool, error) {
 	// 2. Attempt password validation using PAM
 	log.Debugf("Attempting password validation for user '%s' via PAM", username)
 
-	// Start a PAM transaction. The service name ("login" is common, but could be custom like "clab-api")
-	// might need to be configured in /etc/pam.d/ if you use a custom name and need specific rules.
-	// Using a common service like "login" or "sshd" often works if its rules are suitable. Let's try "login".
 	t, err := pam.StartFunc("login", username, func(s pam.Style, text string) (string, error) {
 		switch s {
 		case pam.PromptEchoOff: // Prompt for password

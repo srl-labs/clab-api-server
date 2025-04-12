@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/FloSch62/clab-api/internal/config" // Ensure config is imported
+	"github.com/FloSch62/clab-api/internal/config"
 	"github.com/charmbracelet/log"
 )
 
@@ -18,10 +18,6 @@ const clabExecutable = "clab"          // Assumes clab is in PATH
 const defaultTimeout = 5 * time.Minute // Timeout for clab commands
 
 // RunClabCommand executes a clab command directly as the user running the API server.
-// It captures and returns stdout and stderr.
-// It now includes the configured --runtime flag if it's not the default 'docker'.
-// The 'username' parameter is now primarily for logging and potential labeling,
-// NOT for setting the execution user.
 func RunClabCommand(ctx context.Context, username string, args ...string) (stdout string, stderr string, err error) {
 	// Add timeout to context if not already present
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
@@ -58,11 +54,6 @@ func RunClabCommand(ctx context.Context, username string, args ...string) (stdou
 	commandString := fmt.Sprintf("%s %s", clabExecutable, strings.Join(finalArgs, " "))
 	cmd := exec.CommandContext(ctx, clabExecutable, finalArgs...) // Use finalArgs
 
-	// Working directory: Let clab run from the API server's CWD by default.
-	// If specific CWD is needed (e.g., for relative paths in non-temporary topologies),
-	// it must be handled by the caller or configured globally.
-	// cmd.Dir = ??? // Removed user home dir logic
-
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
@@ -93,8 +84,6 @@ func RunClabCommand(ctx context.Context, username string, args ...string) (stdou
 }
 
 // SanitizePath prevents path traversal.
-// It no longer assumes paths are relative to a specific user's home directory.
-// It's less critical now as paths are handled differently, but basic cleaning is good.
 // Returns the cleaned path if valid, otherwise an error.
 func SanitizePath(relativePath string) (string, error) {
 	// Clean the input path first (removes redundant slashes, dots)

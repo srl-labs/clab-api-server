@@ -46,5 +46,4 @@ type ClabContainerInfo struct {
 	LabPath     string `json:"labPath"`      // Path to the topology file used
 	Group       string `json:"group"`        // Group assigned in topology (Might not always be present)
 	Owner       string `json:"owner"`        // OS user from clab inspect output (Used for authorization)
-	// Add other fields as needed...
 }
