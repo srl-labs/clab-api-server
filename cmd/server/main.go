@@ -1,3 +1,4 @@
+// cmd/server/main.go
 package main
 
 import (
@@ -14,9 +15,9 @@ import (
 	_ "github.com/FloSch62/clab-api/docs" // swagger docs
 )
 
-// @title Containerlab API
-// @version 1.0
-// @description This is an API server to interact with Containerlab for authenticated Linux users.
+// @title Containerlab API (Sudoless)
+// @version 1.1
+// @description This is an API server to interact with Containerlab for authenticated Linux users. Runs clab commands as the API server's user. Requires PAM for authentication.
 // @termsOfService http://swagger.io/terms/
 
 // @contact.name API Support
@@ -38,9 +39,9 @@ import (
 // The /login endpoint is intentionally kept separate at the root (POST /login) and is not part of this BasePath.
 func main() {
 	// Initialize logger
-	log.SetLevel(log.DebugLevel) // Adjust log level (DebugLevel, InfoLevel, WarnLevel, ErrorLevel, FatalLevel)
+	log.SetLevel(log.DebugLevel)
 	log.SetOutput(os.Stderr)
-	log.SetTimeFormat("2006-01-02 15:04:05") // Optional: Customize log timestamp format
+	log.SetTimeFormat("2006-01-02 15:04:05")
 
 	// Load configuration
 	if err := config.LoadConfig(); err != nil {
@@ -48,7 +49,7 @@ func main() {
 	}
 	log.Infof("Configuration loaded successfully")
 	log.Debugf("API Port: %s", config.AppConfig.APIPort)
-	log.Debugf("JWT Secret Loaded: %t", config.AppConfig.JWTSecret != "" && config.AppConfig.JWTSecret != "default_secret_change_me") // Check if default is changed
+	log.Debugf("JWT Secret Loaded: %t", config.AppConfig.JWTSecret != "" && config.AppConfig.JWTSecret != "default_secret_change_me")
 	log.Debugf("JWT Expiration: %s", config.AppConfig.JWTExpirationMinutes)
 	if config.AppConfig.JWTSecret == "default_secret_change_me" {
 		log.Warn("Using default JWT secret. Change JWT_SECRET environment variable for production!")
@@ -58,27 +59,35 @@ func main() {
 	if _, err := exec.LookPath("clab"); err != nil {
 		log.Fatalf("'clab' command not found in PATH. Please install Containerlab (containerlab.dev).")
 	}
-	if _, err := exec.LookPath("sudo"); err != nil {
-		log.Fatalf("'sudo' command not found in PATH. Sudo is required to run clab as different users and for password validation.")
-	}
-	log.Info("'clab' and 'sudo' commands found in PATH.")
-	log.Warn("Ensure the user running *this API server* has appropriate *passwordless* sudo permissions for 'clab' commands executed via 'sudo -u <target_user> clab ...'")
-	log.Warn("Target users authenticating via the API do *not* need passwordless sudo.")
+	// No longer need sudo check
+	// if _, err := exec.LookPath("sudo"); err != nil {
+	// 	log.Fatalf("'sudo' command not found in PATH. Sudo is required for password validation.")
+	// }
+	log.Info("'clab' command found in PATH.")
+	log.Warn("Ensure the user running *this API server* has permissions to interact with the Docker daemon (e.g., is in the 'docker' group).")
+	log.Warn("Authentication uses PAM. Ensure the API server environment has necessary PAM libraries (e.g., libpam-dev) and configuration.")
+	// Removed sudo permission warning
 
 	// Initialize Gin router
-	// gin.SetMode(gin.ReleaseMode) // Uncomment for production (less verbose logging)
+	// gin.SetMode(gin.ReleaseMode) // Uncomment for production
 	router := gin.Default()
 
-	// Setup API routes (including public /login and authenticated /api/v1/*)
+	// Setup API routes
 	api.SetupRoutes(router)
 
-	// Root handler (optional - basic info)
+	// Root handler
 	router.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
-			"message": "Containerlab API is running.",
+			"message":       "Containerlab API (Sudoless Mode) is running.",
 			"documentation": "/swagger/index.html",
 			"login_endpoint": "POST /login",
 			"api_base_path": "/api/v1",
+			"notes": []string{
+				"Runs clab commands as the API server's user.",
+				"Requires Docker permissions for the API server user.",
+				"Uses PAM for user authentication.",
+				"Labs are associated with users via Docker labels.",
+			},
 		})
 	})
 

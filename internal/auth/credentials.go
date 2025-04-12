@@ -1,24 +1,22 @@
+// internal/auth/credentials.go
 package auth
 
 import (
-	"bytes"
-	"context"
 	"fmt"
-	"os/exec"
+	// "bytes" // No longer needed
+	// "context" // No longer needed
+	// "os/exec" // No longer needed
 	"os/user"
-	"strings"
-	"time"
+	// "strings" // No longer needed
+	// "time" // No longer needed
 
 	"github.com/charmbracelet/log"
+	"github.com/msteinert/pam" // Import the PAM library
 )
 
-// ValidateCredentials checks if the Linux user exists and attempts to validate
-// the provided password using `sudo -S /bin/true`.
-// This is more secure than the placeholder but requires sudo to be configured correctly.
-// It relies on the principle that `sudo -S` reading the password from stdin
-// will exit with 0 if the password is correct for the target user, and non-zero otherwise.
+// ValidateCredentials checks if the Linux user exists and validates the password using PAM.
 func ValidateCredentials(username, password string) (bool, error) {
-	// 1. Check if the user exists on the system
+	// 1. Check if the user exists on the system (still useful)
 	_, err := user.Lookup(username)
 	if err != nil {
 		if _, ok := err.(user.UnknownUserError); ok {
@@ -30,54 +28,49 @@ func ValidateCredentials(username, password string) (bool, error) {
 		return false, fmt.Errorf("system error checking user existence: %w", err)
 	}
 
-	// 2. Attempt password validation using sudo
-	// We use a short timeout to prevent hanging
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // 5-second timeout for sudo check
-	defer cancel()
+	// 2. Attempt password validation using PAM
+	log.Debugf("Attempting password validation for user '%s' via PAM", username)
 
-	// Command: sudo -k -S -u <username> /bin/true
-	// -k: Invalidate cached credentials (force password prompt)
-	// -S: Read password from stdin
-	// -u <username>: Run command as the target user
-	// /bin/true: A simple command that does nothing and exits successfully (if sudo auth passes)
-	cmd := exec.CommandContext(ctx, "sudo", "-k", "-S", "-u", username, "/bin/true")
-
-	// Pipe the password to the command's stdin
-	cmd.Stdin = strings.NewReader(password)
-
-	// Capture stderr for potential sudo error messages (e.g., "incorrect password")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	log.Debugf("Attempting password validation for user '%s' via sudo", username)
-
-	// Run the command
-	err = cmd.Run()
-
-	// Analyze the result
-	if ctx.Err() == context.DeadlineExceeded {
-		log.Warnf("Password validation for user '%s' timed out", username)
-		return false, fmt.Errorf("password validation timed out")
-	}
+	// Start a PAM transaction. The service name ("login" is common, but could be custom like "clab-api")
+	// might need to be configured in /etc/pam.d/ if you use a custom name and need specific rules.
+	// Using a common service like "login" or "sshd" often works if its rules are suitable. Let's try "login".
+	t, err := pam.StartFunc("login", username, func(s pam.Style, text string) (string, error) {
+		switch s {
+		case pam.PromptEchoOff: // Prompt for password
+			return password, nil
+		case pam.ErrorMsg, pam.TextInfo: // Handle messages from PAM modules
+			log.Debugf("PAM message for user '%s': %s", username, text)
+			return "", nil // No response needed for info/error messages
+		}
+		// Should not happen with standard password auth
+		log.Warnf("Unhandled PAM style: %v, text: %s", s, text)
+		return "", fmt.Errorf("unhandled PAM style: %v", s)
+	})
 
 	if err != nil {
-		// Check if it's an exit error (command finished but with non-zero status)
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderrStr := strings.TrimSpace(stderr.String())
-			log.Infof("Login attempt failed for user '%s': sudo validation failed (Exit code: %d). Stderr: %s", username, exitErr.ExitCode(), stderrStr)
-			// Common sudo error messages indicate incorrect password
-			if strings.Contains(stderrStr, "incorrect password attempt") || exitErr.ExitCode() == 1 {
-				return false, nil // Incorrect password -> invalid credentials
-			}
-			// Other sudo error (e.g., user not allowed to run sudo, command not found)
-			return false, fmt.Errorf("sudo validation failed: %s", stderrStr)
-		}
-		// Other error running the command (e.g., sudo not found)
-		log.Errorf("Error executing sudo for password validation for user '%s': %v", username, err)
-		return false, fmt.Errorf("failed to execute validation command: %w", err)
+		log.Errorf("PAM transaction start failed for user '%s': %v", username, err)
+		// This could be a config error (e.g., pam.d service not found) or other issue.
+		return false, fmt.Errorf("failed to start PAM transaction: %w", err)
 	}
 
-	// If err is nil, the command exited successfully (status 0) -> password is correct
-	log.Infof("Password validation successful for user '%s'", username)
+	// Authenticate the user
+	err = t.Authenticate(0) // 0 is a flag, typically unused for standard auth
+	if err != nil {
+		log.Infof("Login attempt failed for user '%s': PAM authentication failed: %v", username, err)
+		// This usually means incorrect password or account restrictions (locked, expired, etc.)
+		return false, nil // Treat PAM auth failure as invalid credentials
+	}
+
+	// Optional: Check account validity (e.g., is the account locked or expired?)
+	err = t.AcctMgmt(0)
+	if err != nil {
+		log.Warnf("PAM account management check failed for user '%s': %v", username, err)
+		// Decide if this should prevent login. For now, let's treat it as a warning
+		// and allow login if Authenticate succeeded. You might return false here for stricter checks.
+		// return false, fmt.Errorf("PAM account validation failed: %w", err)
+	}
+
+	// If Authenticate succeeded (and optionally AcctMgmt)
+	log.Infof("Password validation successful for user '%s' via PAM", username)
 	return true, nil
 }

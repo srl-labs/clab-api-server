@@ -1,1 +1,47 @@
-./containerlab-api
+# Binaries
+/clab-api-server
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE/editor configs
+.vscode/
+.idea/
+*.sw?
+
+# Dependency directories
+vendor/
+
+# Build output
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go stuff
+*.log
+*.tmp
+*.bak
+
+# Ignore all env files
+.env
+.env.*
+
+# But keep .env.example
+!.env.example
+
+# Test results
+*.coverprofile
+*.test
+
+# Logs
+logs/
+*.log
+
+# Generated files
+all_go_files.txt
+

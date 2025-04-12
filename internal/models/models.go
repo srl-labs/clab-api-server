@@ -41,18 +41,18 @@ type ClabInspectOutput struct {
 
 // ClabContainerInfo matches the structure of each item in the "Containers" array
 type ClabContainerInfo struct {
-	// Add fields you care about from the `clab inspect` output
-	Name           string `json:"name"`            // Name of the container node
-	ContainerID    string `json:"container_id"`  // Docker container ID (short)
-	Image          string `json:"image"`           // Container image used
-	Kind           string `json:"kind"`            // e.g., "srl", "linux"
-	State          string `json:"state"`           // e.g., "running"
-	IPv4Address    string `json:"ipv4_address"`    // Management IPv4 Address/Mask
-	IPv6Address    string `json:"ipv6_address"`    // Management IPv6 Address/Mask
-	LabName        string `json:"lab_name"`        // Name of the lab this node belongs to
-	LabPath        string `json:"LabPath"`         // Path to the topology file used (often relative)
-	Group          string `json:"group"`           // Group assigned in topology
-	Owner          string `json:"Owner"`           // Linux username who owns/ran the lab (CRUCIAL FOR FILTERING)
-	DeploymentStatus string `json:"deployment_status"` // e.g., "deployed"
-	// Add other fields as needed... e.g., ports, labels etc.
+	Name        string `json:"name"`         // Name of the container node
+	ContainerID string `json:"container_id"` // Docker container ID (short)
+	Image       string `json:"image"`        // Container image used
+	Kind        string `json:"kind"`         // e.g., "srl", "linux"
+	State       string `json:"state"`        // e.g., "running"
+	IPv4Address string `json:"ipv4_address"` // Management IPv4 Address/Mask
+	IPv6Address string `json:"ipv6_address"` // Management IPv6 Address/Mask
+	LabName     string `json:"lab_name"`     // Name of the lab this node belongs to
+	LabPath     string `json:"LabPath"`      // Path to the topology file used (often relative, less reliable now)
+	Group       string `json:"group"`        // Group assigned in topology
+	// Owner          string            `json:"Owner"` // OS user, less relevant now, API server user owns process
+	DeploymentStatus string            `json:"deployment_status"` // e.g., "deployed"
+	Labels           map[string]string `json:"labels"`            // *** ADDED: Docker labels ***
+	// Add other fields as needed...
 }

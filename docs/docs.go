@@ -31,7 +31,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Get details about all running labs for the authenticated user (filtered by owner)",
+                "description": "Get details about all running labs labeled for the authenticated user",
                 "produces": [
                     "application/json"
                 ],
@@ -66,7 +66,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Deploys a containerlab topology for the authenticated user",
+                "description": "Deploys a containerlab topology for the authenticated user (runs as API server user, labeled with owner)",
                 "consumes": [
                     "application/json"
                 ],
@@ -96,7 +96,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Invalid input (e.g., empty topology content)",
+                        "description": "Invalid input (e.g., empty topology content, invalid YAML)",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -123,7 +123,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Get details about a specific running lab for the authenticated user",
+                "description": "Get details about a specific running lab (checks ownership via label)",
                 "produces": [
                     "application/json"
                 ],
@@ -142,9 +142,9 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "Raw JSON output from 'clab inspect'",
+                        "description": "Raw JSON output from 'clab inspect' for the specific lab",
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/models.ClabInspectOutput"
                         }
                     },
                     "400": {
@@ -160,7 +160,7 @@ const docTemplate = `{
                         }
                     },
                     "404": {
-                        "description": "Lab not found",
+                        "description": "Lab not found or not owned by user",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -179,7 +179,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Destroys a specific containerlab lab by name for the authenticated user",
+                "description": "Destroys a specific containerlab lab by name (identified by label for the authenticated user)\nNote: This attempts cleanup using the lab name. If the topology defined unique resources (e.g., networks) not automatically tied to the lab name by clab, they might be orphaned.",
                 "produces": [
                     "application/json"
                 ],
@@ -216,7 +216,7 @@ const docTemplate = `{
                         }
                     },
                     "404": {
-                        "description": "Lab not found",
+                        "description": "Lab not found or not owned by user",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -237,7 +237,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Lists available .clab.yml/.clab.yaml files in the user's home directory (non-recursive)",
+                "description": "Lists available .clab.yml/.clab.yaml files (Not implemented in sudoless mode - Requires defining a storage strategy)",
                 "produces": [
                     "application/json"
                 ],
@@ -246,23 +246,14 @@ const docTemplate = `{
                 ],
                 "summary": "List Topologies",
                 "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/models.TopologyListItem"
-                            }
-                        }
-                    },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
                     },
-                    "500": {
-                        "description": "Internal server error",
+                    "501": {
+                        "description": "Not Implemented",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -314,7 +305,7 @@ const docTemplate = `{
                         }
                     },
                     "500": {
-                        "description": "Internal server error",
+                        "description": "Internal server error (PAM config?)",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -328,11 +319,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "LabPath": {
-                    "description": "Path to the topology file used (often relative)",
-                    "type": "string"
-                },
-                "Owner": {
-                    "description": "Linux username who owns/ran the lab (CRUCIAL FOR FILTERING)",
+                    "description": "Path to the topology file used (often relative, less reliable now)",
                     "type": "string"
                 },
                 "container_id": {
@@ -340,7 +327,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "deployment_status": {
-                    "description": "e.g., \"deployed\"",
+                    "description": "Owner          string            ` + "`" + `json:\"Owner\"` + "`" + ` // OS user, less relevant now, API server user owns process",
                     "type": "string"
                 },
                 "group": {
@@ -367,8 +354,15 @@ const docTemplate = `{
                     "description": "Name of the lab this node belongs to",
                     "type": "string"
                 },
+                "labels": {
+                    "description": "*** ADDED: Docker labels ***",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
                 "name": {
-                    "description": "Add fields you care about from the ` + "`" + `clab inspect` + "`" + ` output",
+                    "description": "Name of the container node",
                     "type": "string"
                 },
                 "state": {
@@ -439,19 +433,6 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
-        },
-        "models.TopologyListItem": {
-            "type": "object",
-            "properties": {
-                "filename": {
-                    "description": "e.g., my-lab.clab.yml",
-                    "type": "string"
-                },
-                "relativePath": {
-                    "description": "Path relative to user's home (same as filename in this case)",
-                    "type": "string"
-                }
-            }
         }
     },
     "securityDefinitions": {
@@ -466,12 +447,12 @@ const docTemplate = `{
 
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
-	Version:          "1.0",
+	Version:          "1.1",
 	Host:             "localhost:8080",
 	BasePath:         "",
 	Schemes:          []string{"http", "https"},
-	Title:            "Containerlab API",
-	Description:      "This is an API server to interact with Containerlab for authenticated Linux users.",
+	Title:            "Containerlab API (Sudoless)",
+	Description:      "This is an API server to interact with Containerlab for authenticated Linux users. Runs clab commands as the API server's user. Requires PAM for authentication.",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",
