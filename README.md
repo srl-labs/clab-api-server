@@ -2,7 +2,6 @@
 
 This project provides a standalone RESTful API server written in Go to interact with the [Containerlab](https://containerlab.dev/) command-line tool.
 
-**WARNING:** This API allows executing commands (`clab`) on the host system, potentially with elevated privileges.
 
 ## Features
 
@@ -10,7 +9,6 @@ This project provides a standalone RESTful API server written in Go to interact 
 *   **Destroy Labs:** Stop and clean up running labs.
 *   **Inspect Labs:** Get details about running labs and nodes.
 *   **List Labs:** View all running labs associated with the user.
-*   **List Topologies:** List available `.clab.yml` files in the user's home directory.
 *   **Authentication:** JWT-based (login required).
 *   **Authorization:** API endpoints require a valid JWT.
 *   **User Context:** Executes `clab` commands as the authenticated Linux.
@@ -119,17 +117,6 @@ Authorization: Bearer <your_jwt_token>
 - **DELETE** `/api/v1/labs/{labName}`  
   Destroy a specific lab.
 
-### Topologies
-- **GET** `/api/v1/topologies`  
-  List `.clab.yml` files in the user's home directory.
-
-
-## Development
-
-- Use `task swag` to update Swagger docs after changing comments or models.
-- Use `task build` to rebuild the server.
-- Use `task deps` to install system dependencies.
-- Consider adding more robust error handling and logging.
 
 ---
 
@@ -138,7 +125,7 @@ Authorization: Bearer <your_jwt_token>
 - `task tidy` – Run `go mod tidy`
 - `task swag` – Generate Swagger docs
 - `task build` – Compile the server
-- `task deps` – Install system dependencies (`build-essential`, `libpam-dev`)
+- `task deps` – Install system dependencies to build (`build-essential`, `libpam-dev`)
 - `task` – Run the default task: tidy → swag → build
 
 ---
