@@ -6,7 +6,7 @@
     "swagger": "2.0",
     "info": {
         "description": "This is an API server to interact with Containerlab for authenticated Linux users. Runs clab commands as the API server's user. Requires PAM for authentication.",
-        "title": "Containerlab API (Sudoless)",
+        "title": "Containerlab API",
         "termsOfService": "http://swagger.io/terms/",
         "contact": {
             "name": "API Support",
@@ -17,7 +17,7 @@
             "name": "Apache 2.0",
             "url": "http://www.apache.org/licenses/LICENSE-2.0.html"
         },
-        "version": "1.1"
+        "version": "1.0"
     },
     "host": "localhost:8080",
     "paths": {

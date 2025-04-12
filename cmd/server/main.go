@@ -9,14 +9,15 @@ import (
 
 	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
+
 	// Adjust these import paths if your module path is different
+	_ "github.com/FloSch62/clab-api/docs" // swagger docs
 	"github.com/FloSch62/clab-api/internal/api"
 	"github.com/FloSch62/clab-api/internal/config"
-	_ "github.com/FloSch62/clab-api/docs" // swagger docs
 )
 
-// @title Containerlab API (Sudoless)
-// @version 1.1
+// @title Containerlab API
+// @version 1.0
 // @description This is an API server to interact with Containerlab for authenticated Linux users. Runs clab commands as the API server's user. Requires PAM for authentication.
 // @termsOfService http://swagger.io/terms/
 
@@ -78,10 +79,10 @@ func main() {
 	// Root handler
 	router.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
-			"message":       "Containerlab API (Sudoless Mode) is running.",
-			"documentation": "/swagger/index.html",
+			"message":        "Containerlab API (Sudoless Mode) is running.",
+			"documentation":  "/swagger/index.html",
 			"login_endpoint": "POST /login",
-			"api_base_path": "/api/v1",
+			"api_base_path":  "/api/v1",
 			"notes": []string{
 				"Runs clab commands as the API server's user.",
 				"Requires Docker permissions for the API server user.",
