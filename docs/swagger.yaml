@@ -1,19 +1,11 @@
 definitions:
   models.ClabContainerInfo:
     properties:
-      LabPath:
-        description: Path to the topology file used (often relative, less reliable
-          now)
-        type: string
       container_id:
         description: Docker container ID (short)
         type: string
-      deployment_status:
-        description: Owner          string            `json:"Owner"` // OS user, less
-          relevant now, API server user owns process
-        type: string
       group:
-        description: Group assigned in topology
+        description: Group assigned in topology (Might not always be present)
         type: string
       image:
         description: Container image used
@@ -25,18 +17,19 @@ definitions:
         description: Management IPv6 Address/Mask
         type: string
       kind:
-        description: e.g., "srl", "linux"
+        description: e.g., "srl", "linux", "nokia_srlinux"
         type: string
       lab_name:
         description: Name of the lab this node belongs to
         type: string
-      labels:
-        additionalProperties:
-          type: string
-        description: '*** ADDED: Docker labels ***'
-        type: object
+      labPath:
+        description: Path to the topology file used
+        type: string
       name:
         description: Name of the container node
+        type: string
+      owner:
+        description: OS user from clab inspect output (Used for authorization)
         type: string
       state:
         description: e.g., "running"
@@ -44,7 +37,7 @@ definitions:
     type: object
   models.ClabInspectOutput:
     properties:
-      Containers:
+      containers:
         items:
           $ref: '#/definitions/models.ClabContainerInfo'
         type: array
@@ -106,8 +99,8 @@ info:
 paths:
   /api/v1/labs:
     get:
-      description: Get details about all running labs labeled for the authenticated
-        user
+      description: Get details about all running labs, filtered by the 'owner' field
+        matching the authenticated user
       produces:
       - application/json
       responses:
@@ -131,10 +124,11 @@ paths:
     post:
       consumes:
       - application/json
-      description: Deploys a containerlab topology for the authenticated user (runs
-        as API server user, labeled with owner)
+      description: |-
+        Deploys a containerlab topology, saving the file to the user's ~/.clab/<labname>/ directory.
+        **Requires API server user to have write permissions in authenticated user's home directory.**
       parameters:
-      - description: Topology Content
+      - description: Topology Content (YAML string)
         in: body
         name: deploy_request
         required: true
@@ -148,7 +142,8 @@ paths:
           schema:
             type: object
         "400":
-          description: Invalid input (e.g., empty topology content, invalid YAML)
+          description: Invalid input (e.g., empty/invalid topology, missing name,
+            invalid lab name)
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "401":
@@ -156,8 +151,8 @@ paths:
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "500":
-          description: Internal server error (e.g., failed to create temp file, clab
-            execution failed)
+          description: Internal server error (e.g., permission denied, clab execution
+            failed)
           schema:
             $ref: '#/definitions/models.ErrorResponse'
       security:
@@ -168,8 +163,8 @@ paths:
   /api/v1/labs/{labName}:
     delete:
       description: |-
-        Destroys a specific containerlab lab by name (identified by label for the authenticated user)
-        Note: This attempts cleanup using the lab name. If the topology defined unique resources (e.g., networks) not automatically tied to the lab name by clab, they might be orphaned.
+        Destroys a lab by name and attempts to remove the corresponding topology directory (~/.clab/<labname>).
+        Checks ownership via 'owner' field from clab inspect.
       parameters:
       - description: Name of the lab to destroy
         in: path
@@ -206,7 +201,7 @@ paths:
       - Labs
     get:
       description: Get details about a specific running lab (checks ownership via
-        label)
+        'owner' field from clab inspect)
       parameters:
       - description: Name of the lab to inspect
         in: path
@@ -241,26 +236,6 @@ paths:
       summary: Inspect Lab
       tags:
       - Labs
-  /api/v1/topologies:
-    get:
-      description: Lists available .clab.yml/.clab.yaml files (Not implemented in
-        sudoless mode - Requires defining a storage strategy)
-      produces:
-      - application/json
-      responses:
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/models.ErrorResponse'
-        "501":
-          description: Not Implemented
-          schema:
-            $ref: '#/definitions/models.ErrorResponse'
-      security:
-      - BearerAuth: []
-      summary: List Topologies
-      tags:
-      - Topologies
   /login:
     post:
       consumes:

@@ -26,17 +26,11 @@ type GenericSuccessResponse struct {
 	Message string `json:"message"`
 }
 
-// TopologyListItem represents a single topology file entry found in the user's home
-type TopologyListItem struct {
-	Filename     string `json:"filename"`     // e.g., my-lab.clab.yml
-	RelativePath string `json:"relativePath"` // Path relative to user's home (same as filename in this case)
-}
-
 // --- Structs for parsing `clab inspect --format json` output ---
 
 // ClabInspectOutput matches the top-level structure of `clab inspect --all --format json`
 type ClabInspectOutput struct {
-	Containers []ClabContainerInfo `json:"Containers"`
+	Containers []ClabContainerInfo `json:"containers"`
 }
 
 // ClabContainerInfo matches the structure of each item in the "Containers" array
@@ -44,15 +38,13 @@ type ClabContainerInfo struct {
 	Name        string `json:"name"`         // Name of the container node
 	ContainerID string `json:"container_id"` // Docker container ID (short)
 	Image       string `json:"image"`        // Container image used
-	Kind        string `json:"kind"`         // e.g., "srl", "linux"
+	Kind        string `json:"kind"`         // e.g., "srl", "linux", "nokia_srlinux"
 	State       string `json:"state"`        // e.g., "running"
 	IPv4Address string `json:"ipv4_address"` // Management IPv4 Address/Mask
 	IPv6Address string `json:"ipv6_address"` // Management IPv6 Address/Mask
 	LabName     string `json:"lab_name"`     // Name of the lab this node belongs to
-	LabPath     string `json:"LabPath"`      // Path to the topology file used (often relative, less reliable now)
-	Group       string `json:"group"`        // Group assigned in topology
-	// Owner          string            `json:"Owner"` // OS user, less relevant now, API server user owns process
-	DeploymentStatus string            `json:"deployment_status"` // e.g., "deployed"
-	Labels           map[string]string `json:"labels"`            // *** ADDED: Docker labels ***
+	LabPath     string `json:"labPath"`      // Path to the topology file used
+	Group       string `json:"group"`        // Group assigned in topology (Might not always be present)
+	Owner       string `json:"owner"`        // OS user from clab inspect output (Used for authorization)
 	// Add other fields as needed...
 }

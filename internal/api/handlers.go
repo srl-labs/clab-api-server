@@ -5,36 +5,32 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"io/ioutil" // Still needed for TempFile
 	"os"
-	// "os/user" // No longer needed here
-	"path/filepath"
+	"os/user"       // Needed to find user's home directory
+	"path/filepath" // Needed for joining paths
 	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
-	"gopkg.in/yaml.v3" // Import YAML library for modifying topology
+	"gopkg.in/yaml.v3" // NEEDED for parsing topology name
 
 	"github.com/FloSch62/clab-api/internal/auth"
 	"github.com/FloSch62/clab-api/internal/clab"
 	"github.com/FloSch62/clab-api/internal/models"
 )
 
-const apiOwnerLabel = "clab-api.owner" // Docker label key
-
 // isValidLabName checks for potentially harmful characters in lab names.
-// Allows alphanumeric, hyphen, underscore. Prevents path manipulation chars.
 var labNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 func isValidLabName(name string) bool {
-	if name == "" || len(name) > 64 { // Add length limit for sanity
+	if name == "" || len(name) > 64 {
 		return false
 	}
 	return labNameRegex.MatchString(name)
 }
 
-// LoginHandler - No changes needed here, relies on ValidateCredentials
+// LoginHandler - Handles user authentication (No changes needed)
 // @Summary Login
 // @Description Authenticate user and return JWT token
 // @Tags Auth
@@ -54,7 +50,6 @@ func LoginHandler(c *gin.Context) {
 		return
 	}
 
-	// Use the improved validation function (now using PAM)
 	valid, err := auth.ValidateCredentials(req.Username, req.Password)
 	if err != nil {
 		log.Errorf("Login failed for user '%s': Error during credential validation: %v", req.Username, err)
@@ -79,52 +74,18 @@ func LoginHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, models.LoginResponse{Token: token})
 }
 
-// addOwnerLabelToTopology attempts to parse YAML, add the owner label, and return modified YAML
-func addOwnerLabelToTopology(yamlContent, ownerUsername string) (string, error) {
-	var topo map[string]interface{}
-	err := yaml.Unmarshal([]byte(yamlContent), &topo)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse topology YAML: %w", err)
-	}
-
-	// Ensure 'labels' map exists at the top level
-	if _, ok := topo["labels"]; !ok {
-		topo["labels"] = make(map[string]interface{})
-	}
-
-	labelsMap, ok := topo["labels"].(map[string]interface{})
-	if !ok {
-		// It exists but isn't a map, which is weird YAML. Try to overwrite? Or error?
-		log.Warnf("Topology 'labels' field is not a map, overwriting. Original type: %T", topo["labels"])
-		labelsMap = make(map[string]interface{})
-		topo["labels"] = labelsMap
-		// Alternatively: return "", fmt.Errorf("topology 'labels' field is not a map")
-	}
-
-	// Add or overwrite the owner label
-	labelsMap[apiOwnerLabel] = ownerUsername
-
-	// Marshal back to YAML
-	modifiedYamlBytes, err := yaml.Marshal(topo)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal modified topology YAML: %w", err)
-	}
-
-	return string(modifiedYamlBytes), nil
-}
-
-
 // @Summary Deploy Lab
-// @Description Deploys a containerlab topology for the authenticated user (runs as API server user, labeled with owner)
+// @Description Deploys a containerlab topology, saving the file to the user's ~/.clab/<labname>/ directory.
+// @Description **Requires API server user to have write permissions in authenticated user's home directory.**
 // @Tags Labs
 // @Security BearerAuth
 // @Accept json
 // @Produce json
-// @Param deploy_request body models.DeployRequest true "Topology Content"
+// @Param deploy_request body models.DeployRequest true "Topology Content (YAML string)"
 // @Success 200 {object} object "Raw JSON output from 'clab deploy' (or plain text on error)"
-// @Failure 400 {object} models.ErrorResponse "Invalid input (e.g., empty topology content, invalid YAML)"
+// @Failure 400 {object} models.ErrorResponse "Invalid input (e.g., empty/invalid topology, missing name, invalid lab name)"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
-// @Failure 500 {object} models.ErrorResponse "Internal server error (e.g., failed to create temp file, clab execution failed)"
+// @Failure 500 {object} models.ErrorResponse "Internal server error (e.g., permission denied, clab execution failed)"
 // @Router /api/v1/labs [post]
 func DeployLabHandler(c *gin.Context) {
 	username := c.GetString("username") // Authenticated user
@@ -143,81 +104,115 @@ func DeployLabHandler(c *gin.Context) {
 		return
 	}
 
-	// --- Add Owner Label ---
-	modifiedTopoContent, err := addOwnerLabelToTopology(trimmedContent, username)
+	// --- Get User Home Directory ---
+	usr, err := user.Lookup(username)
 	if err != nil {
-		log.Warnf("DeployLab failed for user '%s': Could not add owner label to topology: %v", username, err)
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: fmt.Sprintf("Failed to process topology YAML: %s", err.Error())})
+		log.Errorf("DeployLab failed for user '%s': Could not find user's home directory: %v", username, err)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Could not determine user's home directory."})
 		return
 	}
-	log.Debugf("DeployLab user '%s': Added owner label to topology.", username)
-	// --- End Add Owner Label ---
+	homeDir := usr.HomeDir
 
-
-	// Create a temporary file in a system temp location (e.g., /tmp) accessible by the API server user
-	// Suffix is important for clab
-	tempFile, err := ioutil.TempFile("", "api-*.clab.yaml") // Use system temp dir
+	// --- Parse Topology to Extract Lab Name ---
+	var topoData map[string]interface{}
+	err = yaml.Unmarshal([]byte(trimmedContent), &topoData)
 	if err != nil {
-		log.Errorf("DeployLab failed for user '%s': Failed to create temporary topology file: %v", username, err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to create temporary topology file: " + err.Error()})
-		return
-	}
-	defer os.Remove(tempFile.Name()) // Defer removal *after* error checking
-
-	log.Debugf("DeployLab user '%s': Created temporary topology file '%s'", username, tempFile.Name())
-
-	// Write the *modified* topology content to the temporary file
-	if _, err := tempFile.Write([]byte(modifiedTopoContent)); err != nil { // Use modified content
-		log.Errorf("DeployLab failed for user '%s': Failed to write to temporary topology file '%s': %v", username, tempFile.Name(), err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to write temporary topology file: " + err.Error()})
-		return
-	}
-	if err := tempFile.Close(); err != nil { // Close the file before clab uses it
-		log.Errorf("DeployLab failed for user '%s': Failed to close temporary topology file '%s': %v", username, tempFile.Name(), err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to close temporary topology file: " + err.Error()})
+		log.Warnf("DeployLab failed for user '%s': Could not parse topology YAML: %v", username, err)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid topology YAML: " + err.Error()})
 		return
 	}
 
-	// Prepare clab arguments
-	// Use the temporary file path. Add --reconfigure for consistency.
-	// Add the label via command line as well (might be redundant but safer)
-	// Note: Check if clab 'deploy' supports --label directly. If not, rely on the label in the topo file.
-	// As of recent versions, `clab deploy` doesn't seem to have a global --label flag like `docker run`.
-	// Relying on the label within the topology file (added above) is the primary method.
-	args := []string{"deploy", "--topo", tempFile.Name(), "--format", "json", "--reconfigure"}
+	labNameValue, ok := topoData["name"]
+	if !ok {
+		log.Warnf("DeployLab failed for user '%s': Topology YAML is missing the top-level 'name' field.", username)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Topology YAML must contain a top-level 'name' field."})
+		return
+	}
+	labName, ok := labNameValue.(string)
+	if !ok || labName == "" {
+		log.Warnf("DeployLab failed for user '%s': Topology 'name' field is not a non-empty string.", username)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Topology 'name' field must be a non-empty string."})
+		return
+	}
 
-	// Execute clab command (runs as API server user)
-	log.Infof("DeployLab user '%s': Executing clab deploy...", username)
-	// Pass username for logging purposes, not execution context
-	stdout, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...)
+	// --- Validate Lab Name ---
+	if !isValidLabName(labName) {
+		log.Warnf("DeployLab failed for user '%s': Invalid characters in extracted lab name '%s'", username, labName)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in topology 'name'. Use alphanumeric, hyphen, underscore."})
+		return
+	}
+	log.Debugf("DeployLab user '%s': Extracted lab name '%s'", username, labName)
+
+	// --- Construct Paths ---
+	// ~/.clab/<labname>/<labname>.clab.yml
+	clabUserDir := filepath.Join(homeDir, ".clab")
+	targetDir := filepath.Join(clabUserDir, labName)
+	targetFilePath := filepath.Join(targetDir, labName+".clab.yml") // Standard naming convention
+
+	// --- Create Directory ---
+	// Permissions 0750: user(rwx), group(rx), other(-)
+	// The API server user will own this directory.
+	log.Debugf("DeployLab user '%s': Ensuring directory exists: '%s'", username, targetDir)
+	err = os.MkdirAll(targetDir, 0750)
+	if err != nil {
+		log.Errorf("DeployLab failed for user '%s': Failed to create directory '%s': %v. Check API server permissions.", username, targetDir, err)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to create lab directory: %s. Check API server permissions.", err.Error())})
+		return
+	}
+	log.Warnf("API server user created/ensured directory '%s' in user '%s' home. Ensure API server has correct permissions.", targetDir, username)
+
+	// --- Write Topology File ---
+	// Permissions 0640: user(rw), group(r), other(-)
+	log.Debugf("DeployLab user '%s': Writing topology file: '%s'", username, targetFilePath)
+	err = os.WriteFile(targetFilePath, []byte(trimmedContent), 0640)
+	if err != nil {
+		log.Errorf("DeployLab failed for user '%s': Failed to write topology file '%s': %v. Check API server permissions.", username, targetFilePath, err)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to write topology file: %s. Check API server permissions.", err.Error())})
+		return
+	}
+	log.Infof("Saved topology for user '%s' lab '%s' to '%s'", username, labName, targetFilePath)
+
+	// --- Execute clab deploy ---
+	// Use the persistent file path.
+	args := []string{"deploy", "--topo", targetFilePath, "--format", "json", "--reconfigure"}
+	log.Infof("DeployLab user '%s': Executing clab deploy using '%s'...", username, targetFilePath)
+	stdout, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...) // username for logging
 
 	// Handle command execution results
 	if stderr != "" {
-		log.Warnf("DeployLab user '%s': clab command stderr: %s", username, stderr)
+		log.Warnf("DeployLab user '%s', lab '%s': clab deploy stderr: %s", username, labName, stderr)
 	}
 	if err != nil {
-		log.Errorf("DeployLab failed for user '%s': clab command execution error: %v", username, err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to deploy lab: %s", err.Error())})
+		log.Errorf("DeployLab failed for user '%s', lab '%s': clab deploy command execution error: %v", username, labName, err)
+		errMsg := fmt.Sprintf("Failed to deploy lab '%s': %s", labName, err.Error())
+		if stderr != "" {
+			errMsg += "\nstderr: " + stderr
+		}
+		// Don't automatically delete the written file on deploy failure, user might want it.
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: errMsg})
 		return
 	}
 
-	log.Infof("DeployLab user '%s': clab deploy executed successfully.", username)
+	log.Infof("DeployLab user '%s': clab deploy for lab '%s' executed successfully.", username, labName)
 
 	// Attempt to parse stdout as JSON and return it
 	var result interface{}
 	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
-		log.Warnf("DeployLab user '%s': Output from clab was not valid JSON: %v. Returning as plain text.", username, err)
-		c.JSON(http.StatusOK, gin.H{"output": stdout, "warning": "Output was not valid JSON"})
+		log.Warnf("DeployLab user '%s', lab '%s': Output from clab was not valid JSON: %v. Returning as plain text.", username, labName, err)
+		if strings.Contains(stdout, "level=error") || strings.Contains(stdout, "failed") {
+			c.JSON(http.StatusInternalServerError, gin.H{"output": stdout, "warning": "Deployment finished but output indicates errors and was not valid JSON"})
+		} else {
+			c.JSON(http.StatusOK, gin.H{"output": stdout, "warning": "Output was not valid JSON"})
+		}
 		return
 	}
 
 	c.JSON(http.StatusOK, result)
 }
 
-
 // @Summary Destroy Lab
-// @Description Destroys a specific containerlab lab by name (identified by label for the authenticated user)
-// @Description Note: This attempts cleanup using the lab name. If the topology defined unique resources (e.g., networks) not automatically tied to the lab name by clab, they might be orphaned.
+// @Description Destroys a lab by name and attempts to remove the corresponding topology directory (~/.clab/<labname>).
+// @Description Checks ownership via 'owner' field from clab inspect.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce json
@@ -239,11 +234,10 @@ func DestroyLabHandler(c *gin.Context) {
 	}
 	log.Debugf("DestroyLab user '%s': Attempting to destroy lab '%s'", username, labName)
 
-	// --- Verify lab exists and belongs to the user via inspect + label check ---
+	// --- Verify lab exists and belongs to the user via inspect + owner field check ---
 	log.Debugf("DestroyLab user '%s': Inspecting lab '%s' to verify ownership...", username, labName)
-	// Inspect the specific lab name. We don't need --all here.
 	inspectArgs := []string{"inspect", "--name", labName, "--format", "json"}
-	inspectStdout, inspectStderr, inspectErr := clab.RunClabCommand(c.Request.Context(), username, inspectArgs...) // username for logging
+	inspectStdout, inspectStderr, inspectErr := clab.RunClabCommand(c.Request.Context(), username, inspectArgs...)
 
 	if inspectStderr != "" {
 		log.Warnf("DestroyLab user '%s': clab inspect stderr for lab '%s': %s", username, labName, inspectStderr)
@@ -251,9 +245,10 @@ func DestroyLabHandler(c *gin.Context) {
 	if inspectErr != nil {
 		errMsg := inspectErr.Error()
 		if strings.Contains(inspectStdout, "no containers found") ||
-		   strings.Contains(errMsg, "no containers found") ||
-		   strings.Contains(errMsg, "no containerlab labs found") ||
-		   strings.Contains(inspectStderr, "no containers found") {
+			strings.Contains(errMsg, "no containers found") ||
+			strings.Contains(errMsg, "no containerlab labs found") ||
+			strings.Contains(inspectStderr, "no containers found") ||
+			strings.Contains(inspectStderr, "Could not find containers for lab") {
 			log.Infof("DestroyLab user '%s': Lab '%s' not found during inspection.", username, labName)
 			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' not found.", labName)})
 			return
@@ -263,55 +258,75 @@ func DestroyLabHandler(c *gin.Context) {
 		return
 	}
 
-	// Parse inspect output to check the label
 	var inspectResult models.ClabInspectOutput
-	if err := json.Unmarshal([]byte(inspectStdout), &inspectResult); err != nil || len(inspectResult.Containers) == 0 {
-		log.Errorf("DestroyLab failed for user '%s': Could not parse inspect output or find containers for lab '%s'. Output: %s", username, labName, inspectStdout)
+	if err := json.Unmarshal([]byte(inspectStdout), &inspectResult); err != nil {
+		log.Errorf("DestroyLab failed for user '%s': Could not parse inspect output for lab '%s'. Output: %s, Error: %v", username, labName, inspectStdout, err)
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Could not parse inspect output for lab '%s'.", labName)})
 		return
 	}
 
-	// Check the label on the first container (should be consistent)
-	ownerLabelValue := ""
-	if len(inspectResult.Containers) > 0 && inspectResult.Containers[0].Labels != nil {
-		ownerLabelValue = inspectResult.Containers[0].Labels[apiOwnerLabel]
-	}
-
-	if ownerLabelValue != username {
-		log.Warnf("DestroyLab user '%s': Attempted to destroy lab '%s' but it is owned by '%s' (or label missing).", username, labName, ownerLabelValue)
-		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' not found or not owned by user.", labName)}) // Treat as not found from user's perspective
+	if len(inspectResult.Containers) == 0 {
+		log.Warnf("DestroyLab user '%s': Inspect for lab '%s' succeeded but returned no containers.", username, labName)
+		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' not found (no containers returned).", labName)})
 		return
 	}
-	log.Debugf("DestroyLab user '%s': Ownership confirmed for lab '%s'.", username, labName)
+
+	actualOwner := inspectResult.Containers[0].Owner
+	if actualOwner != username {
+		log.Warnf("DestroyLab user '%s': Attempted to destroy lab '%s' but it is owned by '%s' (based on 'owner' field). Access denied.", username, labName, actualOwner)
+		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' not found or not owned by user.", labName)})
+		return
+	}
+	log.Debugf("DestroyLab user '%s': Ownership confirmed for lab '%s' via 'owner' field.", username, labName)
 	// --- End Verification ---
 
-
 	// --- Execute clab destroy ---
-	// Use --name and --cleanup. This is often sufficient, but might leave orphaned resources
-	// if the original topology file defined them and clab can't find/remove them by name alone.
-	// We no longer have easy access to the original temp topology file.
 	log.Infof("DestroyLab user '%s': Executing clab destroy --name %s --cleanup...", username, labName)
 	destroyArgs := []string{"destroy", "--name", labName, "--cleanup"}
+	_, stderr, err := clab.RunClabCommand(c.Request.Context(), username, destroyArgs...) // username for logging
 
-	// Pass username for logging
-	_, stderr, err := clab.RunClabCommand(c.Request.Context(), username, destroyArgs...)
-
-	if stderr != "" {
-		log.Warnf("DestroyLab user '%s': clab destroy stderr for lab '%s': %s", username, labName, stderr)
-	}
+	// Handle clab destroy command result
 	if err != nil {
+		// clab destroy failed
 		log.Errorf("DestroyLab failed for user '%s': clab destroy command failed for lab '%s': %v", username, labName, err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to destroy lab '%s': %s", labName, err.Error())})
+		errMsg := fmt.Sprintf("Failed to destroy lab '%s': %s", labName, err.Error())
+		if stderr != "" {
+			errMsg += "\nstderr: " + stderr
+		}
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: errMsg})
 		return
 	}
 
-	log.Infof("DestroyLab user '%s': Lab '%s' destroyed successfully.", username, labName)
+	// clab destroy succeeded
+	log.Infof("Lab '%s' destroyed successfully via clab for user '%s'.", labName, username)
+	if stderr != "" { // Log stderr even on success
+		log.Warnf("DestroyLab user '%s': clab destroy stderr for lab '%s' (command succeeded): %s", username, labName, stderr)
+	}
+
+	// --- Attempt to Cleanup Topology Directory ---
+	log.Infof("Attempting to clean up topology directory for lab '%s', user '%s'.", labName, username)
+	usr, lookupErr := user.Lookup(username)
+	if lookupErr != nil {
+		log.Warnf("Could not lookup user '%s' to cleanup topology directory: %v", username, lookupErr)
+		// Don't fail the overall request, clab destroy succeeded.
+	} else {
+		targetDir := filepath.Join(usr.HomeDir, ".clab", labName)
+		log.Debugf("Removing directory: %s", targetDir)
+		cleanupErr := os.RemoveAll(targetDir)
+		if cleanupErr != nil {
+			// Log error but don't make the API call fail, main task (destroy) succeeded.
+			log.Warnf("Failed to cleanup topology directory '%s' for user '%s' after destroy: %v. API server might lack permissions.", targetDir, username, cleanupErr)
+		} else {
+			log.Infof("Successfully cleaned up topology directory '%s' for user '%s'", targetDir, username)
+		}
+	}
+
 	c.JSON(http.StatusOK, models.GenericSuccessResponse{Message: fmt.Sprintf("Lab '%s' destroyed successfully", labName)})
 }
 
-
+// InspectLabHandler - No changes needed, already uses owner field
 // @Summary Inspect Lab
-// @Description Get details about a specific running lab (checks ownership via label)
+// @Description Get details about a specific running lab (checks ownership via 'owner' field from clab inspect)
 // @Tags Labs
 // @Security BearerAuth
 // @Produce json
@@ -334,9 +349,7 @@ func InspectLabHandler(c *gin.Context) {
 	log.Debugf("InspectLab user '%s': Inspecting lab '%s'", username, labName)
 
 	args := []string{"inspect", "--name", labName, "--format", "json"}
-
-	// Pass username for logging
-	stdout, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...)
+	stdout, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...) // username for logging
 
 	if stderr != "" {
 		log.Warnf("InspectLab user '%s': clab inspect stderr for lab '%s': %s", username, labName, stderr)
@@ -344,9 +357,10 @@ func InspectLabHandler(c *gin.Context) {
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(stdout, "no containers found") ||
-		   strings.Contains(errMsg, "no containers found") ||
-		   strings.Contains(errMsg, "no containerlab labs found") ||
-		   strings.Contains(stderr, "no containers found") {
+			strings.Contains(errMsg, "no containers found") ||
+			strings.Contains(errMsg, "no containerlab labs found") ||
+			strings.Contains(stderr, "no containers found") ||
+			strings.Contains(stderr, "Could not find containers for lab") {
 			log.Infof("InspectLab user '%s': Lab '%s' not found.", username, labName)
 			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' not found.", labName)})
 			return
@@ -356,35 +370,35 @@ func InspectLabHandler(c *gin.Context) {
 		return
 	}
 
-	// Parse the output to verify ownership via label
-	var result models.ClabInspectOutput // Use struct to access labels
+	// Parse the output to verify ownership via owner field
+	var result models.ClabInspectOutput
 	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
 		log.Errorf("InspectLab failed for user '%s': Failed to parse clab inspect JSON output for lab '%s': %v", username, labName, err)
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to parse clab inspect output: " + err.Error()})
 		return
 	}
 
-	// Check label
-	ownerLabelValue := ""
-	// Ensure containers exist and labels map exists before accessing
-	if len(result.Containers) > 0 && result.Containers[0].Labels != nil {
-		ownerLabelValue = result.Containers[0].Labels[apiOwnerLabel]
-	}
-
-	if ownerLabelValue != username {
-		log.Warnf("InspectLab user '%s': Attempted to inspect lab '%s' but it is owned by '%s' (or label missing).", username, labName, ownerLabelValue)
-		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' not found or not owned by user.", labName)}) // Treat as not found from user's perspective
+	if len(result.Containers) == 0 {
+		log.Warnf("InspectLab user '%s': Inspect for lab '%s' succeeded but returned no containers.", username, labName)
+		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' not found (no containers returned).", labName)})
 		return
 	}
 
-	log.Debugf("InspectLab user '%s': Inspection of lab '%s' successful, ownership confirmed.", username, labName)
-	// Return the full parsed result (which is ClabInspectOutput type)
+	// *** Check the Owner field ***
+	actualOwner := result.Containers[0].Owner
+	if actualOwner != username {
+		log.Warnf("InspectLab user '%s': Attempted to inspect lab '%s' but it is owned by '%s' (based on 'owner' field). Access denied.", username, labName, actualOwner)
+		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' not found or not owned by user.", labName)})
+		return
+	}
+
+	log.Debugf("InspectLab user '%s': Inspection of lab '%s' successful, ownership confirmed via 'owner' field.", username, labName)
 	c.JSON(http.StatusOK, result)
 }
 
-
+// ListLabsHandler - No changes needed, already uses owner field
 // @Summary List All Labs
-// @Description Get details about all running labs labeled for the authenticated user
+// @Description Get details about all running labs, filtered by the 'owner' field matching the authenticated user
 // @Tags Labs
 // @Security BearerAuth
 // @Produce json
@@ -394,13 +408,10 @@ func InspectLabHandler(c *gin.Context) {
 // @Router /api/v1/labs [get]
 func ListLabsHandler(c *gin.Context) {
 	username := c.GetString("username") // Authenticated user
-	log.Debugf("ListLabs user '%s': Listing all labs and filtering...", username)
+	log.Debugf("ListLabs user '%s': Listing all labs and filtering by 'owner' field...", username)
 
-	// Get all labs run by the API server user. Filtering happens *after*.
 	args := []string{"inspect", "--all", "--format", "json"}
-
-	// Pass username for logging
-	stdout, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...)
+	stdout, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...) // username for logging
 
 	if stderr != "" {
 		log.Warnf("ListLabs user '%s': clab inspect --all stderr: %s", username, stderr)
@@ -408,8 +419,8 @@ func ListLabsHandler(c *gin.Context) {
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(stdout, "no containers found") ||
-		   strings.Contains(errMsg, "no containerlab labs found") ||
-		   strings.Contains(stderr, "no containers found") {
+			strings.Contains(errMsg, "no containerlab labs found") ||
+			strings.Contains(stderr, "no containers found") {
 			log.Infof("ListLabs user '%s': No labs found at all.", username)
 			c.JSON(http.StatusOK, models.ClabInspectOutput{Containers: []models.ClabContainerInfo{}}) // Return empty list
 			return
@@ -429,101 +440,36 @@ func ListLabsHandler(c *gin.Context) {
 		return
 	}
 
-	// Filter the containers based on the owner label
+	// Filter the containers based on the owner field
 	filteredContainers := []models.ClabContainerInfo{}
-	labsFound := make(map[string]bool) // Track labs already added
+	labsFoundForUser := make(map[string]bool)
+	labsChecked := make(map[string]bool)
 
 	for _, cont := range fullResult.Containers {
-		// Check if the container has the owner label and it matches the user
-		ownerLabelValue := ""
-		if cont.Labels != nil {
-			ownerLabelValue = cont.Labels[apiOwnerLabel]
+		if labsChecked[cont.LabName] {
+			continue
 		}
 
-		if ownerLabelValue == username {
-			// Add all containers belonging to this lab if we haven't added the lab yet
-			if !labsFound[cont.LabName] {
-				log.Debugf("ListLabs user '%s': Found lab '%s' owned by user, adding its containers.", username, cont.LabName)
-				// Find all other containers for the *same lab* from the full result
-				for _, labCont := range fullResult.Containers {
-					if labCont.LabName == cont.LabName {
-						// Double-check label consistency (optional but good practice)
-						innerOwner := ""
-						if labCont.Labels != nil {
-							innerOwner = labCont.Labels[apiOwnerLabel]
-						}
-						if innerOwner == username {
-							filteredContainers = append(filteredContainers, labCont)
-						} else {
-							log.Warnf("ListLabs user '%s': Container '%s' in lab '%s' has inconsistent owner label ('%s' vs expected '%s'). Skipping.", username, labCont.Name, labCont.LabName, innerOwner, username)
-						}
+		// *** Check the Owner field ***
+		actualOwner := cont.Owner
+		if actualOwner == username {
+			log.Debugf("ListLabs user '%s': Found lab '%s' owned by user (owner='%s'), adding its containers.", username, cont.LabName, actualOwner)
+			labsFoundForUser[cont.LabName] = true
+			for _, labCont := range fullResult.Containers {
+				if labCont.LabName == cont.LabName {
+					if labCont.Owner == username {
+						filteredContainers = append(filteredContainers, labCont)
+					} else {
+						log.Warnf("ListLabs user '%s': Container '%s' in user's lab '%s' has inconsistent owner field ('%s' vs expected '%s'). Skipping this container.", username, labCont.Name, labCont.LabName, labCont.Owner, username)
 					}
 				}
-				labsFound[cont.LabName] = true // Mark lab as added
 			}
 		} else {
-			// Log only once per lab that doesn't match
-			if _, checked := labsFound[cont.LabName]; !checked {
-				log.Debugf("ListLabs user '%s': Filtering out lab '%s' owned by '%s' (or label missing/mismatch).", username, cont.LabName, ownerLabelValue)
-				labsFound[cont.LabName] = true // Mark as checked/filtered out
-			}
+			log.Debugf("ListLabs user '%s': Filtering out lab '%s' owned by '%s'.", username, cont.LabName, actualOwner)
 		}
+		labsChecked[cont.LabName] = true
 	}
 
-
-	log.Infof("ListLabs user '%s': Found %d labs owned by user.", username, len(labsFound)) // Count unique labs found
+	log.Infof("ListLabs user '%s': Found %d labs owned by user.", username, len(labsFoundForUser))
 	c.JSON(http.StatusOK, models.ClabInspectOutput{Containers: filteredContainers})
-}
-
-
-// @Summary List Topologies
-// @Description Lists available .clab.yml/.clab.yaml files (Not implemented in sudoless mode - Requires defining a storage strategy)
-// @Tags Topologies
-// @Security BearerAuth
-// @Produce json
-// @Success 501 {object} models.ErrorResponse "Not Implemented"
-// @Failure 401 {object} models.ErrorResponse "Unauthorized"
-// @Router /api/v1/topologies [get]
-func ListTopologiesHandler(c *gin.Context) {
-	username := c.GetString("username")
-	log.Warnf("ListTopologies user '%s': Endpoint not implemented in sudoless mode.", username)
-	// This endpoint needs a defined strategy for where user topologies are stored
-	// when the API server runs as a central user. Options:
-	// 1. Upload topologies via another API endpoint.
-	// 2. Define a directory structure accessible by the API server user, e.g., /etc/clab-api/topologies/<username>/
-	// For now, return Not Implemented.
-	c.JSON(http.StatusNotImplemented, models.ErrorResponse{Error: "Listing stored topologies is not implemented in this configuration."})
-
-	/* // Example implementation if using a predefined path structure:
-	   topologyBaseDir := "/etc/clab-api/topologies" // Make this configurable
-	   userTopoDir := filepath.Join(topologyBaseDir, username)
-
-	   log.Debugf("ListTopologies user '%s': Listing topology files from '%s'", username, userTopoDir)
-
-	   var files []models.TopologyListItem
-	   dirEntries, err := os.ReadDir(userTopoDir) // Read the specific user's subdir
-	   if err != nil {
-	       if os.IsNotExist(err) {
-	           log.Infof("ListTopologies user '%s': No topology directory found at '%s'", username, userTopoDir)
-	           c.JSON(http.StatusOK, []models.TopologyListItem{}) // Return empty list
-	           return
-	       }
-	       log.Errorf("ListTopologies failed for user '%s': Failed to read directory '%s': %v", username, userTopoDir, err)
-	       c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to read topologies directory: " + err.Error()})
-	       return
-	   }
-
-	   for _, entry := range dirEntries {
-	       if !entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
-	           if strings.HasSuffix(entry.Name(), ".clab.yml") || strings.HasSuffix(entry.Name(), ".clab.yaml") {
-	               files = append(files, models.TopologyListItem{
-	                   Filename:     entry.Name(),
-	                   RelativePath: entry.Name(), // Path relative to the user's topology dir
-	               })
-	           }
-	       }
-	   }
-	   log.Infof("ListTopologies user '%s': Found %d topology files in '%s'.", username, len(files), userTopoDir)
-	   c.JSON(http.StatusOK, files)
-	*/
 }

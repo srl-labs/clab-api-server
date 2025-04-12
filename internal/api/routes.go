@@ -21,7 +21,6 @@ func SetupRoutes(router *gin.Engine) {
 	// This documentation describes the /api/v1 endpoints primarily.
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, ginSwagger.URL("/swagger/doc.json")))
 
-
 	// --- Authenticated Routes ---
 
 	// Group for authenticated API endpoints under /api/v1
@@ -40,13 +39,6 @@ func SetupRoutes(router *gin.Engine) {
 			// DELETE /api/v1/labs/{labName}
 			labs.DELETE("/:labName", DestroyLabHandler)
 			// TODO: Add more lab-specific endpoints if needed (e.g., graph, exec)
-		}
-
-		// Topology file listing routes (e.g., /api/v1/topologies)
-		topologies := apiV1.Group("/topologies")
-		{
-			// GET /api/v1/topologies
-			topologies.GET("", ListTopologiesHandler)
 		}
 	}
 }

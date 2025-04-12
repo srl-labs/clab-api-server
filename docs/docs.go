@@ -31,7 +31,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Get details about all running labs labeled for the authenticated user",
+                "description": "Get details about all running labs, filtered by the 'owner' field matching the authenticated user",
                 "produces": [
                     "application/json"
                 ],
@@ -66,7 +66,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Deploys a containerlab topology for the authenticated user (runs as API server user, labeled with owner)",
+                "description": "Deploys a containerlab topology, saving the file to the user's ~/.clab/\u003clabname\u003e/ directory.\n**Requires API server user to have write permissions in authenticated user's home directory.**",
                 "consumes": [
                     "application/json"
                 ],
@@ -79,7 +79,7 @@ const docTemplate = `{
                 "summary": "Deploy Lab",
                 "parameters": [
                     {
-                        "description": "Topology Content",
+                        "description": "Topology Content (YAML string)",
                         "name": "deploy_request",
                         "in": "body",
                         "required": true,
@@ -96,7 +96,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Invalid input (e.g., empty topology content, invalid YAML)",
+                        "description": "Invalid input (e.g., empty/invalid topology, missing name, invalid lab name)",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -108,7 +108,7 @@ const docTemplate = `{
                         }
                     },
                     "500": {
-                        "description": "Internal server error (e.g., failed to create temp file, clab execution failed)",
+                        "description": "Internal server error (e.g., permission denied, clab execution failed)",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -123,7 +123,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Get details about a specific running lab (checks ownership via label)",
+                "description": "Get details about a specific running lab (checks ownership via 'owner' field from clab inspect)",
                 "produces": [
                     "application/json"
                 ],
@@ -179,7 +179,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Destroys a specific containerlab lab by name (identified by label for the authenticated user)\nNote: This attempts cleanup using the lab name. If the topology defined unique resources (e.g., networks) not automatically tied to the lab name by clab, they might be orphaned.",
+                "description": "Destroys a lab by name and attempts to remove the corresponding topology directory (~/.clab/\u003clabname\u003e).\nChecks ownership via 'owner' field from clab inspect.",
                 "produces": [
                     "application/json"
                 ],
@@ -223,37 +223,6 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal server error or clab execution failed",
-                        "schema": {
-                            "$ref": "#/definitions/models.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/topologies": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Lists available .clab.yml/.clab.yaml files (Not implemented in sudoless mode - Requires defining a storage strategy)",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Topologies"
-                ],
-                "summary": "List Topologies",
-                "responses": {
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/models.ErrorResponse"
-                        }
-                    },
-                    "501": {
-                        "description": "Not Implemented",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -318,20 +287,12 @@ const docTemplate = `{
         "models.ClabContainerInfo": {
             "type": "object",
             "properties": {
-                "LabPath": {
-                    "description": "Path to the topology file used (often relative, less reliable now)",
-                    "type": "string"
-                },
                 "container_id": {
                     "description": "Docker container ID (short)",
                     "type": "string"
                 },
-                "deployment_status": {
-                    "description": "Owner          string            ` + "`" + `json:\"Owner\"` + "`" + ` // OS user, less relevant now, API server user owns process",
-                    "type": "string"
-                },
                 "group": {
-                    "description": "Group assigned in topology",
+                    "description": "Group assigned in topology (Might not always be present)",
                     "type": "string"
                 },
                 "image": {
@@ -347,22 +308,23 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "kind": {
-                    "description": "e.g., \"srl\", \"linux\"",
+                    "description": "e.g., \"srl\", \"linux\", \"nokia_srlinux\"",
+                    "type": "string"
+                },
+                "labPath": {
+                    "description": "Path to the topology file used",
                     "type": "string"
                 },
                 "lab_name": {
                     "description": "Name of the lab this node belongs to",
                     "type": "string"
                 },
-                "labels": {
-                    "description": "*** ADDED: Docker labels ***",
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "string"
-                    }
-                },
                 "name": {
                     "description": "Name of the container node",
+                    "type": "string"
+                },
+                "owner": {
+                    "description": "OS user from clab inspect output (Used for authorization)",
                     "type": "string"
                 },
                 "state": {
@@ -374,7 +336,7 @@ const docTemplate = `{
         "models.ClabInspectOutput": {
             "type": "object",
             "properties": {
-                "Containers": {
+                "containers": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/models.ClabContainerInfo"
