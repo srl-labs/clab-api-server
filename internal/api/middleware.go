@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/yourusername/clab-api/internal/auth" // Adjust import path
-	"github.com/yourusername/clab-api/internal/models"
+	"github.com/FloSch62/clab-api/internal/auth" // Adjust import path
+	"github.com/FloSch62/clab-api/internal/models"
 )
 
 // AuthMiddleware validates the JWT token from the Authorization header

@@ -9,9 +9,9 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
 	// Adjust these import paths if your module path is different
-	"github.com/yourusername/clab-api/internal/api"
-	"github.com/yourusername/clab-api/internal/config"
-	_ "github.com/yourusername/clab-api/docs" // swagger docs
+	"github.com/FloSch62/clab-api/internal/api"
+	"github.com/FloSch62/clab-api/internal/config"
+	_ "github.com/FloSch62/clab-api/docs" // swagger docs
 )
 
 // @title Containerlab API

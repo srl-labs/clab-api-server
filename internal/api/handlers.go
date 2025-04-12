@@ -14,9 +14,9 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
 	// Adjust import paths if your module path is different
-	"github.com/yourusername/clab-api/internal/auth"
-	"github.com/yourusername/clab-api/internal/clab"
-	"github.com/yourusername/clab-api/internal/models"
+	"github.com/FloSch62/clab-api/internal/auth"
+	"github.com/FloSch62/clab-api/internal/clab"
+	"github.com/FloSch62/clab-api/internal/models"
 )
 
 // @Summary Login

@@ -6,7 +6,7 @@ import (
 	ginSwagger "github.com/swaggo/gin-swagger"
 
 	// Adjust import path if your module path is different
-	_ "github.com/yourusername/clab-api/docs"
+	_ "github.com/FloSch62/clab-api/docs"
 )
 
 func SetupRoutes(router *gin.Engine) {
