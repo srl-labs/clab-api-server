@@ -1,0 +1,29 @@
+# https://taskfile.dev
+
+version: '3'
+
+tasks:
+  deps:
+    desc: Install system dependencies
+    cmds:
+      - sudo apt-get update
+      - sudo apt-get install -y build-essential libpam-dev
+
+  tidy:
+    desc: Run go mod tidy
+    cmds:
+      - go mod tidy
+
+  swag:
+    desc: Generate Swagger docs
+    cmds:
+      - swag init -g cmd/server/main.go
+
+  build:
+    desc: Build the clab-api-server binary
+    cmds:
+      - go build -o clab-api-server ./cmd/server
+
+  default:
+    desc: Run all key steps (tidy, swag, build)
+    deps: [tidy, swag, build]
