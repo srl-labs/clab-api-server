@@ -310,6 +310,15 @@ definitions:
         description: Corresponds to --skip-post-deploy flag
         type: boolean
     type: object
+  models.SaveConfigResponse:
+    properties:
+      message:
+        description: Message indicating overall success.
+        type: string
+      output:
+        description: Detailed output from the 'clab save' command (often from stderr).
+        type: string
+    type: object
 host: localhost:8080
 info:
   contact:
@@ -528,7 +537,7 @@ paths:
       responses:
         "200":
           description: Raw JSON output if 'details=true' is used (structure matches
-            'docker inspect')" // <--- CHANGE THIS LINE
+            'docker inspect')
           schema:
             type: object
         "400":
@@ -629,7 +638,7 @@ paths:
       - application/json
       responses:
         "200":
-          description: Plain text output (if format=plain or default)
+          description: Plain text output (if format=plain)
           schema:
             type: string
         "400":
@@ -715,9 +724,9 @@ paths:
       - application/json
       responses:
         "200":
-          description: Configuration save command executed
+          description: Configuration save command executed, includes detailed output.
           schema:
-            $ref: '#/definitions/models.GenericSuccessResponse'
+            $ref: '#/definitions/models.SaveConfigResponse'
         "400":
           description: Invalid lab name or node filter
           schema:

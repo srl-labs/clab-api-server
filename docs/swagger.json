@@ -244,7 +244,7 @@
                 ],
                 "responses": {
                     "200": {
-                        "description": "Raw JSON output if 'details=true' is used (structure matches 'docker inspect')\" // \u003c--- CHANGE THIS LINE",
+                        "description": "Raw JSON output if 'details=true' is used (structure matches 'docker inspect')",
                         "schema": {
                             "type": "object"
                         }
@@ -474,7 +474,7 @@
                 ],
                 "responses": {
                     "200": {
-                        "description": "Plain text output (if format=plain or default)",
+                        "description": "Plain text output (if format=plain)",
                         "schema": {
                             "type": "string"
                         }
@@ -605,9 +605,9 @@
                 ],
                 "responses": {
                     "200": {
-                        "description": "Configuration save command executed",
+                        "description": "Configuration save command executed, includes detailed output.",
                         "schema": {
-                            "$ref": "#/definitions/models.GenericSuccessResponse"
+                            "$ref": "#/definitions/models.SaveConfigResponse"
                         }
                     },
                     "400": {
@@ -1066,6 +1066,19 @@
                 "skipPostDeploy": {
                     "description": "Corresponds to --skip-post-deploy flag",
                     "type": "boolean"
+                }
+            }
+        },
+        "models.SaveConfigResponse": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "description": "Message indicating overall success.",
+                    "type": "string"
+                },
+                "output": {
+                    "description": "Detailed output from the 'clab save' command (often from stderr).",
+                    "type": "string"
                 }
             }
         }

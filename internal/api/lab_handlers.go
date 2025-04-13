@@ -1,4 +1,4 @@
-// internal/api/handlers.go
+// internal/api/lab_handlers.go
 package api
 
 import (
@@ -22,86 +22,6 @@ import (
 	"github.com/FloSch62/clab-api/internal/config"
 	"github.com/FloSch62/clab-api/internal/models"
 )
-
-// isValidLabName checks for potentially harmful characters in lab names.
-var labNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
-
-func isValidLabName(name string) bool {
-	if name == "" || len(name) > 64 { // Added length check
-		return false
-	}
-	return labNameRegex.MatchString(name)
-}
-
-// isValidNodeFilter checks the node filter format (basic check)
-func isValidNodeFilter(filter string) bool {
-	if filter == "" {
-		return true // Empty is valid (no filter)
-	}
-	// Check for potentially unsafe characters, allow comma, alphanumeric, hyphen, underscore
-	return regexp.MustCompile(`^[a-zA-Z0-9_,-]+$`).MatchString(filter)
-}
-
-// isValidExportTemplate checks the export template format (basic check)
-func isValidExportTemplate(template string) bool {
-	if template == "" {
-		return true // Empty is valid (use default)
-	}
-	if template == "__full" {
-		return true // Special value
-	}
-	// Basic check: prevent path traversal, allow alphanumeric, underscore, hyphen, dot
-	// This is NOT a foolproof validation for file paths, but a basic sanity check.
-	// It assumes the template is relative or just a name.
-	if strings.Contains(template, "..") || strings.HasPrefix(template, "/") {
-		return false
-	}
-	return regexp.MustCompile(`^[a-zA-Z0-9_./-]+$`).MatchString(template)
-}
-
-// LoginHandler - Handles user authentication (No changes needed)
-// @Summary Login
-// @Description Authenticate user and return JWT token
-// @Tags Auth
-// @Accept json
-// @Produce json
-// @Param credentials body models.LoginRequest true "User Credentials"
-// @Success 200 {object} models.LoginResponse
-// @Failure 400 {object} models.ErrorResponse "Invalid input"
-// @Failure 401 {object} models.ErrorResponse "Invalid credentials"
-// @Failure 500 {object} models.ErrorResponse "Internal server error (PAM config?)"
-// @Router /login [post]
-func LoginHandler(c *gin.Context) {
-	var req models.LoginRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		log.Warnf("Login failed: Invalid request body: %v", err)
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid request body: " + err.Error()})
-		return
-	}
-
-	valid, err := auth.ValidateCredentials(req.Username, req.Password)
-	if err != nil {
-		log.Errorf("Login failed for user '%s': Error during credential validation: %v", req.Username, err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Error validating credentials: " + err.Error()})
-		return
-	}
-
-	if !valid {
-		log.Infof("Login failed for user '%s': Invalid username or password", req.Username)
-		c.JSON(http.StatusUnauthorized, models.ErrorResponse{Error: "Invalid username or password"})
-		return
-	}
-
-	token, err := auth.GenerateJWT(req.Username)
-	if err != nil {
-		log.Errorf("Login successful for user '%s', but failed to generate token: %v", req.Username, err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to generate token: " + err.Error()})
-		return
-	}
-
-	log.Infof("User '%s' logged in successfully", req.Username)
-	c.JSON(http.StatusOK, models.LoginResponse{Token: token})
-}
 
 // @Summary Deploy Lab
 // @Description Deploys a containerlab topology. Requires EITHER 'topologyContent' OR 'topologySourceUrl' in the request body, but not both.
@@ -208,41 +128,47 @@ func DeployLabHandler(c *gin.Context) {
 		trimmedContent := strings.TrimSpace(req.TopologyContent)
 
 		// --- Get User Home Directory, UID/GID, Parse YAML, Determine Lab Name ---
-		// (This part remains the same as before, extracting originalLabName)
 		usr, err := user.Lookup(username)
-		if err != nil { /* ... error handling ... */
+		if err != nil {
+			log.Errorf("DeployLab failed for user '%s': Could not determine user details: %v", username, err)
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Could not determine user details."})
 			return
 		}
 		homeDir := usr.HomeDir
 		uid, err := strconv.Atoi(usr.Uid)
-		if err != nil { /* ... error handling ... */
+		if err != nil {
+			log.Errorf("DeployLab failed for user '%s': Could not process user UID: %v", username, err)
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Could not process user UID."})
 			return
 		}
 		gid, err := strconv.Atoi(usr.Gid)
-		if err != nil { /* ... error handling ... */
+		if err != nil {
+			log.Errorf("DeployLab failed for user '%s': Could not process user GID: %v", username, err)
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Could not process user GID."})
 			return
 		}
 
 		var topoData map[string]interface{}
 		err = yaml.Unmarshal([]byte(trimmedContent), &topoData)
-		if err != nil { /* ... error handling ... */
+		if err != nil {
+			log.Warnf("DeployLab failed for user '%s': Invalid topology YAML: %v", username, err)
 			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid topology YAML: " + err.Error()})
 			return
 		}
 		originalLabNameValue, ok := topoData["name"]
-		if !ok { /* ... error handling ... */
+		if !ok {
+			log.Warnf("DeployLab failed for user '%s': Topology YAML missing 'name' field", username)
 			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Topology YAML must contain a top-level 'name' field."})
 			return
 		}
 		originalLabName, ok := originalLabNameValue.(string)
-		if !ok || originalLabName == "" { /* ... error handling ... */
+		if !ok || originalLabName == "" {
+			log.Warnf("DeployLab failed for user '%s': Topology 'name' field is not a non-empty string", username)
 			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Topology 'name' field must be a non-empty string."})
 			return
 		}
-		if !isValidLabName(originalLabName) { /* ... error handling ... */
+		if !isValidLabName(originalLabName) {
+			log.Warnf("DeployLab failed for user '%s': Invalid characters in topology 'name': %s", username, originalLabName)
 			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in topology 'name'."})
 			return
 		}
@@ -255,30 +181,33 @@ func DeployLabHandler(c *gin.Context) {
 		}
 
 		// --- Construct Paths, Create Dirs, Set Ownership, Write File ---
-		// (This part remains the same, using originalLabName for paths)
 		clabUserDir := filepath.Join(homeDir, ".clab")
 		targetDir := filepath.Join(clabUserDir, originalLabName)
 		targetFilePath := filepath.Join(targetDir, originalLabName+".clab.yml")
 		topoPathForClab = targetFilePath
 
 		err = os.MkdirAll(targetDir, 0750)
-		if err != nil { /* ... error handling ... */
+		if err != nil {
+			log.Errorf("DeployLab failed for user '%s': Failed to create lab directory '%s': %v", username, targetDir, err)
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to create lab directory: %s.", err.Error())})
 			return
 		}
 		err = os.Chown(targetDir, uid, gid)
-		if err != nil { /* ... error handling ... */
+		if err != nil {
+			log.Errorf("DeployLab failed for user '%s': Failed to set ownership on lab directory '%s': %v", username, targetDir, err)
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to set ownership on lab directory: %s.", err.Error())})
 			return
 		}
 		err = os.WriteFile(targetFilePath, []byte(trimmedContent), 0640)
-		if err != nil { /* ... error handling ... */
+		if err != nil {
+			log.Errorf("DeployLab failed for user '%s': Failed to write topology file '%s': %v", username, targetFilePath, err)
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to write topology file: %s.", err.Error())})
 			return
 		}
 		err = os.Chown(targetFilePath, uid, gid)
-		if err != nil { /* ... error handling ... */
-			_ = os.Remove(targetFilePath)
+		if err != nil {
+			log.Errorf("DeployLab failed for user '%s': Failed to set ownership on topology file '%s': %v", username, targetFilePath, err)
+			_ = os.Remove(targetFilePath) // Attempt cleanup
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to set ownership on topology file: %s.", err.Error())})
 			return
 		}
@@ -315,13 +244,14 @@ func DeployLabHandler(c *gin.Context) {
 	log.Infof("DeployLab user '%s': Executing clab deploy for lab '%s'...", username, labName)
 	stdout, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...)
 
-	// --- Handle command execution results (remains the same) ---
+	// --- Handle command execution results ---
 	if stderr != "" {
 		log.Warnf("DeployLab user '%s', lab '%s': clab deploy stderr: %s", username, labName, stderr)
 	}
 	if err != nil {
 		log.Errorf("DeployLab failed for user '%s', lab '%s': clab deploy command execution error: %v", username, labName, err)
 		errMsg := fmt.Sprintf("Failed to deploy lab '%s': %s", labName, err.Error())
+		// Only append stderr to the response if it looks like a significant error message
 		if stderr != "" && (strings.Contains(stderr, "level=error") || strings.Contains(stderr, "failed") || strings.Contains(stderr, "panic")) {
 			errMsg += "\nstderr: " + stderr
 		}
@@ -331,10 +261,11 @@ func DeployLabHandler(c *gin.Context) {
 
 	log.Infof("DeployLab user '%s': clab deploy for lab '%s' executed successfully.", username, labName)
 
-	// --- Parse and return result (remains the same) ---
+	// --- Parse and return result ---
 	var result interface{}
 	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
 		log.Warnf("DeployLab user '%s', lab '%s': Output from clab was not valid JSON: %v. Returning as plain text.", username, labName, err)
+		// Check if the non-JSON output indicates an error
 		if strings.Contains(stdout, "level=error") || strings.Contains(stdout, "failed") {
 			c.JSON(http.StatusInternalServerError, gin.H{"output": stdout, "warning": "Deployment finished but output indicates errors and was not valid JSON"})
 		} else {
@@ -601,7 +532,7 @@ func RedeployLabHandler(c *gin.Context) {
 // @Param labName path string true "Name of the lab to inspect" example="my-test-lab"
 // @Param details query boolean false "Include full container details (like docker inspect)" example="true"
 // @Success 200 {object} models.ClabInspectOutput "Standard JSON output from 'clab inspect'"
-// @Success 200 {object} object "Raw JSON output if 'details=true' is used (structure matches 'docker inspect')" // <--- CHANGE THIS LINE
+// @Success 200 {object} object "Raw JSON output if 'details=true' is used (structure matches 'docker inspect')"
 // @Failure 400 {object} models.ErrorResponse "Invalid lab name"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
 // @Failure 404 {object} models.ErrorResponse "Lab not found or not owned by user"
@@ -620,7 +551,6 @@ func InspectLabHandler(c *gin.Context) {
 	log.Debugf("InspectLab user '%s': Inspecting lab '%s' (details=%t)", username, labName, details)
 
 	// --- Verify lab exists and belongs to the user (needed even if just inspecting) ---
-	// We don't strictly *need* the topo path here, but the ownership check is essential.
 	_, ownerCheckErr := verifyLabOwnership(c, username, labName)
 	if ownerCheckErr != nil {
 		// verifyLabOwnership already sent the response
@@ -660,7 +590,7 @@ func InspectLabHandler(c *gin.Context) {
 	if details {
 		// For --details, the output structure is complex (like docker inspect).
 		// Return raw JSON to avoid complex model mapping.
-		var rawResult json.RawMessage // Keep using json.RawMessage in Go code
+		var rawResult json.RawMessage
 		if err := json.Unmarshal([]byte(stdout), &rawResult); err != nil {
 			log.Errorf("InspectLab failed for user '%s': Failed to parse clab inspect --details JSON output for lab '%s': %v", username, labName, err)
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to parse clab inspect --details output: " + err.Error()})
@@ -668,11 +598,9 @@ func InspectLabHandler(c *gin.Context) {
 		}
 		log.Debugf("InspectLab user '%s': Inspection (with details) of lab '%s' successful.", username, labName)
 		// Return the raw JSON directly. Gin handles marshalling json.RawMessage correctly.
-		c.Data(http.StatusOK, "application/json", rawResult) // Use c.Data for raw bytes
-		// OR, less ideally but might work if c.Data causes issues:
-		// c.JSON(http.StatusOK, rawResult)
+		c.Data(http.StatusOK, "application/json", rawResult)
 	} else {
-		// ... standard inspect output handling ...
+		// Standard inspect output handling
 		var result models.ClabInspectOutput
 		if err := json.Unmarshal([]byte(stdout), &result); err != nil {
 			log.Errorf("InspectLab failed for user '%s': Failed to parse clab inspect JSON output for lab '%s': %v", username, labName, err)
@@ -737,7 +665,6 @@ func InspectInterfacesHandler(c *gin.Context) {
 	}
 	if err != nil {
 		// Check for "not found" errors specifically for interfaces command if possible
-		// (Assuming similar error messages as inspect)
 		errMsg := err.Error()
 		if strings.Contains(stdout, "no containers found") ||
 			strings.Contains(errMsg, "no containers found") ||
@@ -772,7 +699,6 @@ func InspectInterfacesHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-// ListLabsHandler - No changes needed, already uses owner field and superuser logic
 // @Summary List All Labs
 // @Description Get details about all running labs, filtered by the 'owner' field matching the authenticated user (unless user is in SUPERUSER_GROUP).
 // @Tags Labs
@@ -883,7 +809,7 @@ func ListLabsHandler(c *gin.Context) {
 // @Produce json
 // @Param labName path string true "Name of the lab to save configuration for" example="my-test-lab"
 // @Param nodeFilter query string false "Save config only for specific nodes (comma-separated)" example="srl1,srl2"
-// @Success 200 {object} models.SaveConfigResponse "Configuration save command executed, includes detailed output." // <-- UPDATED @Success
+// @Success 200 {object} models.SaveConfigResponse "Configuration save command executed, includes detailed output."
 // @Failure 400 {object} models.ErrorResponse "Invalid lab name or node filter"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
 // @Failure 404 {object} models.ErrorResponse "Lab not found or not owned by user"
@@ -895,7 +821,16 @@ func SaveLabConfigHandler(c *gin.Context) {
 	nodeFilter := c.Query("nodeFilter")
 
 	// --- Validate Inputs ---
-	// ... (validation code remains the same) ...
+	if !isValidLabName(labName) {
+		log.Warnf("SaveLabConfig failed for user '%s': Invalid lab name '%s'", username, labName)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in lab name."})
+		return
+	}
+	if !isValidNodeFilter(nodeFilter) {
+		log.Warnf("SaveLabConfig failed for user '%s', lab '%s': Invalid nodeFilter '%s'", username, labName, nodeFilter)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in nodeFilter."})
+		return
+	}
 	log.Debugf("SaveLabConfig user '%s': Attempting to save config for lab '%s' (filter: '%s')", username, labName, nodeFilter)
 
 	// --- Verify Ownership ---
@@ -957,7 +892,7 @@ func SaveLabConfigHandler(c *gin.Context) {
 // @Param format query string false "Output format ('plain' or 'json'). Default is 'json'." example="json"
 // @Param exec_request body models.ExecRequest true "Command to execute"
 // @Success 200 {object} models.ExecResponse "Structured output (if format=json)"
-// @Success 200 {string} string "Plain text output (if format=plain or default)"
+// @Success 200 {string} string "Plain text output (if format=plain)"
 // @Failure 400 {object} models.ErrorResponse "Invalid input (lab name, node filter, format, request body)"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
 // @Failure 404 {object} models.ErrorResponse "Lab not found or not owned by user"
@@ -969,7 +904,7 @@ func ExecCommandHandler(c *gin.Context) {
 	nodeFilter := c.Query("nodeFilter") // Expecting a single container name here
 	outputFormat := c.DefaultQuery("format", "json")
 
-	// --- Validate Inputs (keep existing validation) ---
+	// --- Validate Inputs ---
 	if !isValidLabName(labName) {
 		log.Warnf("ExecCommand failed for user '%s': Invalid lab name '%s'", username, labName)
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in lab name."})
@@ -1000,17 +935,19 @@ func ExecCommandHandler(c *gin.Context) {
 
 	log.Debugf("ExecCommand user '%s': Attempting to execute on lab '%s' (node filter: '%s', format: '%s')", username, labName, nodeFilter, outputFormat)
 
-	// --- Verify Ownership (keep existing) ---
+	// --- Verify Ownership ---
 	originalTopoPath, ownerCheckErr := verifyLabOwnership(c, username, labName)
 	if ownerCheckErr != nil {
 		return // verifyLabOwnership sent response
 	}
 
-	// --- Execute clab exec (keep existing argument logic) ---
+	// --- Execute clab exec ---
 	args := []string{"exec"}
 	if nodeFilter != "" {
+		// Use --label filter for single node targeting via container name
 		args = append(args, "--label", fmt.Sprintf("clab-node-longname=%s", nodeFilter))
 	} else {
+		// Target all nodes in the lab using the topology file
 		if originalTopoPath == "" {
 			log.Errorf("ExecCommand failed for user '%s', lab '%s': Cannot execute on all nodes as original topology path is unknown.", username, labName)
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Cannot determine topology path to target all nodes for exec."})
@@ -1022,7 +959,7 @@ func ExecCommandHandler(c *gin.Context) {
 	args = append(args, "--cmd", req.Command)
 	if outputFormat == "json" {
 		args = append(args, "--format", "json")
-	}
+	} // 'plain' is the default for clab exec
 
 	log.Infof("ExecCommand user '%s': Executing clab exec for lab '%s'...", username, labName)
 	stdout, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...)
@@ -1030,20 +967,21 @@ func ExecCommandHandler(c *gin.Context) {
 	// --- Handle command execution results ---
 	if err != nil {
 		log.Warnf("ExecCommand user '%s', lab '%s': clab exec command returned error: %v. Stderr: %s, Stdout: %s", username, labName, err, stderr, stdout)
-		// Don't return 500 immediately for plain format if it might be the command failing
-	} else if stderr != "" && outputFormat == "plain" { // Log stderr if plain format, even on success, as it contains the output
+		// Don't return 500 immediately for plain format if it might be the command failing inside the container
+	} else if stderr != "" && outputFormat == "plain" { // Log stderr if plain format, even on success, as it contains the output.
 		log.Infof("ExecCommand user '%s', lab '%s': clab exec stderr (contains plain output): %s", username, labName, stderr)
-	} else if stderr != "" && outputFormat == "json" { // Log stderr for JSON format only if it's unexpected
+	} else if stderr != "" && outputFormat == "json" { // Log stderr for JSON format only if it's unexpected (exit code 0 usually means no stderr)
 		log.Warnf("ExecCommand user '%s', lab '%s': clab exec stderr (json format, exit code 0): %s", username, labName, stderr)
 	}
 
 	// --- Process output based on format ---
 	if outputFormat == "json" {
-		// Declare result using the CORRECTED ExecResponse type
+		// Declare result using the ExecResponse type
 		var result models.ExecResponse
 		if jsonErr := json.Unmarshal([]byte(stdout), &result); jsonErr != nil {
 			// Parsing failed
 			log.Errorf("ExecCommand user '%s', lab '%s': Failed to parse clab exec JSON output: %v. Stdout: %s, Stderr: %s", username, labName, jsonErr, stdout, stderr)
+			// Return 500 because the API failed to process valid clab output (or clab output was invalid)
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error":  "Failed to parse clab exec JSON output.",
 				"stdout": stdout, // Include raw output for debugging
@@ -1053,354 +991,20 @@ func ExecCommandHandler(c *gin.Context) {
 		}
 		// Parsing succeeded
 		log.Infof("ExecCommand user '%s': clab exec for lab '%s' (json format) successful.", username, labName)
+		// Return 200 even if the command *inside* the container failed (result will show non-zero return code)
 		c.JSON(http.StatusOK, result)
 
 	} else { // plain format
-		// If clab reported an error, return 500 with stderr (which might contain clab errors) and stdout
+		// For plain format, clab aggregates stdout/stderr from containers into its *stderr*.
+		// If clab itself reported an error (err != nil), something went wrong with clab execution.
 		if err != nil {
-			// Return both stdout and stderr for context if the command likely failed
-			// Prioritize stderr as it might contain the actual clab error message
-			responseText := fmt.Sprintf("Stderr:\n%s\nStdout:\n%s\nError: %s", stderr, stdout, err.Error())
-			c.String(http.StatusInternalServerError, responseText) // Use 500 as clab itself reported an error
+			// Return 500 as clab itself failed. Include stderr (which might contain clab errors) and stdout.
+			responseText := fmt.Sprintf("Clab Error: %s\nStderr:\n%s\nStdout:\n%s", err.Error(), stderr, stdout)
+			c.String(http.StatusInternalServerError, responseText)
 		} else {
-			// Success (exit code 0 from clab). Return stderr as it contains the aggregated output.
+			// Success (exit code 0 from clab). Return clab's stderr as it contains the aggregated output.
 			log.Infof("ExecCommand user '%s': clab exec for lab '%s' (plain format) successful, returning stderr content.", username, labName)
-			c.String(http.StatusOK, stderr) // <--- RETURN STDERR HERE for plain format success
+			c.String(http.StatusOK, stderr) // Return stderr content for plain format success
 		}
 	}
-}
-
-// @Summary Generate Topology
-// @Description Generates a containerlab topology file based on CLOS definitions. Optionally deploys it.
-// @Tags Topology Generation
-// @Security BearerAuth
-// @Accept json
-// @Produce json
-// @Param generate_request body models.GenerateRequest true "Topology generation parameters"
-// @Success 200 {object} models.GenerateResponse "Generation successful (YAML or deploy output)"
-// @Failure 400 {object} models.ErrorResponse "Invalid input parameters"
-// @Failure 401 {object} models.ErrorResponse "Unauthorized"
-// @Failure 500 {object} models.ErrorResponse "Internal server error or clab execution failed"
-// @Router /api/v1/generate [post]
-func GenerateTopologyHandler(c *gin.Context) {
-	username := c.GetString("username") // Needed for potential deploy logging/context
-
-	var req models.GenerateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		log.Warnf("GenerateTopology failed for user '%s': Invalid request body: %v", username, err)
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid request body: " + err.Error()})
-		return
-	}
-
-	// --- Basic Input Validation ---
-	if len(req.Tiers) == 0 {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "At least one tier must be defined in 'tiers'."})
-		return
-	}
-	// Add more validation for tier contents, image/license formats if needed
-
-	log.Debugf("GenerateTopology user '%s': Generating topology '%s' (deploy=%t)", username, req.Name, req.Deploy)
-
-	// --- Construct clab generate arguments ---
-	args := []string{"generate", "--name", req.Name}
-
-	// Build --nodes flag string(s)
-	// clab generate allows multiple --nodes flags or comma-separated within one.
-	// Let's use multiple flags for clarity.
-	for i, tier := range req.Tiers {
-		if tier.Count <= 0 {
-			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: fmt.Sprintf("Tier %d has invalid count: %d", i+1, tier.Count)})
-			return
-		}
-		nodeStr := strconv.Itoa(tier.Count)
-		if tier.Kind != "" {
-			nodeStr += ":" + tier.Kind
-			if tier.Type != "" {
-				nodeStr += ":" + tier.Type
-			}
-		} else if tier.Type != "" {
-			// If kind is empty but type is not, clab might need kind explicitly. Assume default.
-			defaultKind := req.DefaultKind
-			if defaultKind == "" {
-				defaultKind = "srl" // clab's default
-			}
-			nodeStr += ":" + defaultKind + ":" + tier.Type
-		}
-		args = append(args, "--nodes", nodeStr)
-	}
-
-	if req.DefaultKind != "" {
-		args = append(args, "--kind", req.DefaultKind)
-	}
-	if len(req.Images) > 0 {
-		var imgArgs []string
-		for kind, img := range req.Images {
-			imgArgs = append(imgArgs, fmt.Sprintf("%s=%s", kind, img))
-		}
-		args = append(args, "--image", strings.Join(imgArgs, ","))
-	}
-	if len(req.Licenses) > 0 {
-		var licArgs []string
-		for kind, lic := range req.Licenses {
-			// Security: Ensure license path is somewhat sane? Difficult without knowing server layout.
-			// Rely on clab's own handling for now.
-			licArgs = append(licArgs, fmt.Sprintf("%s=%s", kind, lic))
-		}
-		args = append(args, "--license", strings.Join(licArgs, ","))
-	}
-	if req.NodePrefix != "" {
-		args = append(args, "--node-prefix", req.NodePrefix)
-	}
-	if req.GroupPrefix != "" {
-		args = append(args, "--group-prefix", req.GroupPrefix)
-	}
-	if req.ManagementNetwork != "" {
-		args = append(args, "--network", req.ManagementNetwork)
-	}
-	if req.IPv4Subnet != "" {
-		args = append(args, "--ipv4-subnet", req.IPv4Subnet)
-	}
-	if req.IPv6Subnet != "" {
-		args = append(args, "--ipv6-subnet", req.IPv6Subnet)
-	}
-	// MaxWorkers is handled during deploy step if needed
-	// Deploy and OutputFile flags are handled specially below
-
-	// --- Determine Output/Action ---
-	var generatedFilePath string
-	var err error
-	cleanupTempFile := false
-
-	if req.Deploy {
-		// Need to save to a file first. Use temp file if OutputFile not specified.
-		if req.OutputFile != "" {
-			// User specified output file. Be careful with this on a server.
-			// Sanitize the path? For now, assume it's trusted or handled by deployment env.
-			generatedFilePath, err = clab.SanitizePath(req.OutputFile) // Basic sanitization
-			if err != nil {
-				log.Warnf("GenerateTopology failed for user '%s': Invalid OutputFile path '%s': %v", username, req.OutputFile, err)
-				c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid OutputFile path: " + err.Error()})
-				return
-			}
-			// Ensure directory exists? Might be complex depending on permissions. Let clab handle it?
-			// Let's assume the directory must exist.
-			dir := filepath.Dir(generatedFilePath)
-			if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
-				log.Warnf("GenerateTopology failed for user '%s': OutputFile directory does not exist: %s", username, dir)
-				c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: fmt.Sprintf("OutputFile directory does not exist: %s", dir)})
-				return
-			}
-
-		} else {
-			// Create temp file
-			tmpFile, err := os.CreateTemp("", fmt.Sprintf("clab-gen-%s-*.yml", req.Name))
-			if err != nil {
-				log.Errorf("GenerateTopology failed for user '%s': Cannot create temp file: %v", username, err)
-				c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to create temporary file for deployment."})
-				return
-			}
-			generatedFilePath = tmpFile.Name()
-			tmpFile.Close() // Close immediately, clab will write to it
-			cleanupTempFile = true
-			log.Debugf("GenerateTopology user '%s': Using temp file for deployment: %s", username, generatedFilePath)
-		}
-		args = append(args, "--file", generatedFilePath)
-
-	} else {
-		// Not deploying. Check if saving to file or returning YAML.
-		if req.OutputFile != "" {
-			generatedFilePath, err = clab.SanitizePath(req.OutputFile)
-			if err != nil {
-				log.Warnf("GenerateTopology failed for user '%s': Invalid OutputFile path '%s': %v", username, req.OutputFile, err)
-				c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid OutputFile path: " + err.Error()})
-				return
-			}
-			dir := filepath.Dir(generatedFilePath)
-			if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
-				log.Warnf("GenerateTopology failed for user '%s': OutputFile directory does not exist: %s", username, dir)
-				c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: fmt.Sprintf("OutputFile directory does not exist: %s", dir)})
-				return
-			}
-			args = append(args, "--file", generatedFilePath)
-		} else {
-			// Return YAML directly via stdout
-			args = append(args, "--file", "-")
-		}
-	}
-
-	// --- Execute clab generate ---
-	log.Infof("GenerateTopology user '%s': Executing clab generate...", username)
-	// Use a background context potentially, generation might take time? Or stick to request context.
-	genStdout, genStderr, genErr := clab.RunClabCommand(c.Request.Context(), username, args...)
-
-	if genStderr != "" {
-		log.Warnf("GenerateTopology user '%s': clab generate stderr: %s", username, genStderr)
-	}
-	if genErr != nil {
-		if cleanupTempFile {
-			os.Remove(generatedFilePath) // Clean up temp file on error
-		}
-		log.Errorf("GenerateTopology failed for user '%s': clab generate command error: %v", username, genErr)
-		errMsg := fmt.Sprintf("Failed to generate topology '%s': %s", req.Name, genErr.Error())
-		if genStderr != "" && (strings.Contains(genStderr, "level=error") || strings.Contains(genStderr, "failed")) {
-			errMsg += "\nstderr: " + genStderr
-		}
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: errMsg})
-		return
-	}
-
-	log.Infof("GenerateTopology user '%s': clab generate successful.", username)
-
-	// --- Handle Response based on Action ---
-	response := models.GenerateResponse{
-		Message:       fmt.Sprintf("Topology '%s' generated successfully.", req.Name),
-		SavedFilePath: generatedFilePath, // Will be empty if outputting to stdout
-	}
-
-	if req.Deploy {
-		// --- Execute clab deploy ---
-		if cleanupTempFile {
-			defer os.Remove(generatedFilePath) // Ensure temp file cleanup even if deploy fails
-		}
-
-		deployArgs := []string{"deploy", "-t", generatedFilePath, "--reconfigure"}
-		if req.MaxWorkers > 0 {
-			deployArgs = append(deployArgs, "--max-workers", strconv.Itoa(req.MaxWorkers))
-		}
-		deployArgs = append(deployArgs, "--format", "json") // Request JSON output from deploy
-
-		log.Infof("GenerateTopology user '%s': Deploying generated topology '%s' from '%s'...", username, req.Name, generatedFilePath)
-		deployStdout, deployStderr, deployErr := clab.RunClabCommand(c.Request.Context(), username, deployArgs...)
-
-		if deployStderr != "" {
-			log.Warnf("GenerateTopology (deploy step) user '%s': clab deploy stderr: %s", username, deployStderr)
-		}
-		if deployErr != nil {
-			// Deploy failed, but generation succeeded. Return partial success? Or overall failure?
-			// Let's return failure but include the path to the generated file.
-			log.Errorf("GenerateTopology (deploy step) failed for user '%s': clab deploy command error: %v", username, deployErr)
-			errMsg := fmt.Sprintf("Topology '%s' generated to '%s', but deployment failed: %s", req.Name, generatedFilePath, deployErr.Error())
-			if deployStderr != "" && (strings.Contains(deployStderr, "level=error") || strings.Contains(deployStderr, "failed")) {
-				errMsg += "\nstderr: " + deployStderr
-			}
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: errMsg})
-			return
-		}
-
-		log.Infof("GenerateTopology user '%s': Deployment of generated topology '%s' successful.", username, req.Name)
-		response.Message = fmt.Sprintf("Topology '%s' generated and deployed successfully.", req.Name)
-
-		// Attempt to capture deploy output (try JSON first)
-		var deployResult json.RawMessage
-		if err := json.Unmarshal([]byte(deployStdout), &deployResult); err == nil {
-			response.DeployOutput = deployResult
-		} else {
-			// If not JSON, store as plain text within the RawMessage (needs quoting)
-			response.DeployOutput = json.RawMessage(fmt.Sprintf(`"%s"`, strings.ReplaceAll(deployStdout, `"`, `\"`))) // Basic escaping
-			log.Warnf("GenerateTopology user '%s': Deploy output was not valid JSON, returning as string.", username)
-		}
-		c.JSON(http.StatusOK, response)
-
-	} else {
-		// Not deploying
-		if req.OutputFile == "" {
-			// Returned YAML via stdout
-			response.TopologyYAML = genStdout
-			response.SavedFilePath = "" // No file saved
-		}
-		// If OutputFile was set, SavedFilePath is already populated.
-		c.JSON(http.StatusOK, response)
-	}
-}
-
-// --- Helper Functions ---
-
-// verifyLabOwnership checks if a lab exists and is owned by the user.
-// Returns the original topology path (if found) and nil error on success.
-// Sends appropriate HTTP error response and returns non-nil error on failure.
-func verifyLabOwnership(c *gin.Context, username, labName string) (string, error) {
-	log.Debugf("Verifying ownership for user '%s', lab '%s'", username, labName)
-	inspectArgs := []string{"inspect", "--name", labName, "--format", "json"}
-	// Use a background context for this internal check, don't rely on incoming request context timeout necessarily
-	// ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	// defer cancel()
-	// Using request context might be better to cancel if client disconnects
-	ctx := c.Request.Context()
-
-	inspectStdout, inspectStderr, inspectErr := clab.RunClabCommand(ctx, username, inspectArgs...) // username for logging
-
-	if inspectStderr != "" {
-		log.Warnf("Ownership check (via inspect) stderr for user '%s', lab '%s': %s", username, labName, inspectStderr)
-	}
-	if inspectErr != nil {
-		errMsg := inspectErr.Error()
-		if strings.Contains(inspectStdout, "no containers found") ||
-			strings.Contains(errMsg, "no containers found") ||
-			strings.Contains(errMsg, "no containerlab labs found") ||
-			strings.Contains(inspectStderr, "no containers found") ||
-			strings.Contains(inspectStderr, "Could not find containers for lab") {
-			log.Infof("Ownership check failed for user '%s': Lab '%s' not found.", username, labName)
-			err := fmt.Errorf("lab '%s' not found", labName)
-			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
-			return "", err
-		}
-		log.Errorf("Ownership check failed for user '%s': Failed to inspect lab '%s': %v", username, labName, inspectErr)
-		err := fmt.Errorf("failed to inspect lab '%s' for ownership check: %w", labName, inspectErr)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
-		return "", err
-	}
-
-	var inspectResult models.ClabInspectOutput
-	if err := json.Unmarshal([]byte(inspectStdout), &inspectResult); err != nil {
-		log.Errorf("Ownership check failed for user '%s': Could not parse inspect output for lab '%s'. Output: %s, Error: %v", username, labName, inspectStdout, err)
-		err := fmt.Errorf("could not parse inspect output for lab '%s'", labName)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
-		return "", err
-	}
-
-	if len(inspectResult.Containers) == 0 {
-		log.Warnf("Ownership check failed for user '%s': Inspect for lab '%s' succeeded but returned no containers.", username, labName)
-		err := fmt.Errorf("lab '%s' not found (no containers returned)", labName)
-		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
-		return "", err
-	}
-
-	actualOwner := inspectResult.Containers[0].Owner
-	originalTopoPath := inspectResult.Containers[0].LabPath // Get the topology path
-
-	if actualOwner != username {
-		// Check superuser status ONLY if ownership check fails
-		isSuperuser := false
-		if config.AppConfig.SuperuserGroup != "" {
-			inGroup, groupErr := auth.IsUserInGroup(username, config.AppConfig.SuperuserGroup)
-			if groupErr != nil {
-				log.Errorf("Ownership check failed for user '%s', lab '%s': Error checking superuser group membership: %v", username, labName, groupErr)
-				// Fall through to deny access, as we couldn't confirm superuser status
-			} else if inGroup {
-				isSuperuser = true
-				log.Infof("Ownership check bypass for user '%s' on lab '%s' (owned by '%s'): User is superuser.", username, labName, actualOwner)
-			}
-		}
-
-		if !isSuperuser {
-			log.Warnf("Ownership check failed for user '%s': Attempted to access lab '%s' but it is owned by '%s'. Access denied.", username, labName, actualOwner)
-			err := fmt.Errorf("lab '%s' not found or not owned by user", labName)
-			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()}) // Use 404 for security (don't reveal existence)
-			return "", err
-		}
-	}
-
-	log.Debugf("Ownership confirmed for user '%s' on lab '%s' (Owner: '%s', Original Path: '%s').", username, labName, actualOwner, originalTopoPath)
-	return originalTopoPath, nil // Success
-}
-
-// Helper function to count unique lab names in a list of containers
-func countUniqueLabs(containers []models.ClabContainerInfo) int {
-	uniqueLabs := make(map[string]struct{})
-	for _, c := range containers {
-		if c.LabName != "" {
-			uniqueLabs[c.LabName] = struct{}{}
-		}
-	}
-	return len(uniqueLabs)
 }
