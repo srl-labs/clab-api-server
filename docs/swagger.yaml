@@ -44,8 +44,32 @@ definitions:
     type: object
   models.DeployRequest:
     properties:
+      exportTemplate:
+        description: Corresponds to --export-template flag (__full is special)
+        example: my_custom_export.tmpl
+        type: string
+      labNameOverride:
+        description: '--- Optional Flags ---'
+        example: my-specific-lab-run
+        type: string
+      maxWorkers:
+        description: Corresponds to --max-workers flag (0 means default)
+        type: integer
+      nodeFilter:
+        description: Corresponds to --node-filter flag (comma-separated)
+        example: srl1,srl2
+        type: string
+      reconfigure:
+        description: Corresponds to --reconfigure flag
+        type: boolean
+      skipLabdirAcl:
+        description: Corresponds to --skip-labdir-acl flag
+        type: boolean
+      skipPostDeploy:
+        description: Corresponds to --skip-post-deploy flag
+        type: boolean
       topologyContent:
-        description: YAML content as a string
+        description: 'Option 1: Direct Topology Content (YAML string)'
         example: |-
           name: my-lab
           topology:
@@ -54,8 +78,12 @@ definitions:
                 kind: srl
                 image: ghcr.io/nokia/srlinux
         type: string
-    required:
-    - topologyContent
+      topologySourceUrl:
+        description: |-
+          Option 2: Remote Topology Source URL (Git repo, Git file, HTTP(S) URL)
+          If provided, TopologyContent is ignored.
+        example: https://github.com/hellt/clab-test-repo/blob/main/lab1.clab.yml
+        type: string
     type: object
   models.ErrorResponse:
     properties:
@@ -65,6 +93,30 @@ definitions:
   models.GenericSuccessResponse:
     properties:
       message:
+        type: string
+    type: object
+  models.InterfaceInfo:
+    properties:
+      alias:
+        description: Interface alias (e.g., "ethernet-1/1", "" if none)
+        type: string
+      ifindex:
+        description: Interface index
+        type: integer
+      mac:
+        description: MAC Address
+        type: string
+      mtu:
+        description: MTU size
+        type: integer
+      name:
+        description: Interface name (e.g., "eth0", "e1-1")
+        type: string
+      state:
+        description: Interface state (e.g., "up", "down", "unknown")
+        type: string
+      type:
+        description: Interface type (e.g., "veth", "device", "dummy")
         type: string
     type: object
   models.LoginRequest:
@@ -82,7 +134,53 @@ definitions:
       token:
         type: string
     type: object
-host: localhost:8080 // Keep this generic, actual host/port depends on config
+  models.NodeInterfaceInfo:
+    properties:
+      interfaces:
+        items:
+          $ref: '#/definitions/models.InterfaceInfo'
+        type: array
+      name:
+        description: Name of the container node
+        type: string
+    type: object
+  models.RedeployRequest:
+    properties:
+      cleanup:
+        description: Corresponds to --cleanup flag
+        type: boolean
+      exportTemplate:
+        description: Corresponds to --export-template flag (__full is special)
+        type: string
+      graceful:
+        description: Corresponds to --graceful flag
+        type: boolean
+      graph:
+        description: Corresponds to --graph flag
+        type: boolean
+      ipv4Subnet:
+        description: Corresponds to --ipv4-subnet flag
+        type: string
+      ipv6Subnet:
+        description: Corresponds to --ipv6-subnet flag
+        type: string
+      keepMgmtNet:
+        description: Corresponds to --keep-mgmt-net flag
+        type: boolean
+      maxWorkers:
+        description: Corresponds to --max-workers flag (0 means default)
+        type: integer
+      network:
+        description: Corresponds to --network flag
+        type: string
+      skipLabdirAcl:
+        description: Corresponds to --skip-labdir-acl flag
+        type: boolean
+      skipPostDeploy:
+        description: Corresponds to --skip-post-deploy flag
+        type: boolean
+    type: object
+host: localhost:8080
 info:
   contact:
     email: support@swagger.io
@@ -100,7 +198,7 @@ paths:
   /api/v1/labs:
     get:
       description: Get details about all running labs, filtered by the 'owner' field
-        matching the authenticated user
+        matching the authenticated user (unless user is in SUPERUSER_GROUP).
       produces:
       - application/json
       responses:
@@ -125,10 +223,11 @@ paths:
       consumes:
       - application/json
       description: |-
-        Deploys a containerlab topology, saving the file to the user's ~/.clab/<labname>/ directory and setting ownership to the authenticated user.
-        **Requires the API server process to run with privileges (e.g., as root or via sudo) sufficient to change file ownership (chown).**
+        Deploys a containerlab topology from either embedded content or a remote URL (Git/HTTP).
+        If deploying from content, saves the file to ~/.clab/<labname>/ and sets ownership (requires API server privileges).
+        If deploying from URL, containerlab handles fetching; the API does not save the file locally.
       parameters:
-      - description: Topology Content (YAML string)
+      - description: Deployment details (topology content or URL, and options)
         in: body
         name: deploy_request
         required: true
@@ -142,8 +241,8 @@ paths:
           schema:
             type: object
         "400":
-          description: Invalid input (e.g., empty/invalid topology, missing name,
-            invalid lab name)
+          description: Invalid input (e.g., missing content/URL, invalid flags, invalid
+            name)
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "401":
@@ -151,8 +250,8 @@ paths:
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "500":
-          description: Internal server error (e.g., permission denied for chown, clab
-            execution failed)
+          description: Internal server error (e.g., file system errors, clab execution
+            failed)
           schema:
             $ref: '#/definitions/models.ErrorResponse'
       security:
@@ -163,13 +262,30 @@ paths:
   /api/v1/labs/{labName}:
     delete:
       description: |-
-        Destroys a lab by name and attempts to remove the corresponding topology directory (~/.clab/<labname>).
-        Checks ownership via 'owner' field from clab inspect.
+        Destroys a lab by name, checking ownership via 'owner' field from clab inspect.
+        Optionally cleans up the lab directory (~/.clab/<labname>) if 'cleanup=true' is passed and the API deployed it from content.
       parameters:
       - description: Name of the lab to destroy
         in: path
         name: labName
         required: true
+        type: string
+      - description: 'Remove lab directory (~/.clab/<labname>) after destroy (default:
+          false)'
+        in: query
+        name: cleanup
+        type: boolean
+      - description: 'Attempt graceful shutdown of containers (default: false)'
+        in: query
+        name: graceful
+        type: boolean
+      - description: 'Keep the management network (default: false)'
+        in: query
+        name: keepMgmtNet
+        type: boolean
+      - description: Destroy only specific nodes (comma-separated)
+        in: query
+        name: nodeFilter
         type: string
       produces:
       - application/json
@@ -179,7 +295,7 @@ paths:
           schema:
             $ref: '#/definitions/models.GenericSuccessResponse'
         "400":
-          description: Invalid lab name
+          description: Invalid lab name or node filter
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "401":
@@ -200,21 +316,26 @@ paths:
       tags:
       - Labs
     get:
-      description: Get details about a specific running lab (checks ownership via
-        'owner' field from clab inspect)
+      description: Get details about a specific running lab, checking ownership via
+        'owner' field. Supports '--details'.
       parameters:
       - description: Name of the lab to inspect
         in: path
         name: labName
         required: true
         type: string
+      - description: Include full container details (like docker inspect)
+        in: query
+        name: details
+        type: boolean
       produces:
       - application/json
       responses:
         "200":
-          description: Raw JSON output from 'clab inspect' for the specific lab
+          description: Raw JSON output if 'details=true' is used (structure matches
+            'docker inspect')" // <--- CHANGE THIS LINE
           schema:
-            $ref: '#/definitions/models.ClabInspectOutput'
+            type: object
         "400":
           description: Invalid lab name
           schema:
@@ -234,6 +355,96 @@ paths:
       security:
       - BearerAuth: []
       summary: Inspect Lab
+      tags:
+      - Labs
+    put:
+      consumes:
+      - application/json
+      description: |-
+        Redeploys a lab by name, effectively running destroy and then deploy. Checks ownership.
+        Uses the original topology file path found during inspection.
+      parameters:
+      - description: Name of the lab to redeploy
+        in: path
+        name: labName
+        required: true
+        type: string
+      - description: Redeployment options
+        in: body
+        name: redeploy_request
+        required: true
+        schema:
+          $ref: '#/definitions/models.RedeployRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Raw JSON output from 'clab redeploy' (or plain text on error)
+          schema:
+            type: object
+        "400":
+          description: Invalid lab name or options
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Lab not found or not owned by user
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error or clab execution failed
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Redeploy Lab
+      tags:
+      - Labs
+  /api/v1/labs/{labName}/interfaces:
+    get:
+      description: Get network interface details for nodes in a specific lab, checking
+        ownership.
+      parameters:
+      - description: Name of the lab
+        in: path
+        name: labName
+        required: true
+        type: string
+      - description: Filter interfaces for a specific node name
+        in: query
+        name: node
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: JSON output from 'clab inspect interfaces'
+          schema:
+            items:
+              $ref: '#/definitions/models.NodeInterfaceInfo'
+            type: array
+        "400":
+          description: Invalid lab name or node name
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Lab not found or not owned by user
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error or clab execution failed
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: List Lab Interfaces
       tags:
       - Labs
   /login:
@@ -273,11 +484,6 @@ paths:
 schemes:
 - http
 - https
-- //
-- Indicate
-- both
-- are
-- possible
 securityDefinitions:
   BearerAuth:
     description: 'Type "Bearer" followed by a space and JWT token. Example: "Bearer

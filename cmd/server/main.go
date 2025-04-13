@@ -29,8 +29,8 @@ import (
 // @license.name Apache 2.0
 // @license.url http://www.apache.org/licenses/LICENSE-2.0.html
 
-// @host localhost:8080 // Keep this generic, actual host/port depends on config
-// @schemes http https // Indicate both are possible
+// @host localhost:8080
+// @schemes http https
 
 // @securityDefinitions.apikey BearerAuth
 // @in header

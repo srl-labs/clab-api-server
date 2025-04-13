@@ -1,3 +1,4 @@
+// internal/api/routes.go
 package api
 
 import (
@@ -13,32 +14,40 @@ func SetupRoutes(router *gin.Engine) {
 	// --- Public Routes ---
 
 	// Login endpoint - intentionally *not* under /api/v1 group
-	// Accepts POST requests at /login
 	router.POST("/login", LoginHandler)
 
 	// Swagger documentation route
-	// Access it at /swagger/index.html
-	// This documentation describes the /api/v1 endpoints primarily.
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, ginSwagger.URL("/swagger/doc.json")))
 
-	// --- Authenticated Routes ---
-
-	// Group for authenticated API endpoints under /api/v1
+	// --- Authenticated Routes (/api/v1) ---
 	apiV1 := router.Group("/api/v1")
-	apiV1.Use(AuthMiddleware()) // Apply JWT authentication middleware to all routes in this group
+	apiV1.Use(AuthMiddleware()) // Apply JWT authentication middleware
 	{
-		// Lab management routes (e.g., /api/v1/labs)
+		// Lab management routes
 		labs := apiV1.Group("/labs")
 		{
-			// POST /api/v1/labs
-			labs.POST("", DeployLabHandler)
-			// GET /api/v1/labs
-			labs.GET("", ListLabsHandler) // List all labs for the authenticated user
-			// GET /api/v1/labs/{labName}
-			labs.GET("/:labName", InspectLabHandler)
-			// DELETE /api/v1/labs/{labName}
-			labs.DELETE("/:labName", DestroyLabHandler)
-			// TODO: Add more lab-specific endpoints if needed (e.g., graph, exec)
+			// Deploy new lab
+			labs.POST("", DeployLabHandler) // POST /api/v1/labs
+
+			// List labs for user
+			labs.GET("", ListLabsHandler) // GET /api/v1/labs
+
+			// Actions on a specific lab by name
+			labSpecific := labs.Group("/:labName")
+			{
+				// Inspect lab details
+				labSpecific.GET("", InspectLabHandler) // GET /api/v1/labs/{labName}
+
+				// Destroy lab
+				labSpecific.DELETE("", DestroyLabHandler) // DELETE /api/v1/labs/{labName}
+
+				// Redeploy lab
+				labSpecific.PUT("", RedeployLabHandler) // PUT /api/v1/labs/{labName}
+
+				// Inspect lab interfaces
+				labSpecific.GET("/interfaces", InspectInterfacesHandler) // GET /api/v1/labs/{labName}/interfaces
+			}
 		}
+		// TODO: Add other potential top-level authenticated routes if needed
 	}
 }
