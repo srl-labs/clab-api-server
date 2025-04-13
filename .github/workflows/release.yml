@@ -1,0 +1,67 @@
+name: Build and Release Binary
+
+# Trigger the workflow only when a new release is published
+on:
+  release:
+    types: [published]
+
+# Set permissions for the GITHUB_TOKEN to allow uploading release assets
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build and Upload Release Binaries
+    # Run on the latest Ubuntu runner
+    runs-on: ubuntu-latest
+
+    # Define a build matrix for different target architectures on Linux
+    strategy:
+      matrix:
+        goos: [linux]
+        goarch: [amd64, arm64] # Common Linux architectures
+
+    steps:
+      # 1. Checkout the code from the repository
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. Set up the Go environment
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Specify the Go version required by your project
+          # You can also use a .go-version file in your repo root
+          go-version: '1.24' # Adjust if needed
+
+      # 3. Build the Go binary for the target platform
+      - name: Build binary (${{ matrix.goos }}/${{ matrix.goarch }})
+        # Set environment variables for cross-compilation
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          # Define the output binary name, including version and platform
+          BINARY_NAME="clab-api-server-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          echo "Building $BINARY_NAME..."
+          # Build the binary, placing it in the current directory
+          # -v: verbose output
+          # -ldflags="-s -w": Optional: strip debug symbols and DWARF tables to reduce binary size
+          go build -v -ldflags="-s -w" -o $BINARY_NAME ./cmd/server
+          echo "Build complete: $BINARY_NAME"
+
+      # 4. Upload the built binary as a release asset
+      - name: Upload Release Asset (${{ matrix.goos }}/${{ matrix.goarch }})
+        uses: actions/upload-release-asset@v1
+        env:
+          # The GITHUB_TOKEN is automatically provided by GitHub Actions
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Get the upload URL from the release event context
+          upload_url: ${{ github.event.release.upload_url }}
+          # Path to the binary file created in the previous step
+          asset_path: ./clab-api-server-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          # Name of the asset as it will appear in the GitHub release
+          asset_name: clab-api-server-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          # Content type for the binary file
+          asset_content_type: application/octet-stream
