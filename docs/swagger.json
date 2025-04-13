@@ -63,7 +63,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Deploys a containerlab topology from either embedded content or a remote URL (Git/HTTP).\nIf deploying from content, saves the file to ~/.clab/\u003clabname\u003e/ and sets ownership (requires API server privileges).\nIf deploying from URL, containerlab handles fetching; the API does not save the file locally.",
+                "description": "Deploys a containerlab topology. Requires EITHER 'topologyContent' OR 'topologySourceUrl' in the request body, but not both.\nOptional deployment flags are provided as query parameters.",
                 "consumes": [
                     "application/json"
                 ],
@@ -76,13 +76,55 @@
                 "summary": "Deploy Lab",
                 "parameters": [
                     {
-                        "description": "Deployment details (topology content or URL, and options)",
+                        "description": "Deployment Source: Provide 'topologyContent' OR 'topologySourceUrl'.",
                         "name": "deploy_request",
                         "in": "body",
                         "required": true,
                         "schema": {
                             "$ref": "#/definitions/models.DeployRequest"
                         }
+                    },
+                    {
+                        "type": "string",
+                        "description": "Overrides the 'name' field within the topology or inferred from URL.",
+                        "name": "labNameOverride",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Destroy lab and clean directory before deploying (default: false).",
+                        "name": "reconfigure",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Limit concurrent workers (0 or omit for default).",
+                        "name": "maxWorkers",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Custom Go template file for topology data export ('__full' for full export).",
+                        "name": "exportTemplate",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Comma-separated list of node names to deploy.",
+                        "name": "nodeFilter",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Skip post-deploy actions defined for nodes (default: false).",
+                        "name": "skipPostDeploy",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Skip setting extended ACLs on lab directory (default: false).",
+                        "name": "skipLabdirAcl",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -93,7 +135,7 @@
                         }
                     },
                     "400": {
-                        "description": "Invalid input (e.g., missing content/URL, invalid flags, invalid name)",
+                        "description": "Invalid input (e.g., missing/both content/URL, invalid flags/params)",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -509,46 +551,14 @@
         "models.DeployRequest": {
             "type": "object",
             "properties": {
-                "exportTemplate": {
-                    "description": "Corresponds to --export-template flag (__full is special)",
-                    "type": "string",
-                    "example": "my_custom_export.tmpl"
-                },
-                "labNameOverride": {
-                    "description": "--- Optional Flags ---",
-                    "type": "string",
-                    "example": "my-specific-lab-run"
-                },
-                "maxWorkers": {
-                    "description": "Corresponds to --max-workers flag (0 means default)",
-                    "type": "integer"
-                },
-                "nodeFilter": {
-                    "description": "Corresponds to --node-filter flag (comma-separated)",
-                    "type": "string",
-                    "example": "srl1,srl2"
-                },
-                "reconfigure": {
-                    "description": "Corresponds to --reconfigure flag",
-                    "type": "boolean"
-                },
-                "skipLabdirAcl": {
-                    "description": "Corresponds to --skip-labdir-acl flag",
-                    "type": "boolean"
-                },
-                "skipPostDeploy": {
-                    "description": "Corresponds to --skip-post-deploy flag",
-                    "type": "boolean"
-                },
                 "topologyContent": {
-                    "description": "Option 1: Direct Topology Content (YAML string)",
+                    "description": "Option 1: Direct Topology Content.\nProvide the full containerlab topology YAML as a single string.\nIf this is provided, 'topologySourceUrl' MUST be empty.",
                     "type": "string",
-                    "example": "name: my-lab\ntopology:\n  nodes:\n    srl1:\n      kind: srl\n      image: ghcr.io/nokia/srlinux"
+                    "example": "# topology documentation: http://containerlab.dev/lab-examples/single-srl/\nname: srl01\ntopology:\n  kinds:\n    nokia_srlinux:\n      type: ixrd3\n      image: ghcr.io/nokia/srlinux\n\n  nodes:\n    srl1:\n      kind: nokia_srlinux\n    srl2:\n      kind: nokia_srlinux\n\n  links:\n    - endpoints: [\"srl1:e1-1\",\"srl2:e1-1\"]"
                 },
                 "topologySourceUrl": {
-                    "description": "Option 2: Remote Topology Source URL (Git repo, Git file, HTTP(S) URL)\nIf provided, TopologyContent is ignored.",
-                    "type": "string",
-                    "example": "https://github.com/hellt/clab-test-repo/blob/main/lab1.clab.yml"
+                    "description": "Option 2: Remote Topology Source URL.\nProvide a URL to a Git repository, a specific .clab.yml file in Git (github/gitlab), or a raw HTTP(S) URL.\nIf this is provided, 'topologyContent' MUST be empty.",
+                    "type": "string"
                 }
             }
         },
