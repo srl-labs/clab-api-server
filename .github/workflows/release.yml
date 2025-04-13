@@ -34,12 +34,23 @@ jobs:
           # You can also use a .go-version file in your repo root
           go-version: '1.24' # Adjust if needed
 
-      # 3. Build the Go binary for the target platform
+      # 3. Install build dependencies (PAM development libraries)
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential libpam-dev
+        # build-essential includes make, gcc, etc.
+        # libpam-dev provides the required C header files (like security/pam_appl.h)
+
+      # 4. Build the Go binary for the target platform
       - name: Build binary (${{ matrix.goos }}/${{ matrix.goarch }})
         # Set environment variables for cross-compilation
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          # CGO_ENABLED is typically 1 by default when cross-compiling isn't obvious,
+          # but explicitly setting it ensures CGo is used.
+          CGO_ENABLED: 1
         run: |
           # Define the output binary name, including version and platform
           BINARY_NAME="clab-api-server-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}"
@@ -50,7 +61,7 @@ jobs:
           go build -v -ldflags="-s -w" -o $BINARY_NAME ./cmd/server
           echo "Build complete: $BINARY_NAME"
 
-      # 4. Upload the built binary as a release asset
+      # 5. Upload the built binary as a release asset
       - name: Upload Release Asset (${{ matrix.goos }}/${{ matrix.goarch }})
         uses: actions/upload-release-asset@v1
         env:
