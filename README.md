@@ -151,7 +151,7 @@ Authorization: Bearer <your_jwt_token>
 
 - All commands run directly as the API server user (no sudo)
 - Lab ownership tracked via container labels, not actual file ownership
-- Lab ownernship needs to bet set for the authenticated users (not done yet)
+- Lab ownernship needs to bet set for the authenticated users (not done yet, needs change in clab)
 
 ## Authentication & Authorization
 

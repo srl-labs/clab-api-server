@@ -34,10 +34,12 @@ func RunClabCommand(ctx context.Context, username string, args ...string) (stdou
 		// Add --runtime flag if needed (and not the default)
 		configuredRuntime := config.AppConfig.ClabRuntime
 		if configuredRuntime != "" && configuredRuntime != "docker" {
-			log.Debugf("Using non-default container runtime: %s", configuredRuntime)
+			// Use log.Debug (key-value) instead of log.Debugf
+			log.Debug("Using non-default container runtime", "runtime", configuredRuntime)
 			finalArgs = append(finalArgs, "--runtime", configuredRuntime)
 		} else {
-			log.Debugf("Using default container runtime: docker")
+			// Use log.Debug (key-value) instead of log.Debugf
+			log.Debug("Using default container runtime", "runtime", "docker")
 		}
 
 		// Add the rest of the original arguments
@@ -59,7 +61,13 @@ func RunClabCommand(ctx context.Context, username string, args ...string) (stdou
 	cmd.Stderr = &errBuf
 
 	// Log which *authenticated* user triggered the command, even though it runs as the server user.
-	log.Debugf("Executing command", "triggered_by_user", username, "runtime", config.AppConfig.ClabRuntime, "command", commandString, "cwd", cmd.Dir)
+	// Use log.Debug (key-value) instead of log.Debugf
+	log.Debug("Executing command",
+		"triggered_by_user", username,
+		"runtime", config.AppConfig.ClabRuntime,
+		"command", commandString,
+		"cwd", cmd.Dir, // cmd.Dir might be empty if not set, which is fine
+	)
 
 	startTime := time.Now()
 	err = cmd.Run()
@@ -69,17 +77,34 @@ func RunClabCommand(ctx context.Context, username string, args ...string) (stdou
 	stderr = errBuf.String()
 
 	if ctx.Err() == context.DeadlineExceeded {
-		log.Errorf("Command timed out after %s", duration, "triggered_by_user", username, "command", commandString)
+		// Use log.Error (key-value) instead of log.Errorf
+		log.Error("Command timed out",
+			"duration", duration,
+			"triggered_by_user", username,
+			"command", commandString,
+		)
 		return stdout, stderr, fmt.Errorf("clab command timed out after %s (triggered by user: %s)", duration, username)
 	}
 
 	if err != nil {
 		// Include stderr in the error message for better debugging context
-		log.Errorf("Command failed", "triggered_by_user", username, "duration", duration, "error", err, "stderr", stderr)
+		// Use log.Error (key-value) instead of log.Errorf
+		log.Error("Command failed",
+			"triggered_by_user", username,
+			"duration", duration,
+			"error", err,
+			"stderr", stderr, // Include stderr directly in structured log
+		)
 		return stdout, stderr, fmt.Errorf("clab command failed (triggered by user: %s, duration: %s): %w\nstderr: %s", username, duration, err, stderr)
 	}
 
-	log.Debugf("Command successful", "triggered_by_user", username, "duration", duration, "stdout_len", len(stdout), "stderr_len", len(stderr))
+	// Use log.Debug (key-value) instead of log.Debugf
+	log.Debug("Command successful",
+		"triggered_by_user", username,
+		"duration", duration,
+		"stdout_len", len(stdout),
+		"stderr_len", len(stderr),
+	)
 	return stdout, stderr, nil
 }
 
@@ -92,10 +117,11 @@ func SanitizePath(relativePath string) (string, error) {
 	// Security Check: Prevent absolute paths or paths starting with '../' in the input
 	// Allow paths starting with './' or just filename.
 	if filepath.IsAbs(cleanedPath) || strings.HasPrefix(cleanedPath, ".."+string(filepath.Separator)) || cleanedPath == ".." {
-		log.Warnf("Path traversal attempt blocked", "requested_path", relativePath, "cleaned_path", cleanedPath)
+		log.Warnf("Path traversal attempt blocked", "requested_path", relativePath, "cleaned_path", cleanedPath) // Warnf is ok here
 		return "", fmt.Errorf("invalid path: '%s' must be relative and cannot start with '..'", relativePath)
 	}
 
-	log.Debugf("Sanitized path: '%s' -> '%s'", relativePath, cleanedPath)
+	// Use log.Debug (key-value) instead of log.Debugf
+	log.Debug("Sanitized path", "original", relativePath, "cleaned", cleanedPath)
 	return cleanedPath, nil
 }
