@@ -410,9 +410,9 @@ const docTemplate = `{
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
 	Version:          "1.0",
-	Host:             "localhost:8080",
+	Host:             "localhost:8080 // Keep this generic, actual host/port depends on config",
 	BasePath:         "",
-	Schemes:          []string{"http", "https"},
+	Schemes:          []string{"http", "https", "//", "Indicate", "both", "are", "possible"},
 	Title:            "Containerlab API",
 	Description:      "This is an API server to interact with Containerlab for authenticated Linux users. Runs clab commands as the API server's user. Requires PAM for authentication.",
 	InfoInstanceName: "swagger",

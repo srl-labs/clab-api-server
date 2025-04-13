@@ -13,8 +13,12 @@ type Config struct {
 	JWTExpirationMinutes time.Duration `mapstructure:"JWT_EXPIRATION_MINUTES"`
 	SuperuserGroup       string        `mapstructure:"SUPERUSER_GROUP"`
 	ClabRuntime          string        `mapstructure:"CLAB_RUNTIME"`
-	LogLevel             string        `mapstructure:"LOG_LEVEL"` // Added for log level configuration
-	// LogOutput         string        `mapstructure:"LOG_OUTPUT"` // Example: Could add later for file/stdout/stderr
+	LogLevel             string        `mapstructure:"LOG_LEVEL"`
+	// --- New TLS Fields ---
+	TLSEnable   bool   `mapstructure:"TLS_ENABLE"`
+	TLSCertFile string `mapstructure:"TLS_CERT_FILE"`
+	TLSKeyFile  string `mapstructure:"TLS_KEY_FILE"`
+	// ----------------------
 }
 
 var AppConfig Config
@@ -29,7 +33,12 @@ func LoadConfig() error {
 	viper.SetDefault("JWT_EXPIRATION_MINUTES", 60)
 	viper.SetDefault("SUPERUSER_GROUP", "")
 	viper.SetDefault("CLAB_RUNTIME", "docker")
-	viper.SetDefault("LOG_LEVEL", "info") // Default log level set to info
+	viper.SetDefault("LOG_LEVEL", "info")
+	// --- New TLS Defaults ---
+	viper.SetDefault("TLS_ENABLE", false) // Disabled by default
+	viper.SetDefault("TLS_CERT_FILE", "") // No default paths
+	viper.SetDefault("TLS_KEY_FILE", "")
+	// ------------------------
 
 	err := viper.ReadInConfig()
 	// Ignore if .env file not found, rely on defaults/env vars

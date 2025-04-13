@@ -1,6 +1,6 @@
 # Binaries
 /clab-api-server
-
+certs/
 # OS files
 .DS_Store
 Thumbs.db

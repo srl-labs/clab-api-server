@@ -82,7 +82,7 @@ definitions:
       token:
         type: string
     type: object
-host: localhost:8080
+host: localhost:8080 // Keep this generic, actual host/port depends on config
 info:
   contact:
     email: support@swagger.io
@@ -273,6 +273,11 @@ paths:
 schemes:
 - http
 - https
+- //
+- Indicate
+- both
+- are
+- possible
 securityDefinitions:
   BearerAuth:
     description: 'Type "Bearer" followed by a space and JWT token. Example: "Bearer

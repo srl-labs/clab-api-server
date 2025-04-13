@@ -1,7 +1,12 @@
 {
     "schemes": [
         "http",
-        "https"
+        "https",
+        "//",
+        "Indicate",
+        "both",
+        "are",
+        "possible"
     ],
     "swagger": "2.0",
     "info": {
@@ -19,7 +24,7 @@
         },
         "version": "1.0"
     },
-    "host": "localhost:8080",
+    "host": "localhost:8080 // Keep this generic, actual host/port depends on config",
     "paths": {
         "/api/v1/labs": {
             "get": {

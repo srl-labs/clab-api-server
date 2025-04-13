@@ -29,8 +29,8 @@ import (
 // @license.name Apache 2.0
 // @license.url http://www.apache.org/licenses/LICENSE-2.0.html
 
-// @host localhost:8080
-// @schemes http https
+// @host localhost:8080 // Keep this generic, actual host/port depends on config
+// @schemes http https // Indicate both are possible
 
 // @securityDefinitions.apikey BearerAuth
 // @in header
@@ -74,6 +74,11 @@ func main() {
 	log.Debugf("JWT Secret Loaded: %t", config.AppConfig.JWTSecret != "" && config.AppConfig.JWTSecret != "default_secret_change_me")
 	log.Debugf("JWT Expiration: %s", config.AppConfig.JWTExpirationMinutes)
 	log.Infof("Containerlab Runtime: %s", config.AppConfig.ClabRuntime)
+	log.Debugf("TLS Enabled: %t", config.AppConfig.TLSEnable)
+	if config.AppConfig.TLSEnable {
+		log.Debugf("TLS Cert File: %s", config.AppConfig.TLSCertFile)
+		log.Debugf("TLS Key File: %s", config.AppConfig.TLSKeyFile)
+	}
 	if config.AppConfig.JWTSecret == "default_secret_change_me" {
 		log.Warn("Using default JWT secret. Change JWT_SECRET environment variable for production!")
 	}
@@ -94,13 +99,20 @@ func main() {
 	// Setup API routes
 	api.SetupRoutes(router)
 
+	// Determine protocol and base URL for root handler message
+	protocol := "http"
+	if config.AppConfig.TLSEnable {
+		protocol = "https"
+	}
+	baseURL := fmt.Sprintf("%s://localhost:%s", protocol, config.AppConfig.APIPort)
+
 	// Root handler
 	router.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
-			"message":        "Containerlab API (Sudoless Mode) is running.",
-			"documentation":  "/swagger/index.html",
-			"login_endpoint": "POST /login",
-			"api_base_path":  "/api/v1",
+			"message":        fmt.Sprintf("Containerlab API (Sudoless Mode) is running (%s).", protocol),
+			"documentation":  fmt.Sprintf("%s/swagger/index.html", baseURL),
+			"login_endpoint": fmt.Sprintf("POST %s/login", baseURL),
+			"api_base_path":  fmt.Sprintf("%s/api/v1", baseURL),
 			"clab_runtime":   config.AppConfig.ClabRuntime,
 			"notes": []string{
 				"Runs clab commands as the API server's user.",
@@ -113,8 +125,29 @@ func main() {
 
 	// --- Start the server ---
 	listenAddr := fmt.Sprintf(":%s", config.AppConfig.APIPort)
-	log.Infof("Starting server on http://localhost%s", listenAddr)
-	if err := router.Run(listenAddr); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+
+	if config.AppConfig.TLSEnable {
+		// Start HTTPS server
+		log.Infof("Starting HTTPS server on %s", baseURL)
+		if config.AppConfig.TLSCertFile == "" || config.AppConfig.TLSKeyFile == "" {
+			log.Fatalf("TLS is enabled but TLS_CERT_FILE or TLS_KEY_FILE is not set in config.")
+		}
+		// Check if files exist (optional but good practice)
+		if _, err := os.Stat(config.AppConfig.TLSCertFile); os.IsNotExist(err) {
+			log.Fatalf("TLS cert file not found: %s", config.AppConfig.TLSCertFile)
+		}
+		if _, err := os.Stat(config.AppConfig.TLSKeyFile); os.IsNotExist(err) {
+			log.Fatalf("TLS key file not found: %s", config.AppConfig.TLSKeyFile)
+		}
+
+		if err := router.RunTLS(listenAddr, config.AppConfig.TLSCertFile, config.AppConfig.TLSKeyFile); err != nil {
+			log.Fatalf("Failed to start HTTPS server: %v", err)
+		}
+	} else {
+		// Start HTTP server
+		log.Infof("Starting HTTP server on %s", baseURL)
+		if err := router.Run(listenAddr); err != nil {
+			log.Fatalf("Failed to start HTTP server: %v", err)
+		}
 	}
 }
