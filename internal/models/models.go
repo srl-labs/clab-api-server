@@ -187,3 +187,11 @@ type GenerateResponse struct {
 	// Path where the file was saved (only if OutputFile was specified or Deploy=true).
 	SavedFilePath string `json:"savedFilePath,omitempty"`
 }
+
+// SaveConfigResponse represents the result of the save config command.
+type SaveConfigResponse struct {
+	// Message indicating overall success.
+	Message string `json:"message"`
+	// Detailed output from the 'clab save' command (often from stderr).
+	Output string `json:"output"`
+}
