@@ -35,6 +35,23 @@ definitions:
         description: e.g., "running"
         type: string
     type: object
+  models.ClabExecInternalResult:
+    properties:
+      cmd:
+        description: The command and its arguments as executed
+        items:
+          type: string
+        type: array
+      return-code:
+        description: Exit code of the command inside the container
+        type: integer
+      stderr:
+        description: Standard error of the command
+        type: string
+      stdout:
+        description: Standard output of the command
+        type: string
+    type: object
   models.ClabInspectOutput:
     properties:
       containers:
@@ -77,6 +94,130 @@ definitions:
   models.ErrorResponse:
     properties:
       error:
+        type: string
+    type: object
+  models.ExecRequest:
+    properties:
+      command:
+        example: ip addr show eth1
+        type: string
+    required:
+    - command
+    type: object
+  models.ExecResponse:
+    additionalProperties:
+      items:
+        $ref: '#/definitions/models.ClabExecInternalResult'
+      type: array
+    type: object
+  models.GenerateNodeTier:
+    properties:
+      count:
+        description: Number of nodes in this tier
+        example: 4
+        minimum: 1
+        type: integer
+      kind:
+        description: Node kind (defaults to 'srl'/'nokia_srlinux' if omitted)
+        example: ceos
+        type: string
+      type:
+        description: Node type within the kind
+        example: ixrd3
+        type: string
+    required:
+    - count
+    type: object
+  models.GenerateRequest:
+    properties:
+      defaultKind:
+        description: Default kind to use if not specified in a tier definition. Defaults
+          to 'srl'.
+        example: ceos
+        type: string
+      deploy:
+        description: If true, immediately deploy the generated topology using 'clab
+          deploy --reconfigure'.
+        type: boolean
+      groupPrefix:
+        description: Prefix for node groups (used in graphing). Defaults to "tier".
+        example: clos-tier
+        type: string
+      images:
+        additionalProperties:
+          type: string
+        description: 'Map of kind to container image. Example: { "srl": "ghcr.io/nokia/srlinux:latest",
+          "ceos": "ceos:4.32.0F" }'
+        type: object
+      ipv4Subnet:
+        description: Management network IPv4 subnet (CIDR). Defaults based on clab
+          default.
+        example: 172.20.20.0/24
+        type: string
+      ipv6Subnet:
+        description: Management network IPv6 subnet (CIDR). Defaults based on clab
+          default.
+        example: 2001:172:20:20::/64
+        type: string
+      licenses:
+        additionalProperties:
+          type: string
+        description: 'Map of kind to license file path (accessible to the clab command).
+          Example: { "srl": "/opt/licenses/srl.lic" }'
+        type: object
+      managementNetwork:
+        description: Name of the management network. Defaults to "clab".
+        example: clos-mgmt
+        type: string
+      maxWorkers:
+        description: Limit concurrent workers during deployment (only applies if Deploy=true).
+          0 means default.
+        type: integer
+      name:
+        description: Name for the generated lab topology.
+        example: 3-tier-clos
+        type: string
+      nodePrefix:
+        description: Prefix for node names (e.g., "node" -> "node-1-1", "node-2-1").
+          Defaults to "node".
+        example: clos-node
+        type: string
+      outputFile:
+        description: |-
+          Optional: Path where the generated file should be saved *on the server*.
+          If empty and Deploy is false, YAML is returned directly.
+          If empty and Deploy is true, a temporary file is used.
+          If set, the file is saved here. USE WITH CAUTION regarding server paths.
+        type: string
+      tiers:
+        description: |-
+          Definition of the CLOS tiers. Order matters (leaf -> spine -> superspine).
+          Example: [ { "count": 8, "kind": "srl", "type": "ixrd3" }, { "count": 4, "kind": "ceos" }, { "count": 2 } ]
+        items:
+          $ref: '#/definitions/models.GenerateNodeTier'
+        minItems: 1
+        type: array
+    required:
+    - name
+    - tiers
+    type: object
+  models.GenerateResponse:
+    properties:
+      deployOutput:
+        description: |-
+          The output from the deploy command (only if Deploy=true). Can be JSON or plain text.
+          Use swaggertype:"object" to represent json.RawMessage in Swagger.
+        type: object
+      message:
+        description: Message indicating success or failure.
+        type: string
+      savedFilePath:
+        description: Path where the file was saved (only if OutputFile was specified
+          or Deploy=true).
+        type: string
+      topologyYaml:
+        description: The generated topology YAML (only if Deploy=false and OutputFile
+          is empty).
         type: string
     type: object
   models.GenericSuccessResponse:
@@ -184,6 +325,43 @@ info:
   title: Containerlab API
   version: "1.0"
 paths:
+  /api/v1/generate:
+    post:
+      consumes:
+      - application/json
+      description: Generates a containerlab topology file based on CLOS definitions.
+        Optionally deploys it.
+      parameters:
+      - description: Topology generation parameters
+        in: body
+        name: generate_request
+        required: true
+        schema:
+          $ref: '#/definitions/models.GenerateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Generation successful (YAML or deploy output)
+          schema:
+            $ref: '#/definitions/models.GenerateResponse'
+        "400":
+          description: Invalid input parameters
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error or clab execution failed
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Generate Topology
+      tags:
+      - Topology Generation
   /api/v1/labs:
     get:
       description: Get details about all running labs, filtered by the 'owner' field
@@ -420,6 +598,61 @@ paths:
       summary: Redeploy Lab
       tags:
       - Labs
+  /api/v1/labs/{labName}/exec:
+    post:
+      consumes:
+      - application/json
+      description: Executes a command on nodes within a specific lab. Checks ownership.
+        Supports filtering by a single node name.
+      parameters:
+      - description: Name of the lab where the command should be executed
+        in: path
+        name: labName
+        required: true
+        type: string
+      - description: Execute only on this specific node (must match container name,
+          e.g., clab-my-test-lab-srl1)
+        in: query
+        name: nodeFilter
+        type: string
+      - description: Output format ('plain' or 'json'). Default is 'json'.
+        in: query
+        name: format
+        type: string
+      - description: Command to execute
+        in: body
+        name: exec_request
+        required: true
+        schema:
+          $ref: '#/definitions/models.ExecRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Plain text output (if format=plain or default)
+          schema:
+            type: string
+        "400":
+          description: Invalid input (lab name, node filter, format, request body)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Lab not found or not owned by user
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error or clab execution failed
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Execute Command in Lab
+      tags:
+      - Labs
   /api/v1/labs/{labName}/interfaces:
     get:
       description: Get network interface details for nodes in a specific lab, checking
@@ -462,6 +695,48 @@ paths:
       security:
       - BearerAuth: []
       summary: List Lab Interfaces
+      tags:
+      - Labs
+  /api/v1/labs/{labName}/save:
+    post:
+      description: Saves the running configuration for nodes in a specific lab. Checks
+        ownership.
+      parameters:
+      - description: Name of the lab to save configuration for
+        in: path
+        name: labName
+        required: true
+        type: string
+      - description: Save config only for specific nodes (comma-separated)
+        in: query
+        name: nodeFilter
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Configuration save command executed
+          schema:
+            $ref: '#/definitions/models.GenericSuccessResponse'
+        "400":
+          description: Invalid lab name or node filter
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Lab not found or not owned by user
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error or clab execution failed
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Save Lab Configuration
       tags:
       - Labs
   /login:

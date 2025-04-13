@@ -21,6 +21,63 @@
     },
     "host": "localhost:8080",
     "paths": {
+        "/api/v1/generate": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Generates a containerlab topology file based on CLOS definitions. Optionally deploys it.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Topology Generation"
+                ],
+                "summary": "Generate Topology",
+                "parameters": [
+                    {
+                        "description": "Topology generation parameters",
+                        "name": "generate_request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.GenerateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Generation successful (YAML or deploy output)",
+                        "schema": {
+                            "$ref": "#/definitions/models.GenerateResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid input parameters",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error or clab execution failed",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/labs": {
             "get": {
                 "security": [
@@ -367,6 +424,88 @@
                 }
             }
         },
+        "/api/v1/labs/{labName}/exec": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Executes a command on nodes within a specific lab. Checks ownership. Supports filtering by a single node name.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Labs"
+                ],
+                "summary": "Execute Command in Lab",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Name of the lab where the command should be executed",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Execute only on this specific node (must match container name, e.g., clab-my-test-lab-srl1)",
+                        "name": "nodeFilter",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Output format ('plain' or 'json'). Default is 'json'.",
+                        "name": "format",
+                        "in": "query"
+                    },
+                    {
+                        "description": "Command to execute",
+                        "name": "exec_request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.ExecRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Plain text output (if format=plain or default)",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid input (lab name, node filter, format, request body)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Lab not found or not owned by user",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error or clab execution failed",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/labs/{labName}/interfaces": {
             "get": {
                 "security": [
@@ -409,6 +548,70 @@
                     },
                     "400": {
                         "description": "Invalid lab name or node name",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Lab not found or not owned by user",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error or clab execution failed",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/labs/{labName}/save": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Saves the running configuration for nodes in a specific lab. Checks ownership.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Labs"
+                ],
+                "summary": "Save Lab Configuration",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Name of the lab to save configuration for",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Save config only for specific nodes (comma-separated)",
+                        "name": "nodeFilter",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Configuration save command executed",
+                        "schema": {
+                            "$ref": "#/definitions/models.GenericSuccessResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid lab name or node filter",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -537,6 +740,30 @@
                 }
             }
         },
+        "models.ClabExecInternalResult": {
+            "type": "object",
+            "properties": {
+                "cmd": {
+                    "description": "The command and its arguments as executed",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "return-code": {
+                    "description": "Exit code of the command inside the container",
+                    "type": "integer"
+                },
+                "stderr": {
+                    "description": "Standard error of the command",
+                    "type": "string"
+                },
+                "stdout": {
+                    "description": "Standard output of the command",
+                    "type": "string"
+                }
+            }
+        },
         "models.ClabInspectOutput": {
             "type": "object",
             "properties": {
@@ -566,6 +793,150 @@
             "type": "object",
             "properties": {
                 "error": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.ExecRequest": {
+            "type": "object",
+            "required": [
+                "command"
+            ],
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "example": "ip addr show eth1"
+                }
+            }
+        },
+        "models.ExecResponse": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "array",
+                "items": {
+                    "$ref": "#/definitions/models.ClabExecInternalResult"
+                }
+            }
+        },
+        "models.GenerateNodeTier": {
+            "type": "object",
+            "required": [
+                "count"
+            ],
+            "properties": {
+                "count": {
+                    "description": "Number of nodes in this tier",
+                    "type": "integer",
+                    "minimum": 1,
+                    "example": 4
+                },
+                "kind": {
+                    "description": "Node kind (defaults to 'srl'/'nokia_srlinux' if omitted)",
+                    "type": "string",
+                    "example": "ceos"
+                },
+                "type": {
+                    "description": "Node type within the kind",
+                    "type": "string",
+                    "example": "ixrd3"
+                }
+            }
+        },
+        "models.GenerateRequest": {
+            "type": "object",
+            "required": [
+                "name",
+                "tiers"
+            ],
+            "properties": {
+                "defaultKind": {
+                    "description": "Default kind to use if not specified in a tier definition. Defaults to 'srl'.",
+                    "type": "string",
+                    "example": "ceos"
+                },
+                "deploy": {
+                    "description": "If true, immediately deploy the generated topology using 'clab deploy --reconfigure'.",
+                    "type": "boolean"
+                },
+                "groupPrefix": {
+                    "description": "Prefix for node groups (used in graphing). Defaults to \"tier\".",
+                    "type": "string",
+                    "example": "clos-tier"
+                },
+                "images": {
+                    "description": "Map of kind to container image. Example: { \"srl\": \"ghcr.io/nokia/srlinux:latest\", \"ceos\": \"ceos:4.32.0F\" }",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "ipv4Subnet": {
+                    "description": "Management network IPv4 subnet (CIDR). Defaults based on clab default.",
+                    "type": "string",
+                    "example": "172.20.20.0/24"
+                },
+                "ipv6Subnet": {
+                    "description": "Management network IPv6 subnet (CIDR). Defaults based on clab default.",
+                    "type": "string",
+                    "example": "2001:172:20:20::/64"
+                },
+                "licenses": {
+                    "description": "Map of kind to license file path (accessible to the clab command). Example: { \"srl\": \"/opt/licenses/srl.lic\" }",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "managementNetwork": {
+                    "description": "Name of the management network. Defaults to \"clab\".",
+                    "type": "string",
+                    "example": "clos-mgmt"
+                },
+                "maxWorkers": {
+                    "description": "Limit concurrent workers during deployment (only applies if Deploy=true). 0 means default.",
+                    "type": "integer"
+                },
+                "name": {
+                    "description": "Name for the generated lab topology.",
+                    "type": "string",
+                    "example": "3-tier-clos"
+                },
+                "nodePrefix": {
+                    "description": "Prefix for node names (e.g., \"node\" -\u003e \"node-1-1\", \"node-2-1\"). Defaults to \"node\".",
+                    "type": "string",
+                    "example": "clos-node"
+                },
+                "outputFile": {
+                    "description": "Optional: Path where the generated file should be saved *on the server*.\nIf empty and Deploy is false, YAML is returned directly.\nIf empty and Deploy is true, a temporary file is used.\nIf set, the file is saved here. USE WITH CAUTION regarding server paths.",
+                    "type": "string"
+                },
+                "tiers": {
+                    "description": "Definition of the CLOS tiers. Order matters (leaf -\u003e spine -\u003e superspine).\nExample: [ { \"count\": 8, \"kind\": \"srl\", \"type\": \"ixrd3\" }, { \"count\": 4, \"kind\": \"ceos\" }, { \"count\": 2 } ]",
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "$ref": "#/definitions/models.GenerateNodeTier"
+                    }
+                }
+            }
+        },
+        "models.GenerateResponse": {
+            "type": "object",
+            "properties": {
+                "deployOutput": {
+                    "description": "The output from the deploy command (only if Deploy=true). Can be JSON or plain text.\nUse swaggertype:\"object\" to represent json.RawMessage in Swagger.",
+                    "type": "object"
+                },
+                "message": {
+                    "description": "Message indicating success or failure.",
+                    "type": "string"
+                },
+                "savedFilePath": {
+                    "description": "Path where the file was saved (only if OutputFile was specified or Deploy=true).",
+                    "type": "string"
+                },
+                "topologyYaml": {
+                    "description": "The generated topology YAML (only if Deploy=false and OutputFile is empty).",
                     "type": "string"
                 }
             }

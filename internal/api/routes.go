@@ -46,8 +46,19 @@ func SetupRoutes(router *gin.Engine) {
 
 				// Inspect lab interfaces
 				labSpecific.GET("/interfaces", InspectInterfacesHandler) // GET /api/v1/labs/{labName}/interfaces
+
+				// --- NEW: Save Lab Config ---
+				labSpecific.POST("/save", SaveLabConfigHandler) // POST /api/v1/labs/{labName}/save
+
+				// --- NEW: Execute Command in Lab ---
+				labSpecific.POST("/exec", ExecCommandHandler) // POST /api/v1/labs/{labName}/exec
 			}
 		}
+
+		// Topology Generation Route ---
+		// Placed outside /labs group as it doesn't operate on an existing lab initially
+		apiV1.POST("/generate", GenerateTopologyHandler) // POST /api/v1/generate
+
 		// TODO: Add other potential top-level authenticated routes if needed
 	}
 }

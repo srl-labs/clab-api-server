@@ -876,6 +876,445 @@ func ListLabsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, finalResult)
 }
 
+// @Summary Save Lab Configuration
+// @Description Saves the running configuration for nodes in a specific lab. Checks ownership.
+// @Tags Labs
+// @Security BearerAuth
+// @Produce json
+// @Param labName path string true "Name of the lab to save configuration for" example="my-test-lab"
+// @Param nodeFilter query string false "Save config only for specific nodes (comma-separated)" example="srl1,srl2"
+// @Success 200 {object} models.GenericSuccessResponse "Configuration save command executed"
+// @Failure 400 {object} models.ErrorResponse "Invalid lab name or node filter"
+// @Failure 401 {object} models.ErrorResponse "Unauthorized"
+// @Failure 404 {object} models.ErrorResponse "Lab not found or not owned by user"
+// @Failure 500 {object} models.ErrorResponse "Internal server error or clab execution failed"
+// @Router /api/v1/labs/{labName}/save [post]
+func SaveLabConfigHandler(c *gin.Context) {
+	username := c.GetString("username")
+	labName := c.Param("labName")
+	nodeFilter := c.Query("nodeFilter")
+
+	// --- Validate Inputs ---
+	if !isValidLabName(labName) {
+		log.Warnf("SaveLabConfig failed for user '%s': Invalid lab name '%s'", username, labName)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in lab name."})
+		return
+	}
+	if !isValidNodeFilter(nodeFilter) { // Reuse existing validation
+		log.Warnf("SaveLabConfig failed for user '%s', lab '%s': Invalid nodeFilter '%s'", username, labName, nodeFilter)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in nodeFilter."})
+		return
+	}
+	log.Debugf("SaveLabConfig user '%s': Attempting to save config for lab '%s' (filter: '%s')", username, labName, nodeFilter)
+
+	// --- Verify Ownership ---
+	_, ownerCheckErr := verifyLabOwnership(c, username, labName)
+	if ownerCheckErr != nil {
+		// verifyLabOwnership already sent the response
+		return
+	}
+	// Ownership confirmed
+
+	// --- Execute clab save ---
+	args := []string{"save", "--name", labName}
+	if nodeFilter != "" {
+		args = append(args, "--node-filter", nodeFilter)
+	}
+
+	log.Infof("SaveLabConfig user '%s': Executing clab save for lab '%s'...", username, labName)
+	stdout, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...)
+
+	// Handle command execution results
+	if stderr != "" {
+		log.Warnf("SaveLabConfig user '%s', lab '%s': clab save stderr: %s", username, labName, stderr)
+	}
+	if err != nil {
+		log.Errorf("SaveLabConfig failed for user '%s', lab '%s': clab save command execution error: %v", username, labName, err)
+		errMsg := fmt.Sprintf("Failed to save config for lab '%s': %s", labName, err.Error())
+		// Append stderr only if it seems relevant (contains error indicators)
+		if stderr != "" && (strings.Contains(stderr, "level=error") || strings.Contains(stderr, "failed") || strings.Contains(stderr, "panic")) {
+			errMsg += "\nstderr: " + stderr
+		}
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: errMsg})
+		return
+	}
+
+	log.Infof("SaveLabConfig user '%s': clab save for lab '%s' executed successfully.", username, labName)
+
+	// Even on success, clab save might print info to stdout/stderr. We just return a generic success.
+	// We could potentially include stdout in the response if needed.
+	c.JSON(http.StatusOK, models.GenericSuccessResponse{
+		Message: fmt.Sprintf("Configuration save command executed for lab '%s'. Check server logs for details. Stdout: %s", labName, stdout),
+	})
+}
+
+// @Summary Execute Command in Lab
+// @Description Executes a command on nodes within a specific lab. Checks ownership. Supports filtering by a single node name.
+// @Tags Labs
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param labName path string true "Name of the lab where the command should be executed" example="my-test-lab"
+// @Param nodeFilter query string false "Execute only on this specific node (must match container name, e.g., clab-my-test-lab-srl1)" example="clab-my-test-lab-srl1"
+// @Param format query string false "Output format ('plain' or 'json'). Default is 'json'." example="json"
+// @Param exec_request body models.ExecRequest true "Command to execute"
+// @Success 200 {object} models.ExecResponse "Structured output (if format=json)"
+// @Success 200 {string} string "Plain text output (if format=plain or default)"
+// @Failure 400 {object} models.ErrorResponse "Invalid input (lab name, node filter, format, request body)"
+// @Failure 401 {object} models.ErrorResponse "Unauthorized"
+// @Failure 404 {object} models.ErrorResponse "Lab not found or not owned by user"
+// @Failure 500 {object} models.ErrorResponse "Internal server error or clab execution failed"
+// @Router /api/v1/labs/{labName}/exec [post]
+func ExecCommandHandler(c *gin.Context) {
+	username := c.GetString("username")
+	labName := c.Param("labName")
+	nodeFilter := c.Query("nodeFilter") // Expecting a single container name here
+	outputFormat := c.DefaultQuery("format", "json")
+
+	// --- Validate Inputs (keep existing validation) ---
+	if !isValidLabName(labName) {
+		log.Warnf("ExecCommand failed for user '%s': Invalid lab name '%s'", username, labName)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in lab name."})
+		return
+	}
+	if nodeFilter != "" && !regexp.MustCompile(`^[a-zA-Z0-9_-]+$`).MatchString(nodeFilter) {
+		log.Warnf("ExecCommand failed for user '%s', lab '%s': Invalid characters in nodeFilter query param '%s'", username, labName, nodeFilter)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in nodeFilter query parameter (expecting single container name)."})
+		return
+	}
+	if outputFormat != "plain" && outputFormat != "json" {
+		log.Warnf("ExecCommand failed for user '%s', lab '%s': Invalid format query param '%s'", username, labName, outputFormat)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid format query parameter. Use 'plain' or 'json'."})
+		return
+	}
+
+	var req models.ExecRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Warnf("ExecCommand failed for user '%s', lab '%s': Invalid request body: %v", username, labName, err)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid request body: " + err.Error()})
+		return
+	}
+	if strings.TrimSpace(req.Command) == "" {
+		log.Warnf("ExecCommand failed for user '%s', lab '%s': Command cannot be empty", username, labName)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Command cannot be empty."})
+		return
+	}
+
+	log.Debugf("ExecCommand user '%s': Attempting to execute on lab '%s' (node filter: '%s', format: '%s')", username, labName, nodeFilter, outputFormat)
+
+	// --- Verify Ownership (keep existing) ---
+	originalTopoPath, ownerCheckErr := verifyLabOwnership(c, username, labName)
+	if ownerCheckErr != nil {
+		return // verifyLabOwnership sent response
+	}
+
+	// --- Execute clab exec (keep existing argument logic) ---
+	args := []string{"exec"}
+	if nodeFilter != "" {
+		args = append(args, "--label", fmt.Sprintf("clab-node-longname=%s", nodeFilter))
+	} else {
+		if originalTopoPath == "" {
+			log.Errorf("ExecCommand failed for user '%s', lab '%s': Cannot execute on all nodes as original topology path is unknown.", username, labName)
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Cannot determine topology path to target all nodes for exec."})
+			return
+		}
+		args = append(args, "--topo", originalTopoPath)
+	}
+
+	args = append(args, "--cmd", req.Command)
+	if outputFormat == "json" {
+		args = append(args, "--format", "json")
+	}
+
+	log.Infof("ExecCommand user '%s': Executing clab exec for lab '%s'...", username, labName)
+	stdout, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...)
+
+	// --- Handle command execution results ---
+	if err != nil {
+		log.Warnf("ExecCommand user '%s', lab '%s': clab exec command returned error: %v. Stderr: %s, Stdout: %s", username, labName, err, stderr, stdout)
+		// Don't return 500 immediately for plain format if it might be the command failing
+	} else if stderr != "" && outputFormat == "plain" { // Log stderr if plain format, even on success, as it contains the output
+		log.Infof("ExecCommand user '%s', lab '%s': clab exec stderr (contains plain output): %s", username, labName, stderr)
+	} else if stderr != "" && outputFormat == "json" { // Log stderr for JSON format only if it's unexpected
+		log.Warnf("ExecCommand user '%s', lab '%s': clab exec stderr (json format, exit code 0): %s", username, labName, stderr)
+	}
+
+	// --- Process output based on format ---
+	if outputFormat == "json" {
+		// Declare result using the CORRECTED ExecResponse type
+		var result models.ExecResponse
+		if jsonErr := json.Unmarshal([]byte(stdout), &result); jsonErr != nil {
+			// Parsing failed
+			log.Errorf("ExecCommand user '%s', lab '%s': Failed to parse clab exec JSON output: %v. Stdout: %s, Stderr: %s", username, labName, jsonErr, stdout, stderr)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":  "Failed to parse clab exec JSON output.",
+				"stdout": stdout, // Include raw output for debugging
+				"stderr": stderr,
+			})
+			return
+		}
+		// Parsing succeeded
+		log.Infof("ExecCommand user '%s': clab exec for lab '%s' (json format) successful.", username, labName)
+		c.JSON(http.StatusOK, result)
+
+	} else { // plain format
+		// If clab reported an error, return 500 with stderr (which might contain clab errors) and stdout
+		if err != nil {
+			// Return both stdout and stderr for context if the command likely failed
+			// Prioritize stderr as it might contain the actual clab error message
+			responseText := fmt.Sprintf("Stderr:\n%s\nStdout:\n%s\nError: %s", stderr, stdout, err.Error())
+			c.String(http.StatusInternalServerError, responseText) // Use 500 as clab itself reported an error
+		} else {
+			// Success (exit code 0 from clab). Return stderr as it contains the aggregated output.
+			log.Infof("ExecCommand user '%s': clab exec for lab '%s' (plain format) successful, returning stderr content.", username, labName)
+			c.String(http.StatusOK, stderr) // <--- RETURN STDERR HERE for plain format success
+		}
+	}
+}
+
+// @Summary Generate Topology
+// @Description Generates a containerlab topology file based on CLOS definitions. Optionally deploys it.
+// @Tags Topology Generation
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param generate_request body models.GenerateRequest true "Topology generation parameters"
+// @Success 200 {object} models.GenerateResponse "Generation successful (YAML or deploy output)"
+// @Failure 400 {object} models.ErrorResponse "Invalid input parameters"
+// @Failure 401 {object} models.ErrorResponse "Unauthorized"
+// @Failure 500 {object} models.ErrorResponse "Internal server error or clab execution failed"
+// @Router /api/v1/generate [post]
+func GenerateTopologyHandler(c *gin.Context) {
+	username := c.GetString("username") // Needed for potential deploy logging/context
+
+	var req models.GenerateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Warnf("GenerateTopology failed for user '%s': Invalid request body: %v", username, err)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid request body: " + err.Error()})
+		return
+	}
+
+	// --- Basic Input Validation ---
+	if len(req.Tiers) == 0 {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "At least one tier must be defined in 'tiers'."})
+		return
+	}
+	// Add more validation for tier contents, image/license formats if needed
+
+	log.Debugf("GenerateTopology user '%s': Generating topology '%s' (deploy=%t)", username, req.Name, req.Deploy)
+
+	// --- Construct clab generate arguments ---
+	args := []string{"generate", "--name", req.Name}
+
+	// Build --nodes flag string(s)
+	// clab generate allows multiple --nodes flags or comma-separated within one.
+	// Let's use multiple flags for clarity.
+	for i, tier := range req.Tiers {
+		if tier.Count <= 0 {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: fmt.Sprintf("Tier %d has invalid count: %d", i+1, tier.Count)})
+			return
+		}
+		nodeStr := strconv.Itoa(tier.Count)
+		if tier.Kind != "" {
+			nodeStr += ":" + tier.Kind
+			if tier.Type != "" {
+				nodeStr += ":" + tier.Type
+			}
+		} else if tier.Type != "" {
+			// If kind is empty but type is not, clab might need kind explicitly. Assume default.
+			defaultKind := req.DefaultKind
+			if defaultKind == "" {
+				defaultKind = "srl" // clab's default
+			}
+			nodeStr += ":" + defaultKind + ":" + tier.Type
+		}
+		args = append(args, "--nodes", nodeStr)
+	}
+
+	if req.DefaultKind != "" {
+		args = append(args, "--kind", req.DefaultKind)
+	}
+	if len(req.Images) > 0 {
+		var imgArgs []string
+		for kind, img := range req.Images {
+			imgArgs = append(imgArgs, fmt.Sprintf("%s=%s", kind, img))
+		}
+		args = append(args, "--image", strings.Join(imgArgs, ","))
+	}
+	if len(req.Licenses) > 0 {
+		var licArgs []string
+		for kind, lic := range req.Licenses {
+			// Security: Ensure license path is somewhat sane? Difficult without knowing server layout.
+			// Rely on clab's own handling for now.
+			licArgs = append(licArgs, fmt.Sprintf("%s=%s", kind, lic))
+		}
+		args = append(args, "--license", strings.Join(licArgs, ","))
+	}
+	if req.NodePrefix != "" {
+		args = append(args, "--node-prefix", req.NodePrefix)
+	}
+	if req.GroupPrefix != "" {
+		args = append(args, "--group-prefix", req.GroupPrefix)
+	}
+	if req.ManagementNetwork != "" {
+		args = append(args, "--network", req.ManagementNetwork)
+	}
+	if req.IPv4Subnet != "" {
+		args = append(args, "--ipv4-subnet", req.IPv4Subnet)
+	}
+	if req.IPv6Subnet != "" {
+		args = append(args, "--ipv6-subnet", req.IPv6Subnet)
+	}
+	// MaxWorkers is handled during deploy step if needed
+	// Deploy and OutputFile flags are handled specially below
+
+	// --- Determine Output/Action ---
+	var generatedFilePath string
+	var err error
+	cleanupTempFile := false
+
+	if req.Deploy {
+		// Need to save to a file first. Use temp file if OutputFile not specified.
+		if req.OutputFile != "" {
+			// User specified output file. Be careful with this on a server.
+			// Sanitize the path? For now, assume it's trusted or handled by deployment env.
+			generatedFilePath, err = clab.SanitizePath(req.OutputFile) // Basic sanitization
+			if err != nil {
+				log.Warnf("GenerateTopology failed for user '%s': Invalid OutputFile path '%s': %v", username, req.OutputFile, err)
+				c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid OutputFile path: " + err.Error()})
+				return
+			}
+			// Ensure directory exists? Might be complex depending on permissions. Let clab handle it?
+			// Let's assume the directory must exist.
+			dir := filepath.Dir(generatedFilePath)
+			if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
+				log.Warnf("GenerateTopology failed for user '%s': OutputFile directory does not exist: %s", username, dir)
+				c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: fmt.Sprintf("OutputFile directory does not exist: %s", dir)})
+				return
+			}
+
+		} else {
+			// Create temp file
+			tmpFile, err := os.CreateTemp("", fmt.Sprintf("clab-gen-%s-*.yml", req.Name))
+			if err != nil {
+				log.Errorf("GenerateTopology failed for user '%s': Cannot create temp file: %v", username, err)
+				c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to create temporary file for deployment."})
+				return
+			}
+			generatedFilePath = tmpFile.Name()
+			tmpFile.Close() // Close immediately, clab will write to it
+			cleanupTempFile = true
+			log.Debugf("GenerateTopology user '%s': Using temp file for deployment: %s", username, generatedFilePath)
+		}
+		args = append(args, "--file", generatedFilePath)
+
+	} else {
+		// Not deploying. Check if saving to file or returning YAML.
+		if req.OutputFile != "" {
+			generatedFilePath, err = clab.SanitizePath(req.OutputFile)
+			if err != nil {
+				log.Warnf("GenerateTopology failed for user '%s': Invalid OutputFile path '%s': %v", username, req.OutputFile, err)
+				c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid OutputFile path: " + err.Error()})
+				return
+			}
+			dir := filepath.Dir(generatedFilePath)
+			if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
+				log.Warnf("GenerateTopology failed for user '%s': OutputFile directory does not exist: %s", username, dir)
+				c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: fmt.Sprintf("OutputFile directory does not exist: %s", dir)})
+				return
+			}
+			args = append(args, "--file", generatedFilePath)
+		} else {
+			// Return YAML directly via stdout
+			args = append(args, "--file", "-")
+		}
+	}
+
+	// --- Execute clab generate ---
+	log.Infof("GenerateTopology user '%s': Executing clab generate...", username)
+	// Use a background context potentially, generation might take time? Or stick to request context.
+	genStdout, genStderr, genErr := clab.RunClabCommand(c.Request.Context(), username, args...)
+
+	if genStderr != "" {
+		log.Warnf("GenerateTopology user '%s': clab generate stderr: %s", username, genStderr)
+	}
+	if genErr != nil {
+		if cleanupTempFile {
+			os.Remove(generatedFilePath) // Clean up temp file on error
+		}
+		log.Errorf("GenerateTopology failed for user '%s': clab generate command error: %v", username, genErr)
+		errMsg := fmt.Sprintf("Failed to generate topology '%s': %s", req.Name, genErr.Error())
+		if genStderr != "" && (strings.Contains(genStderr, "level=error") || strings.Contains(genStderr, "failed")) {
+			errMsg += "\nstderr: " + genStderr
+		}
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: errMsg})
+		return
+	}
+
+	log.Infof("GenerateTopology user '%s': clab generate successful.", username)
+
+	// --- Handle Response based on Action ---
+	response := models.GenerateResponse{
+		Message:       fmt.Sprintf("Topology '%s' generated successfully.", req.Name),
+		SavedFilePath: generatedFilePath, // Will be empty if outputting to stdout
+	}
+
+	if req.Deploy {
+		// --- Execute clab deploy ---
+		if cleanupTempFile {
+			defer os.Remove(generatedFilePath) // Ensure temp file cleanup even if deploy fails
+		}
+
+		deployArgs := []string{"deploy", "-t", generatedFilePath, "--reconfigure"}
+		if req.MaxWorkers > 0 {
+			deployArgs = append(deployArgs, "--max-workers", strconv.Itoa(req.MaxWorkers))
+		}
+		deployArgs = append(deployArgs, "--format", "json") // Request JSON output from deploy
+
+		log.Infof("GenerateTopology user '%s': Deploying generated topology '%s' from '%s'...", username, req.Name, generatedFilePath)
+		deployStdout, deployStderr, deployErr := clab.RunClabCommand(c.Request.Context(), username, deployArgs...)
+
+		if deployStderr != "" {
+			log.Warnf("GenerateTopology (deploy step) user '%s': clab deploy stderr: %s", username, deployStderr)
+		}
+		if deployErr != nil {
+			// Deploy failed, but generation succeeded. Return partial success? Or overall failure?
+			// Let's return failure but include the path to the generated file.
+			log.Errorf("GenerateTopology (deploy step) failed for user '%s': clab deploy command error: %v", username, deployErr)
+			errMsg := fmt.Sprintf("Topology '%s' generated to '%s', but deployment failed: %s", req.Name, generatedFilePath, deployErr.Error())
+			if deployStderr != "" && (strings.Contains(deployStderr, "level=error") || strings.Contains(deployStderr, "failed")) {
+				errMsg += "\nstderr: " + deployStderr
+			}
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: errMsg})
+			return
+		}
+
+		log.Infof("GenerateTopology user '%s': Deployment of generated topology '%s' successful.", username, req.Name)
+		response.Message = fmt.Sprintf("Topology '%s' generated and deployed successfully.", req.Name)
+
+		// Attempt to capture deploy output (try JSON first)
+		var deployResult json.RawMessage
+		if err := json.Unmarshal([]byte(deployStdout), &deployResult); err == nil {
+			response.DeployOutput = deployResult
+		} else {
+			// If not JSON, store as plain text within the RawMessage (needs quoting)
+			response.DeployOutput = json.RawMessage(fmt.Sprintf(`"%s"`, strings.ReplaceAll(deployStdout, `"`, `\"`))) // Basic escaping
+			log.Warnf("GenerateTopology user '%s': Deploy output was not valid JSON, returning as string.", username)
+		}
+		c.JSON(http.StatusOK, response)
+
+	} else {
+		// Not deploying
+		if req.OutputFile == "" {
+			// Returned YAML via stdout
+			response.TopologyYAML = genStdout
+			response.SavedFilePath = "" // No file saved
+		}
+		// If OutputFile was set, SavedFilePath is already populated.
+		c.JSON(http.StatusOK, response)
+	}
+}
+
 // --- Helper Functions ---
 
 // verifyLabOwnership checks if a lab exists and is owned by the user.
