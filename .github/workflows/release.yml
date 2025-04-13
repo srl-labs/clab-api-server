@@ -11,10 +11,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       
+      - name: Get release tag
+        id: get_tag
+        run: echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      
       - name: Setup Go
         uses: WillAbides/setup-go-faster@v1.14.0
         with:
-          go-version: '1.24'  # Adjust to your project's Go version
+          go-version: '1.21'  # Adjust to your project's Go version
       
       - name: Install dependencies
         run: |
@@ -36,20 +40,11 @@ jobs:
           go build -o clab-api-server cmd/server/main.go
           # Make binary executable
           chmod +x clab-api-server
-      
-      - name: Upload binary to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Release Asset
+        uses: svenstaro/upload-release-action@v2
         with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./clab-api-server
-          asset_name: clab-api-server
-          asset_content_type: application/octet-stream
-      
-      - name: Upload binary as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: clab-api-server
-          path: clab-api-server
-          compression-level: 0
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ./clab-api-server
+          asset_name: clab-api-server-${{ steps.get_tag.outputs.TAG }}
+          tag: ${{ github.ref }}
