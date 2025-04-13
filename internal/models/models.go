@@ -125,7 +125,7 @@ type ExecResponse map[string][]ClabExecInternalResult // <--- Changed value to [
 // GenerateNodeTier defines a tier in the CLOS topology for generation.
 type GenerateNodeTier struct {
 	Count int    `json:"count" binding:"required,min=1" example:"4"` // Number of nodes in this tier
-	Kind  string `json:"kind,omitempty" example:"ceos"`              // Node kind (defaults to 'srl'/'nokia_srlinux' if omitted)
+	Kind  string `json:"kind,omitempty" example:"nokia_srlinux"`     // Node kind (defaults to 'srl'/'nokia_srlinux' if omitted)
 	Type  string `json:"type,omitempty" example:"ixrd3"`             // Node type within the kind
 }
 
@@ -135,11 +135,11 @@ type GenerateRequest struct {
 	Name string `json:"name" binding:"required" example:"3-tier-clos"`
 
 	// Definition of the CLOS tiers. Order matters (leaf -> spine -> superspine).
-	// Example: [ { "count": 8, "kind": "srl", "type": "ixrd3" }, { "count": 4, "kind": "ceos" }, { "count": 2 } ]
+	// Example: [ { "count": 8, "kind": "srl", "type": "ixrd3" }, { "count": 4, "kind": "nokia_srlinux" }, { "count": 2 } ]
 	Tiers []GenerateNodeTier `json:"tiers" binding:"required,min=1"`
 
 	// Default kind to use if not specified in a tier definition. Defaults to 'srl'.
-	DefaultKind string `json:"defaultKind,omitempty" example:"ceos"`
+	DefaultKind string `json:"defaultKind,omitempty" example:"nokia_srlinux"`
 
 	// Map of kind to container image. Example: { "srl": "ghcr.io/nokia/srlinux:latest", "ceos": "ceos:4.32.0F" }
 	Images map[string]string `json:"images,omitempty"`
