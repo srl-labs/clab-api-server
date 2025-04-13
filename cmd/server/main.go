@@ -88,9 +88,6 @@ func main() {
 		log.Fatalf("'clab' command not found in PATH. Please install Containerlab (containerlab.dev).")
 	}
 	log.Info("'clab' command found in PATH.")
-	log.Warn("Ensure the user running *this API server* has permissions to interact with the configured container runtime daemon (e.g., Docker daemon via 'docker' group).")
-	log.Warnf("Ensure the configured container runtime '%s' is installed and accessible.", config.AppConfig.ClabRuntime)
-	log.Warn("Authentication uses PAM. Ensure the API server environment has necessary PAM libraries (e.g., libpam-dev) and configuration.")
 
 	// --- Initialize Gin router ---
 	// gin.SetMode(gin.ReleaseMode) // Uncomment for production
