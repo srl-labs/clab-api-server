@@ -495,10 +495,6 @@ func SetNetemHandler(c *gin.Context) {
 	}
 	if req.Jitter != "" && req.Delay == "" { /* ... */
 	}
-	if !isValidPercentage(req.Loss) { /* ... */
-	}
-	if !isValidPercentage(req.Corruption) { /* ... */
-	}
 
 	// --- Verify Container Ownership ---
 	// Use the container name from the parameter directly for ownership check

@@ -309,3 +309,15 @@ type NetemInterfaceInfo struct {
 // NetemShowResponse matches the JSON output of `clab tools netem show --format json`
 // It's a map where the key is the node name (container name) and the value is a list of interface details.
 type NetemShowResponse map[string][]NetemInterfaceInfo
+
+// VersionResponse holds the output of the 'clab version' command.
+type VersionResponse struct {
+	// Raw output string from 'clab version'.
+	VersionInfo string `json:"versionInfo" example:"version: 0.50.0\ncommit: 1234abcd\ndate: 2024-01-15T10:00:00Z\ngithub: https://github.com/srl-labs/containerlab\nrelease notes: https://containerlab.dev/rn/0.50/"`
+}
+
+// VersionCheckResponse holds the output of the 'clab version check' command.
+type VersionCheckResponse struct {
+	// Raw output string from 'clab version check'.
+	CheckResult string `json:"checkResult" example:"🎉 A newer containerlab version (0.62.2) is available!\nRelease notes: https://containerlab.dev/rn/0.62/#0622\nRun 'sudo clab version upgrade' or see https://containerlab.dev/install/ for installation options."`
+}

@@ -474,6 +474,27 @@ definitions:
         description: Detailed output from the 'clab save' command (often from stderr).
         type: string
     type: object
+  models.VersionCheckResponse:
+    properties:
+      checkResult:
+        description: Raw output string from 'clab version check'.
+        example: "\U0001F389 A newer containerlab version (0.62.2) is available!\nRelease
+          notes: https://containerlab.dev/rn/0.62/#0622\nRun 'sudo clab version upgrade'
+          or see https://containerlab.dev/install/ for installation options."
+        type: string
+    type: object
+  models.VersionResponse:
+    properties:
+      versionInfo:
+        description: Raw output string from 'clab version'.
+        example: |-
+          version: 0.50.0
+          commit: 1234abcd
+          date: 2024-01-15T10:00:00Z
+          github: https://github.com/srl-labs/containerlab
+          release notes: https://containerlab.dev/rn/0.50/
+        type: string
+    type: object
   models.VethCreateRequest:
     properties:
       aEndpoint:
@@ -1360,6 +1381,54 @@ paths:
       summary: Create VxLAN Tunnel
       tags:
       - Tools - VxLAN
+  /api/v1/version:
+    get:
+      description: Retrieves the installed containerlab version information by running
+        'clab version'.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Containerlab version details
+          schema:
+            $ref: '#/definitions/models.VersionResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error or clab execution failed
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get Containerlab Version
+      tags:
+      - Version
+  /api/v1/version/check:
+    get:
+      description: Checks if a newer version of containerlab is available by running
+        'clab version check'.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Result of the version check
+          schema:
+            $ref: '#/definitions/models.VersionCheckResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error or clab execution failed
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Check for Containerlab Updates
+      tags:
+      - Version
   /login:
     post:
       consumes:

@@ -53,7 +53,7 @@ func SetupRoutes(router *gin.Engine) {
 				// Execute Command in Lab
 				labSpecific.POST("/exec", ExecCommandHandler) // POST /api/v1/labs/{labName}/exec
 
-				// --- NEW: Netem Routes (nested under node) ---
+				// Netem Routes (nested under node)
 				nodeSpecific := labSpecific.Group("/nodes/:nodeName")
 				{
 					// Show netem for all interfaces on node
@@ -65,7 +65,6 @@ func SetupRoutes(router *gin.Engine) {
 						interfaceSpecific.PUT("/netem", SetNetemHandler) // PUT /api/v1/labs/{labName}/nodes/{nodeName}/interfaces/{interfaceName}/netem
 						// Reset netem for specific interface
 						interfaceSpecific.DELETE("/netem", ResetNetemHandler) // DELETE /api/v1/labs/{labName}/nodes/{nodeName}/interfaces/{interfaceName}/netem
-						// GET specific interface netem could be added here if needed, but covered by node-level GET
 					}
 				}
 			}
@@ -74,7 +73,7 @@ func SetupRoutes(router *gin.Engine) {
 		// Topology Generation Route ---
 		apiV1.POST("/generate", GenerateTopologyHandler) // POST /api/v1/generate
 
-		// --- NEW: Tools Routes (Top Level, mostly Superuser) ---
+		// Tools Routes (Top Level, mostly Superuser)
 		tools := apiV1.Group("/tools")
 		{
 			// Disable TX Offload (Superuser Only)
@@ -86,12 +85,19 @@ func SetupRoutes(router *gin.Engine) {
 				certs.POST("/ca", CreateCAHandler)   // POST /api/v1/tools/certs/ca
 				certs.POST("/sign", SignCertHandler) // POST /api/v1/tools/certs/sign
 			}
-			// --- NEW: vEth Tools (Superuser Only) ---
+			// vEth Tools (Superuser Only)
 			tools.POST("/veth", CreateVethHandler) // POST /api/v1/tools/veth
 
-			// --- NEW: VxLAN Tools (Superuser Only) ---
+			// VxLAN Tools (Superuser Only)
 			tools.POST("/vxlan", CreateVxlanHandler)   // POST /api/v1/tools/vxlan
 			tools.DELETE("/vxlan", DeleteVxlanHandler) // DELETE
+		}
+
+		// --- NEW: Version Info Routes ---
+		version := apiV1.Group("/version")
+		{
+			version.GET("", GetVersionHandler)         // GET /api/v1/version
+			version.GET("/check", CheckVersionHandler) // GET /api/v1/version/check
 		}
 	}
 }

@@ -1239,6 +1239,80 @@
                 }
             }
         },
+        "/api/v1/version": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Retrieves the installed containerlab version information by running 'clab version'.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Version"
+                ],
+                "summary": "Get Containerlab Version",
+                "responses": {
+                    "200": {
+                        "description": "Containerlab version details",
+                        "schema": {
+                            "$ref": "#/definitions/models.VersionResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error or clab execution failed",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/version/check": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Checks if a newer version of containerlab is available by running 'clab version check'.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Version"
+                ],
+                "summary": "Check for Containerlab Updates",
+                "responses": {
+                    "200": {
+                        "description": "Result of the version check",
+                        "schema": {
+                            "$ref": "#/definitions/models.VersionCheckResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error or clab execution failed",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/login": {
             "post": {
                 "description": "Authenticate user and return JWT token",
@@ -1879,6 +1953,26 @@
                 "output": {
                     "description": "Detailed output from the 'clab save' command (often from stderr).",
                     "type": "string"
+                }
+            }
+        },
+        "models.VersionCheckResponse": {
+            "type": "object",
+            "properties": {
+                "checkResult": {
+                    "description": "Raw output string from 'clab version check'.",
+                    "type": "string",
+                    "example": "🎉 A newer containerlab version (0.62.2) is available!\nRelease notes: https://containerlab.dev/rn/0.62/#0622\nRun 'sudo clab version upgrade' or see https://containerlab.dev/install/ for installation options."
+                }
+            }
+        },
+        "models.VersionResponse": {
+            "type": "object",
+            "properties": {
+                "versionInfo": {
+                    "description": "Raw output string from 'clab version'.",
+                    "type": "string",
+                    "example": "version: 0.50.0\ncommit: 1234abcd\ndate: 2024-01-15T10:00:00Z\ngithub: https://github.com/srl-labs/containerlab\nrelease notes: https://containerlab.dev/rn/0.50/"
                 }
             }
         },
