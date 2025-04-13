@@ -61,7 +61,6 @@ func RunClabCommand(ctx context.Context, username string, args ...string) (stdou
 	cmd.Stderr = &errBuf
 
 	// Log which *authenticated* user triggered the command, even though it runs as the server user.
-	// Use log.Debug (key-value) instead of log.Debugf
 	log.Debug("Executing command",
 		"triggered_by_user", username,
 		"runtime", config.AppConfig.ClabRuntime,
@@ -77,7 +76,6 @@ func RunClabCommand(ctx context.Context, username string, args ...string) (stdou
 	stderr = errBuf.String()
 
 	if ctx.Err() == context.DeadlineExceeded {
-		// Use log.Error (key-value) instead of log.Errorf
 		log.Error("Command timed out",
 			"duration", duration,
 			"triggered_by_user", username,
@@ -88,7 +86,6 @@ func RunClabCommand(ctx context.Context, username string, args ...string) (stdou
 
 	if err != nil {
 		// Include stderr in the error message for better debugging context
-		// Use log.Error (key-value) instead of log.Errorf
 		log.Error("Command failed",
 			"triggered_by_user", username,
 			"duration", duration,
@@ -117,7 +114,7 @@ func SanitizePath(relativePath string) (string, error) {
 	// Security Check: Prevent absolute paths or paths starting with '../' in the input
 	// Allow paths starting with './' or just filename.
 	if filepath.IsAbs(cleanedPath) || strings.HasPrefix(cleanedPath, ".."+string(filepath.Separator)) || cleanedPath == ".." {
-		log.Warnf("Path traversal attempt blocked", "requested_path", relativePath, "cleaned_path", cleanedPath) // Warnf is ok here
+		log.Warn("Path traversal attempt blocked", "requested_path", relativePath, "cleaned_path", cleanedPath)
 		return "", fmt.Errorf("invalid path: '%s' must be relative and cannot start with '..'", relativePath)
 	}
 
