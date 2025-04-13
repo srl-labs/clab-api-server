@@ -1,64 +1,55 @@
-name: Build and Release Binary
+name: Build and Release
 
 on:
   release:
-    types: [published]
-
-permissions:
-  contents: write
+    types: [created]
 
 jobs:
-  build-release:
-    name: Build and Upload Release Binaries
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        goos: [linux]
-        goarch: [amd64, arm64]
-
+  build:
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      
+      - name: Setup Go
+        uses: WillAbides/setup-go-faster@v1.14.0
         with:
-          go-version: '1.24' 
-
-      - name: Install build dependencies (amd64)
-        if: ${{ matrix.goarch == 'amd64' }}
+          go-version: '1.24'  # Adjust to your project's Go version
+      
+      - name: Install dependencies
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y build-essential libpam0g-dev
-
-      - name: Install build dependencies (arm64 cross)
-        if: ${{ matrix.goarch == 'arm64' }}
+          sudo apt-get update
+          sudo apt-get install -y build-essential libpam-dev
+      
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+      
+      - name: Build binary
         run: |
-          # Add support for ARM64 packages
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update -y
-          # Install standard build tools, ARM64 cross-compiler, C libraries and PAM dev headers for ARM64
-          sudo apt-get install -y build-essential gcc-aarch64-linux-gnu libc6-dev-arm64-cross libpam0g-dev:arm64
-
-      - name: Build binary (${{ matrix.goos }}/${{ matrix.goarch }})
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 1
-          # Use the ARM64 cross-compiler when building for arm64; default for amd64
-          CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || '' }}
-        run: |
-          BINARY_NAME="clab-api-server-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}"
-          echo "Building $BINARY_NAME..."
-          go build -v -ldflags="-s -w" -o $BINARY_NAME ./cmd/server
-          echo "Build complete: $BINARY_NAME"
-
-      - name: Upload Release Asset (${{ matrix.goos }}/${{ matrix.goarch }})
+          go build -o clab-api-server cmd/server/main.go
+          # Make binary executable
+          chmod +x clab-api-server
+      
+      - name: Upload binary to release
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./clab-api-server-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}
-          asset_name: clab-api-server-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          asset_path: ./clab-api-server
+          asset_name: clab-api-server
           asset_content_type: application/octet-stream
+      
+      - name: Upload binary as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: clab-api-server
+          path: clab-api-server
+          compression-level: 0
