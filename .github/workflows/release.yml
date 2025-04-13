@@ -4,6 +4,10 @@ on:
   release:
     types: [created]
 
+# Add permissions block to allow writing to releases
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -40,11 +44,15 @@ jobs:
           go build -o clab-api-server cmd/server/main.go
           # Make binary executable
           chmod +x clab-api-server
-
+      
       - name: Upload Release Asset
-        uses: svenstaro/upload-release-action@v2
+        uses: softprops/action-gh-release@v1
         with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: ./clab-api-server
-          asset_name: clab-api-server-${{ steps.get_tag.outputs.TAG }}
-          tag: ${{ github.ref }}
+          files: ./clab-api-server
+      
+      - name: Upload binary as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: clab-api-server
+          path: clab-api-server
+          compression-level: 0
