@@ -3,7 +3,6 @@ package api
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -406,10 +405,9 @@ func DeployLabArchiveHandler(c *gin.Context) {
 	filename := fileHeader.Filename
 	log.Infof("DeployLab (Archive) user '%s': Received archive '%s', size %d. Extracting to '%s'", username, filename, fileHeader.Size, targetDir)
 
-	extractionErr := errors.New("unsupported archive format") // Default error
+	var extractionErr error
 
 	if strings.HasSuffix(strings.ToLower(filename), ".zip") {
-		// Pass archiveFile directly (it implements io.ReaderAt)
 		extractionErr = extractZip(archiveFile, fileHeader.Size, targetDir, uid, gid)
 	} else if strings.HasSuffix(strings.ToLower(filename), ".tar.gz") || strings.HasSuffix(strings.ToLower(filename), ".tgz") {
 		extractionErr = extractTarGz(archiveFile, targetDir, uid, gid)
@@ -419,6 +417,12 @@ func DeployLabArchiveHandler(c *gin.Context) {
 		return
 	}
 
+	if extractionErr != nil {
+		log.Errorf("DeployLab (Archive) failed for user '%s': Error extracting archive '%s': %v", username, filename, extractionErr)
+		_ = os.RemoveAll(targetDir)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to extract archive: %s", extractionErr.Error())})
+		return
+	}
 	// --- Handle Extraction Errors ---
 	if extractionErr != nil {
 		log.Errorf("DeployLab (Archive) failed for user '%s': Error extracting archive '%s': %v", username, filename, extractionErr)
