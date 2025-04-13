@@ -14,24 +14,27 @@ type LoginResponse struct {
 	Token string `json:"token"`
 }
 
-// DeployRequest represents the payload for deploying a lab
-// Allows either direct topology content or a source URL (Git/HTTP).
+// DeployRequest represents the payload for deploying a lab.
+// Provide EITHER 'topologyContent' OR 'topologySourceUrl', but not both.
 type DeployRequest struct {
-	// Option 1: Direct Topology Content (YAML string)
-	TopologyContent string `json:"topologyContent,omitempty" example:"name: my-lab\ntopology:\n  nodes:\n    srl1:\n      kind: srl\n      image: ghcr.io/nokia/srlinux"`
+	// Option 1: Direct Topology Content.
+	// Provide the full containerlab topology YAML as a single string.
+	// If this is provided, 'topologySourceUrl' MUST be empty.
+	TopologyContent string `json:"topologyContent,omitempty" example:"# topology documentation: http://containerlab.dev/lab-examples/single-srl/\nname: srl01\ntopology:\n  kinds:\n    nokia_srlinux:\n      type: ixrd3\n      image: ghcr.io/nokia/srlinux\n\n  nodes:\n    srl1:\n      kind: nokia_srlinux\n    srl2:\n      kind: nokia_srlinux\n\n  links:\n    - endpoints: [\"srl1:e1-1\",\"srl2:e1-1\"]"`
 
-	// Option 2: Remote Topology Source URL (Git repo, Git file, HTTP(S) URL)
-	// If provided, TopologyContent is ignored.
-	TopologySourceUrl string `json:"topologySourceUrl,omitempty" example:"https://github.com/hellt/clab-test-repo/blob/main/lab1.clab.yml"`
+	// Option 2: Remote Topology Source URL.
+	// Provide a URL to a Git repository, a specific .clab.yml file in Git (github/gitlab), or a raw HTTP(S) URL.
+	// If this is provided, 'topologyContent' MUST be empty.
+	TopologySourceUrl string `json:"topologySourceUrl,omitempty"`
 
-	// --- Optional Flags ---
-	LabNameOverride string `json:"labNameOverride,omitempty" example:"my-specific-lab-run"`  // Overrides 'name' in topology or URL inference
-	Reconfigure     bool   `json:"reconfigure,omitempty"`                                    // Corresponds to --reconfigure flag
-	MaxWorkers      int    `json:"maxWorkers,omitempty"`                                     // Corresponds to --max-workers flag (0 means default)
-	ExportTemplate  string `json:"exportTemplate,omitempty" example:"my_custom_export.tmpl"` // Corresponds to --export-template flag (__full is special)
-	NodeFilter      string `json:"nodeFilter,omitempty" example:"srl1,srl2"`                 // Corresponds to --node-filter flag (comma-separated)
-	SkipPostDeploy  bool   `json:"skipPostDeploy,omitempty"`                                 // Corresponds to --skip-post-deploy flag
-	SkipLabdirAcl   bool   `json:"skipLabdirAcl,omitempty"`                                  // Corresponds to --skip-labdir-acl flag
+	// --- Optional Flags are now Query Parameters ---
+	// LabNameOverride string `json:"labNameOverride,omitempty"`
+	// Reconfigure     bool   `json:"reconfigure,omitempty"`
+	// MaxWorkers      int    `json:"maxWorkers,omitempty"`
+	// ExportTemplate  string `json:"exportTemplate,omitempty"`
+	// NodeFilter      string `json:"nodeFilter,omitempty"`
+	// SkipPostDeploy  bool   `json:"skipPostDeploy,omitempty"`
+	// SkipLabdirAcl   bool   `json:"skipLabdirAcl,omitempty"`
 }
 
 // RedeployRequest represents the payload for redeploying a lab

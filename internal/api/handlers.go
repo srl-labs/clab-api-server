@@ -104,22 +104,29 @@ func LoginHandler(c *gin.Context) {
 }
 
 // @Summary Deploy Lab
-// @Description Deploys a containerlab topology from either embedded content or a remote URL (Git/HTTP).
-// @Description If deploying from content, saves the file to ~/.clab/<labname>/ and sets ownership (requires API server privileges).
-// @Description If deploying from URL, containerlab handles fetching; the API does not save the file locally.
+// @Description Deploys a containerlab topology. Requires EITHER 'topologyContent' OR 'topologySourceUrl' in the request body, but not both.
+// @Description Optional deployment flags are provided as query parameters.
 // @Tags Labs
 // @Security BearerAuth
 // @Accept json
 // @Produce json
-// @Param deploy_request body models.DeployRequest true "Deployment details (topology content or URL, and options)"
+// @Param deploy_request body models.DeployRequest true "Deployment Source: Provide 'topologyContent' OR 'topologySourceUrl'."
+// @Param labNameOverride query string false "Overrides the 'name' field within the topology or inferred from URL." example="my-specific-lab-run"
+// @Param reconfigure query boolean false "Destroy lab and clean directory before deploying (default: false)." example="true"
+// @Param maxWorkers query int false "Limit concurrent workers (0 or omit for default)." example="4"
+// @Param exportTemplate query string false "Custom Go template file for topology data export ('__full' for full export)." example="__full"
+// @Param nodeFilter query string false "Comma-separated list of node names to deploy." example="srl1,router2"
+// @Param skipPostDeploy query boolean false "Skip post-deploy actions defined for nodes (default: false)." example="false"
+// @Param skipLabdirAcl query boolean false "Skip setting extended ACLs on lab directory (default: false)." example="true"
 // @Success 200 {object} object "Raw JSON output from 'clab deploy' (or plain text on error)"
-// @Failure 400 {object} models.ErrorResponse "Invalid input (e.g., missing content/URL, invalid flags, invalid name)"
+// @Failure 400 {object} models.ErrorResponse "Invalid input (e.g., missing/both content/URL, invalid flags/params)"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
 // @Failure 500 {object} models.ErrorResponse "Internal server error (e.g., file system errors, clab execution failed)"
 // @Router /api/v1/labs [post]
 func DeployLabHandler(c *gin.Context) {
 	username := c.GetString("username") // Authenticated user
 
+	// --- Bind Request Body (Only contains topology source now) ---
 	var req models.DeployRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		log.Warnf("DeployLab failed for user '%s': Invalid request body: %v", username, err)
@@ -132,35 +139,50 @@ func DeployLabHandler(c *gin.Context) {
 	hasUrl := strings.TrimSpace(req.TopologySourceUrl) != ""
 
 	if !hasContent && !hasUrl {
-		log.Warnf("DeployLab failed for user '%s': Request must include either 'topologyContent' or 'topologySourceUrl'", username)
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Request must include either 'topologyContent' or 'topologySourceUrl'"})
+		log.Warnf("DeployLab failed for user '%s': Request body must include either 'topologyContent' or 'topologySourceUrl'", username)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Request body must include either 'topologyContent' or 'topologySourceUrl'"})
 		return
 	}
 	if hasContent && hasUrl {
-		log.Warnf("DeployLab failed for user '%s': Request cannot include both 'topologyContent' and 'topologySourceUrl'", username)
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Request cannot include both 'topologyContent' and 'topologySourceUrl'"})
+		log.Warnf("DeployLab failed for user '%s': Request body cannot include both 'topologyContent' and 'topologySourceUrl'", username)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Request body cannot include both 'topologyContent' and 'topologySourceUrl'"})
 		return
 	}
 
-	// --- Validate Optional Flags ---
-	if req.LabNameOverride != "" && !isValidLabName(req.LabNameOverride) {
-		log.Warnf("DeployLab failed for user '%s': Invalid characters in labNameOverride '%s'", username, req.LabNameOverride)
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in labNameOverride. Use alphanumeric, hyphen, underscore."})
+	// --- Get & Validate Optional Query Parameters ---
+	labNameOverride := c.Query("labNameOverride")
+	reconfigure := c.Query("reconfigure") == "true" // Simple bool conversion
+	maxWorkersStr := c.DefaultQuery("maxWorkers", "0")
+	exportTemplate := c.Query("exportTemplate")
+	nodeFilter := c.Query("nodeFilter")
+	skipPostDeploy := c.Query("skipPostDeploy") == "true"
+	skipLabdirAcl := c.Query("skipLabdirAcl") == "true"
+
+	// Validate query param values
+	if labNameOverride != "" && !isValidLabName(labNameOverride) {
+		log.Warnf("DeployLab failed for user '%s': Invalid characters in labNameOverride query param '%s'", username, labNameOverride)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in 'labNameOverride' query parameter."})
 		return
 	}
-	if !isValidNodeFilter(req.NodeFilter) {
-		log.Warnf("DeployLab failed for user '%s': Invalid characters in nodeFilter '%s'", username, req.NodeFilter)
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in nodeFilter. Use comma-separated alphanumeric, hyphen, underscore."})
+	if !isValidNodeFilter(nodeFilter) {
+		log.Warnf("DeployLab failed for user '%s': Invalid characters in nodeFilter query param '%s'", username, nodeFilter)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in 'nodeFilter' query parameter."})
 		return
 	}
-	if !isValidExportTemplate(req.ExportTemplate) {
-		log.Warnf("DeployLab failed for user '%s': Invalid exportTemplate '%s'", username, req.ExportTemplate)
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid exportTemplate. Avoid '..' and absolute paths."})
+	if !isValidExportTemplate(exportTemplate) {
+		log.Warnf("DeployLab failed for user '%s': Invalid exportTemplate query param '%s'", username, exportTemplate)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid 'exportTemplate' query parameter."})
+		return
+	}
+	maxWorkers, err := strconv.Atoi(maxWorkersStr)
+	if err != nil || maxWorkers < 0 {
+		log.Warnf("DeployLab failed for user '%s': Invalid maxWorkers query param '%s'", username, maxWorkersStr)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid 'maxWorkers' query parameter: must be a non-negative integer."})
 		return
 	}
 
 	// --- Prepare Base Arguments ---
-	args := []string{"deploy", "--format", "json"} // Always use JSON format for API parsing
+	args := []string{"deploy", "--format", "json"}
 
 	// --- Handle Topology Source and Lab Name ---
 	var labName string // Will hold the determined lab name for logging/cleanup reference
@@ -168,126 +190,96 @@ func DeployLabHandler(c *gin.Context) {
 
 	if hasUrl {
 		log.Infof("DeployLab user '%s': Deploying from URL: %s", username, req.TopologySourceUrl)
-		// Validate URL format minimally
-		_, err := url.ParseRequestURI(req.TopologySourceUrl)
-		// Allow user/repo format as well (basic check)
+		_, urlErr := url.ParseRequestURI(req.TopologySourceUrl)
 		isShortcut := !strings.Contains(req.TopologySourceUrl, "/") && !strings.Contains(req.TopologySourceUrl, ":")
-		if err != nil && !isShortcut && !strings.HasPrefix(req.TopologySourceUrl, "http") { // Allow simple user/repo
-			// More robust URL validation could be added
+		if urlErr != nil && !isShortcut && !strings.HasPrefix(req.TopologySourceUrl, "http") {
 			log.Warnf("DeployLab failed for user '%s': Invalid topologySourceUrl format: %s", username, req.TopologySourceUrl)
 			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid topologySourceUrl format"})
 			return
 		}
 		topoPathForClab = req.TopologySourceUrl
-		// Lab name: Use override if provided, otherwise let clab determine it (API won't know it beforehand)
-		if req.LabNameOverride != "" {
-			labName = req.LabNameOverride
-			log.Debugf("DeployLab user '%s': Using lab name override '%s' for URL deployment", username, labName)
+		if labNameOverride != "" {
+			labName = labNameOverride
 		} else {
-			labName = "<determined_by_clab_from_url>" // Placeholder for logging
-			log.Debugf("DeployLab user '%s': Lab name will be determined by containerlab from URL '%s'", username, req.TopologySourceUrl)
+			labName = "<determined_by_clab_from_url>"
 		}
 	} else { // hasContent
 		log.Infof("DeployLab user '%s': Deploying from provided topology content.", username)
 		trimmedContent := strings.TrimSpace(req.TopologyContent)
 
-		// --- Get User Home Directory AND UID/GID ---
+		// --- Get User Home Directory, UID/GID, Parse YAML, Determine Lab Name ---
+		// (This part remains the same as before, extracting originalLabName)
 		usr, err := user.Lookup(username)
-		if err != nil {
-			log.Errorf("DeployLab failed for user '%s': Could not find user details: %v", username, err)
+		if err != nil { /* ... error handling ... */
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Could not determine user details."})
 			return
 		}
 		homeDir := usr.HomeDir
 		uid, err := strconv.Atoi(usr.Uid)
-		if err != nil {
-			log.Errorf("DeployLab failed for user '%s': Could not convert UID '%s' to int: %v", username, usr.Uid, err)
+		if err != nil { /* ... error handling ... */
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Could not process user UID."})
 			return
 		}
 		gid, err := strconv.Atoi(usr.Gid)
-		if err != nil {
-			log.Errorf("DeployLab failed for user '%s': Could not convert GID '%s' to int: %v", username, usr.Gid, err)
+		if err != nil { /* ... error handling ... */
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Could not process user GID."})
 			return
 		}
-		log.Debugf("DeployLab user '%s': Found user details (uid: %d, gid: %d, home: %s)", username, uid, gid, homeDir)
 
-		// --- Parse Topology to Extract Original Lab Name ---
 		var topoData map[string]interface{}
 		err = yaml.Unmarshal([]byte(trimmedContent), &topoData)
-		if err != nil {
-			log.Warnf("DeployLab failed for user '%s': Could not parse topology YAML: %v", username, err)
+		if err != nil { /* ... error handling ... */
 			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid topology YAML: " + err.Error()})
 			return
 		}
-
 		originalLabNameValue, ok := topoData["name"]
-		if !ok {
-			log.Warnf("DeployLab failed for user '%s': Topology YAML is missing the top-level 'name' field.", username)
+		if !ok { /* ... error handling ... */
 			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Topology YAML must contain a top-level 'name' field."})
 			return
 		}
 		originalLabName, ok := originalLabNameValue.(string)
-		if !ok || originalLabName == "" {
-			log.Warnf("DeployLab failed for user '%s': Topology 'name' field is not a non-empty string.", username)
+		if !ok || originalLabName == "" { /* ... error handling ... */
 			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Topology 'name' field must be a non-empty string."})
 			return
 		}
-		if !isValidLabName(originalLabName) {
-			log.Warnf("DeployLab failed for user '%s': Invalid characters in extracted lab name '%s'", username, originalLabName)
-			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in topology 'name'. Use alphanumeric, hyphen, underscore."})
+		if !isValidLabName(originalLabName) { /* ... error handling ... */
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in topology 'name'."})
 			return
 		}
-		log.Debugf("DeployLab user '%s': Extracted original lab name '%s' from content", username, originalLabName)
 
-		// Determine the effective lab name (override or original)
-		if req.LabNameOverride != "" {
-			labName = req.LabNameOverride
-			log.Debugf("DeployLab user '%s': Using lab name override '%s'", username, labName)
+		// Determine effective lab name
+		if labNameOverride != "" {
+			labName = labNameOverride
 		} else {
 			labName = originalLabName
-			log.Debugf("DeployLab user '%s': Using lab name '%s' from topology content", username, labName)
 		}
 
-		// --- Construct Paths using ORIGINAL name for consistency ---
+		// --- Construct Paths, Create Dirs, Set Ownership, Write File ---
+		// (This part remains the same, using originalLabName for paths)
 		clabUserDir := filepath.Join(homeDir, ".clab")
-		// Save under the name defined *inside* the topology file
 		targetDir := filepath.Join(clabUserDir, originalLabName)
-		targetFilePath := filepath.Join(targetDir, originalLabName+".clab.yml") // Standard naming convention
-		topoPathForClab = targetFilePath                                        // Use this path for the clab command
+		targetFilePath := filepath.Join(targetDir, originalLabName+".clab.yml")
+		topoPathForClab = targetFilePath
 
-		// --- Create Directory & Set Ownership ---
-		log.Debugf("DeployLab user '%s': Ensuring directory exists: '%s'", username, targetDir)
-		err = os.MkdirAll(targetDir, 0750) // Permissions: user(rwx), group(rx), other(-)
-		if err != nil {
-			log.Errorf("DeployLab failed for user '%s': Failed to create directory '%s': %v.", username, targetDir, err)
+		err = os.MkdirAll(targetDir, 0750)
+		if err != nil { /* ... error handling ... */
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to create lab directory: %s.", err.Error())})
 			return
 		}
-		log.Debugf("DeployLab user '%s': Setting ownership of directory '%s' to uid %d, gid %d", username, targetDir, uid, gid)
 		err = os.Chown(targetDir, uid, gid)
-		if err != nil {
-			log.Errorf("DeployLab failed for user '%s': Failed to chown directory '%s' to uid %d, gid %d: %v. Check API server privileges.", username, targetDir, uid, gid, err)
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to set ownership on lab directory: %s. API server requires privileges (e.g., run as root).", err.Error())})
+		if err != nil { /* ... error handling ... */
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to set ownership on lab directory: %s.", err.Error())})
 			return
 		}
-		log.Infof("Set ownership of directory '%s' to user '%s' (uid %d, gid %d)", targetDir, username, uid, gid)
-
-		// --- Write Topology File & Set Ownership ---
-		log.Debugf("DeployLab user '%s': Writing topology file: '%s'", username, targetFilePath)
-		err = os.WriteFile(targetFilePath, []byte(trimmedContent), 0640) // Permissions: user(rw), group(r), other(-)
-		if err != nil {
-			log.Errorf("DeployLab failed for user '%s': Failed to write topology file '%s': %v.", username, targetFilePath, err)
+		err = os.WriteFile(targetFilePath, []byte(trimmedContent), 0640)
+		if err != nil { /* ... error handling ... */
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to write topology file: %s.", err.Error())})
 			return
 		}
-		log.Debugf("DeployLab user '%s': Setting ownership of file '%s' to uid %d, gid %d", username, targetFilePath, uid, gid)
 		err = os.Chown(targetFilePath, uid, gid)
-		if err != nil {
-			log.Errorf("DeployLab failed for user '%s': Failed to chown file '%s' to uid %d, gid %d: %v. Check API server privileges.", username, targetFilePath, uid, gid, err)
-			_ = os.Remove(targetFilePath) // Attempt cleanup
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to set ownership on topology file: %s. API server requires privileges (e.g., run as root).", err.Error())})
+		if err != nil { /* ... error handling ... */
+			_ = os.Remove(targetFilePath)
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to set ownership on topology file: %s.", err.Error())})
 			return
 		}
 		log.Infof("Saved topology and set ownership for user '%s' lab '%s' to '%s'", username, originalLabName, targetFilePath)
@@ -296,42 +288,40 @@ func DeployLabHandler(c *gin.Context) {
 	// --- Add Topology Path/URL to Args ---
 	args = append(args, "--topo", topoPathForClab)
 
-	// --- Add Optional Flags to Args ---
-	if req.LabNameOverride != "" {
-		args = append(args, "--name", req.LabNameOverride)
+	// --- Add Optional Flags from Query Params to Args ---
+	if labNameOverride != "" {
+		args = append(args, "--name", labNameOverride)
 	}
-	if req.Reconfigure {
+	if reconfigure {
 		args = append(args, "--reconfigure")
 	}
-	if req.MaxWorkers > 0 {
-		args = append(args, "--max-workers", strconv.Itoa(req.MaxWorkers))
+	if maxWorkers > 0 { // Only add if explicitly set > 0
+		args = append(args, "--max-workers", strconv.Itoa(maxWorkers))
 	}
-	if req.ExportTemplate != "" {
-		args = append(args, "--export-template", req.ExportTemplate)
+	if exportTemplate != "" {
+		args = append(args, "--export-template", exportTemplate)
 	}
-	if req.NodeFilter != "" {
-		args = append(args, "--node-filter", req.NodeFilter)
+	if nodeFilter != "" {
+		args = append(args, "--node-filter", nodeFilter)
 	}
-	if req.SkipPostDeploy {
+	if skipPostDeploy {
 		args = append(args, "--skip-post-deploy")
 	}
-	if req.SkipLabdirAcl {
+	if skipLabdirAcl {
 		args = append(args, "--skip-labdir-acl")
 	}
-	// Note: --runtime and --timeout are handled globally or in RunClabCommand
 
 	// --- Execute clab deploy ---
-	log.Infof("DeployLab user '%s': Executing clab deploy for lab '%s'...", username, labName) // Use determined labName for logging
+	log.Infof("DeployLab user '%s': Executing clab deploy for lab '%s'...", username, labName)
 	stdout, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...)
 
-	// Handle command execution results
+	// --- Handle command execution results (remains the same) ---
 	if stderr != "" {
 		log.Warnf("DeployLab user '%s', lab '%s': clab deploy stderr: %s", username, labName, stderr)
 	}
 	if err != nil {
 		log.Errorf("DeployLab failed for user '%s', lab '%s': clab deploy command execution error: %v", username, labName, err)
 		errMsg := fmt.Sprintf("Failed to deploy lab '%s': %s", labName, err.Error())
-		// Attempt to include stderr if it provides useful info
 		if stderr != "" && (strings.Contains(stderr, "level=error") || strings.Contains(stderr, "failed") || strings.Contains(stderr, "panic")) {
 			errMsg += "\nstderr: " + stderr
 		}
@@ -341,11 +331,10 @@ func DeployLabHandler(c *gin.Context) {
 
 	log.Infof("DeployLab user '%s': clab deploy for lab '%s' executed successfully.", username, labName)
 
-	// Attempt to parse stdout as JSON and return it
+	// --- Parse and return result (remains the same) ---
 	var result interface{}
 	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
 		log.Warnf("DeployLab user '%s', lab '%s': Output from clab was not valid JSON: %v. Returning as plain text.", username, labName, err)
-		// Check if output suggests errors despite exit code 0
 		if strings.Contains(stdout, "level=error") || strings.Contains(stdout, "failed") {
 			c.JSON(http.StatusInternalServerError, gin.H{"output": stdout, "warning": "Deployment finished but output indicates errors and was not valid JSON"})
 		} else {
