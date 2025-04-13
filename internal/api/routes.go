@@ -47,18 +47,46 @@ func SetupRoutes(router *gin.Engine) {
 				// Inspect lab interfaces
 				labSpecific.GET("/interfaces", InspectInterfacesHandler) // GET /api/v1/labs/{labName}/interfaces
 
-				// --- NEW: Save Lab Config ---
+				// Save Lab Config
 				labSpecific.POST("/save", SaveLabConfigHandler) // POST /api/v1/labs/{labName}/save
 
-				// --- NEW: Execute Command in Lab ---
+				// Execute Command in Lab
 				labSpecific.POST("/exec", ExecCommandHandler) // POST /api/v1/labs/{labName}/exec
+
+				// --- NEW: Netem Routes (nested under node) ---
+				nodeSpecific := labSpecific.Group("/nodes/:nodeName")
+				{
+					// Show netem for all interfaces on node
+					nodeSpecific.GET("/netem", ShowNetemHandler) // GET /api/v1/labs/{labName}/nodes/{nodeName}/netem
+
+					interfaceSpecific := nodeSpecific.Group("/interfaces/:interfaceName")
+					{
+						// Set netem for specific interface
+						interfaceSpecific.PUT("/netem", SetNetemHandler) // PUT /api/v1/labs/{labName}/nodes/{nodeName}/interfaces/{interfaceName}/netem
+						// Reset netem for specific interface
+						interfaceSpecific.DELETE("/netem", ResetNetemHandler) // DELETE /api/v1/labs/{labName}/nodes/{nodeName}/interfaces/{interfaceName}/netem
+						// GET specific interface netem could be added here if needed, but covered by node-level GET
+					}
+				}
 			}
 		}
 
 		// Topology Generation Route ---
-		// Placed outside /labs group as it doesn't operate on an existing lab initially
 		apiV1.POST("/generate", GenerateTopologyHandler) // POST /api/v1/generate
 
-		// TODO: Add other potential top-level authenticated routes if needed
+		// --- NEW: Tools Routes (Top Level, mostly Superuser) ---
+		tools := apiV1.Group("/tools")
+		{
+			// Disable TX Offload (Superuser Only)
+			tools.POST("/disable-tx-offload", DisableTxOffloadHandler) // POST /api/v1/tools/disable-tx-offload
+
+			// Certificate Tools (Superuser Only)
+			certs := tools.Group("/certs")
+			{
+				certs.POST("/ca", CreateCAHandler)   // POST /api/v1/tools/certs/ca
+				certs.POST("/sign", SignCertHandler) // POST /api/v1/tools/certs/sign
+			}
+			// Excluded: veth, vxlan
+		}
 	}
 }

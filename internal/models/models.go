@@ -195,3 +195,73 @@ type SaveConfigResponse struct {
 	// Detailed output from the 'clab save' command (often from stderr).
 	Output string `json:"output"`
 }
+
+// --- Structs for Tools ---
+
+// DisableTxOffloadRequest represents the payload for disabling TX offload.
+type DisableTxOffloadRequest struct {
+	ContainerName string `json:"containerName" binding:"required" example:"clab-my-lab-srl1"`
+}
+
+// --- Structs for Cert Tool ---
+
+// CACreateRequest mirrors flags for `clab tools cert ca create`
+type CACreateRequest struct {
+	Name         string `json:"name,omitempty" example:"my-root-ca"`           // Defaults to "ca" if empty
+	Expiry       string `json:"expiry,omitempty" example:"8760h"`              // Duration string, defaults to "87600h" (10 years)
+	CommonName   string `json:"commonName,omitempty" example:"ca.example.com"` // Defaults to "containerlab.dev"
+	Country      string `json:"country,omitempty" example:"US"`                // Defaults to "Internet"
+	Locality     string `json:"locality,omitempty" example:"City"`             // Defaults to "Server"
+	Organization string `json:"organization,omitempty" example:"MyOrg"`        // Defaults to "Containerlab"
+	OrgUnit      string `json:"orgUnit,omitempty" example:"IT"`                // Defaults to "Containerlab Tools"
+	// Path is NOT included - determined by API server based on user
+}
+
+// CertSignRequest mirrors flags for `clab tools cert sign`
+type CertSignRequest struct {
+	Name         string   `json:"name" binding:"required" example:"node1.example.com"` // Required
+	Hosts        []string `json:"hosts" binding:"required"`                            // SANs (DNS names or IPs), comma-separated in clab, array here
+	CaName       string   `json:"caName" binding:"required" example:"my-root-ca"`      // Name of the CA cert/key files (without .pem/.key) previously generated
+	CommonName   string   `json:"commonName,omitempty" example:"node1.example.com"`    // Defaults to Name if empty
+	Country      string   `json:"country,omitempty" example:"US"`                      // Defaults to "Internet"
+	Locality     string   `json:"locality,omitempty" example:"City"`                   // Defaults to "Server"
+	Organization string   `json:"organization,omitempty" example:"MyOrg"`              // Defaults to "Containerlab"
+	OrgUnit      string   `json:"orgUnit,omitempty" example:"Nodes"`                   // Defaults to "Containerlab Tools"
+	KeySize      int      `json:"keySize,omitempty" example:"4096"`                    // Defaults to 2048
+	// Path, CA Cert Path, CA Key Path are NOT included - determined by API server
+}
+
+// CertResponse provides paths to the generated certificate files (relative to user's cert dir)
+type CertResponse struct {
+	Message  string `json:"message"`
+	CertPath string `json:"certPath,omitempty"` // e.g., "my-root-ca/my-root-ca.pem" or "my-root-ca/node1.example.com.pem"
+	KeyPath  string `json:"keyPath,omitempty"`  // e.g., "my-root-ca/my-root-ca.key" or "my-root-ca/node1.example.com.key"
+	CSRPath  string `json:"csrPath,omitempty"`  // e.g., "my-root-ca/my-root-ca.csr" or "my-root-ca/node1.example.com.csr"
+}
+
+// --- Structs for Netem Tool ---
+
+// NetemSetRequest represents the parameters for setting network emulation.
+// Use pointers to distinguish between unset and zero values if necessary,
+// but clab defaults usually handle zero values correctly (meaning "unset").
+type NetemSetRequest struct {
+	Delay      string  `json:"delay,omitempty" example:"50ms"`     // Duration string (e.g., "100ms", "1s")
+	Jitter     string  `json:"jitter,omitempty" example:"5ms"`     // Duration string, requires Delay
+	Loss       float64 `json:"loss,omitempty" example:"10.5"`      // Percentage (0.0 to 100.0)
+	Rate       uint    `json:"rate,omitempty" example:"1000"`      // Kbit/s (non-negative integer)
+	Corruption float64 `json:"corruption,omitempty" example:"0.1"` // Percentage (0.0 to 100.0)
+}
+
+// NetemInterfaceInfo holds the netem details for a single interface from `clab tools netem show --format json`
+type NetemInterfaceInfo struct {
+	Interface  string  `json:"interface"`            // Interface name
+	Delay      string  `json:"delay"`                // Duration string or empty
+	Jitter     string  `json:"jitter"`               // Duration string or empty
+	PacketLoss float64 `json:"packet_loss"`          // Percentage
+	Rate       uint    `json:"rate"`                 // Kbit/s
+	Corruption float64 `json:"corruption,omitempty"` // Percentage (might be missing in older clab versions)
+}
+
+// NetemShowResponse matches the JSON output of `clab tools netem show --format json`
+// It's a map where the key is the node name (container name) and the value is a list of interface details.
+type NetemShowResponse map[string][]NetemInterfaceInfo
