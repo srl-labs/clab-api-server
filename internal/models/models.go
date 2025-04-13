@@ -1,7 +1,9 @@
 // internal/models/models.go
 package models
 
-import "encoding/json"
+import (
+	"encoding/json"
+)
 
 // Required for RawMessage
 
@@ -22,7 +24,7 @@ type DeployRequest struct {
 	// Option 1: Direct Topology Content.
 	// Provide the full containerlab topology YAML as a single string.
 	// If this is provided, 'topologySourceUrl' MUST be empty.
-	TopologyContent string `json:"topologyContent,omitempty" example:"# topology documentation: http://containerlab.dev/lab-examples/single-srl/\nname: srl01\ntopology:\n  kinds:\n    nokia_srlinux:\n      type: ixrd3\n      image: ghcr.io/nokia/srlinux\n\n  nodes:\n    srl1:\n      kind: nokia_srlinux\n    srl2:\n      kind: nokia_srlinux\n\n  links:\n    - endpoints: [\"srl1:e1-1\",\"srl2:e1-1\"]"`
+	TopologyContent string `json:"topologyContent,omitempty" example:"# topology documentation: http://containerlab.dev/lab-examples/single-srl/\nname: srl01\ntopology:\n kinds:\n nokia_srlinux:\n type: ixrd3\n image: ghcr.io/nokia/srlinux\n\n nodes:\n srl1:\n kind: nokia_srlinux\n srl2:\n kind: nokia_srlinux\n\n links:\n - endpoints: [\"srl1:e1-1\",\"srl2:e1-1\"]"`
 
 	// Option 2: Remote Topology Source URL.
 	// Provide a URL to a Git repository, a specific .clab.yml file in Git (github/gitlab), or a raw HTTP(S) URL.
@@ -141,10 +143,14 @@ type GenerateRequest struct {
 	// Default kind to use if not specified in a tier definition. Defaults to 'srl'.
 	DefaultKind string `json:"defaultKind,omitempty" example:"nokia_srlinux"`
 
-	// Map of kind to container image. Example: { "srl": "ghcr.io/nokia/srlinux:latest", "ceos": "ceos:4.32.0F" }
-	Images map[string]string `json:"images,omitempty"`
+	// Map of kind to container image. This field is MANDATORY.
+	// The key is the node 'kind' (e.g., "nokia_srlinux", "ceos") and the value is the container image path.
+	// @Example map[string]string{"nokia_srlinux":"ghcr.io/nokia/srlinux:latest", "linux":"ubuntu:latest"}
+	Images map[string]string `json:"images" binding:"required"` // Made mandatory
 
-	// Map of kind to license file path (accessible to the clab command). Example: { "srl": "/opt/licenses/srl.lic" }
+	// Map of kind to license file path (accessible to the clab command).
+	// The key is the node 'kind' (e.g., "srl") and the value is the path to the license file on the server.
+	// @Example map[string]string{"srl":"/opt/licenses/srl.lic"}
 	Licenses map[string]string `json:"licenses,omitempty"`
 
 	// Prefix for node names (e.g., "node" -> "node-1-1", "node-2-1"). Defaults to "node".
@@ -163,16 +169,17 @@ type GenerateRequest struct {
 	IPv6Subnet string `json:"ipv6Subnet,omitempty" example:"2001:172:20:20::/64"`
 
 	// If true, immediately deploy the generated topology using 'clab deploy --reconfigure'.
+	// The topology file will be saved in the user's ~/.clab/<labName>/ directory.
 	Deploy bool `json:"deploy,omitempty"`
 
 	// Limit concurrent workers during deployment (only applies if Deploy=true). 0 means default.
 	MaxWorkers int `json:"maxWorkers,omitempty"`
 
 	// Optional: Path where the generated file should be saved *on the server*.
-	// If empty and Deploy is false, YAML is returned directly.
-	// If empty and Deploy is true, a temporary file is used.
-	// If set, the file is saved here. USE WITH CAUTION regarding server paths.
-	OutputFile string `json:"outputFile,omitempty"` // Be cautious exposing direct file paths
+	// If Deploy=true, this field is IGNORED.
+	// If Deploy=false and this field is empty, YAML is returned directly in the response.
+	// If Deploy=false and this field is set, the file is saved to this path on the server (API server user needs write permission).
+	OutputFile string `json:"outputFile,omitempty"` // Path on the server, ignored if Deploy=true
 }
 
 // GenerateResponse represents the result of the generate command.
@@ -184,7 +191,7 @@ type GenerateResponse struct {
 	// The output from the deploy command (only if Deploy=true). Can be JSON or plain text.
 	// Use swaggertype:"object" to represent json.RawMessage in Swagger.
 	DeployOutput json.RawMessage `json:"deployOutput,omitempty" swaggertype:"object"`
-	// Path where the file was saved (only if OutputFile was specified or Deploy=true).
+	// Path where the file was saved (if Deploy=true, it's the path in the user's ~/.clab dir; if Deploy=false, it's the OutputFile path if provided).
 	SavedFilePath string `json:"savedFilePath,omitempty"`
 }
 

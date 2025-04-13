@@ -28,7 +28,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Generates a containerlab topology file based on CLOS definitions. Optionally deploys it.",
+                "description": "Generates a containerlab topology file based on CLOS definitions. Optionally deploys it.\nThe 'images' and 'licenses' fields expect a map where the key is the node 'kind' and the value is the corresponding image or license path (e.g., {\"nokia_srlinux\": \"ghcr.io/...\"}).\nIf Deploy=true, the topology is saved to the user's ~/.clab/\u003clabName\u003e/ directory before deployment, and the 'outputFile' field is ignored.\nIf Deploy=false and 'outputFile' is empty, YAML is returned directly.\nIf Deploy=false and 'outputFile' is set, the file is saved to that path on the server (requires API server write permissions).",
                 "consumes": [
                     "application/json"
                 ],
@@ -41,7 +41,7 @@
                 "summary": "Generate Topology",
                 "parameters": [
                     {
-                        "description": "Topology generation parameters",
+                        "description": "Topology generation parameters. Note: 'images'/'licenses' format is { \\",
                         "name": "generate_request",
                         "in": "body",
                         "required": true,
@@ -573,6 +573,225 @@
                 }
             }
         },
+        "/api/v1/labs/{labName}/nodes/{nodeName}/interfaces/{interfaceName}/netem": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Sets network impairments (delay, jitter, loss, rate, corruption) on a specific interface of a node within a lab. Checks lab ownership.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Tools - Netem"
+                ],
+                "summary": "Set Network Emulation",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Name of the lab",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Logical name of the node in the topology",
+                        "name": "nodeName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Name of the interface within the container",
+                        "name": "interfaceName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Network Emulation Parameters",
+                        "name": "netem_params",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.NetemSetRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Impairments set successfully",
+                        "schema": {
+                            "$ref": "#/definitions/models.GenericSuccessResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid input (lab/node/interface name, netem params)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized (JWT)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Lab, node, or interface not found / not owned",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error or clab execution failed",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Removes all network impairments from a specific interface of a node within a lab. Checks lab ownership.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Tools - Netem"
+                ],
+                "summary": "Reset Network Emulation",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Name of the lab",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Logical name of the node in the topology",
+                        "name": "nodeName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Name of the interface within the container",
+                        "name": "interfaceName",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Impairments reset successfully",
+                        "schema": {
+                            "$ref": "#/definitions/models.GenericSuccessResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid input (lab/node/interface name)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized (JWT)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Lab, node, or interface not found / not owned",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error or clab execution failed",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/labs/{labName}/nodes/{nodeName}/netem": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Shows network impairments for all interfaces on a specific node within a lab. Checks lab ownership.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Tools - Netem"
+                ],
+                "summary": "Show Network Emulation",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Name of the lab",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Logical name of the node in the topology",
+                        "name": "nodeName",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Current network emulation parameters",
+                        "schema": {
+                            "$ref": "#/definitions/models.NetemShowResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid input (lab/node name)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized (JWT)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Lab or node not found / not owned",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error or clab execution failed",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/labs/{labName}/save": {
             "post": {
                 "security": [
@@ -624,6 +843,207 @@
                     },
                     "404": {
                         "description": "Lab not found or not owned by user",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error or clab execution failed",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tools/certs/ca": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Creates a CA certificate and private key. Requires SUPERUSER privileges. Files are stored in a user-specific server directory.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Tools - Certificates"
+                ],
+                "summary": "Create Certificate Authority (CA)",
+                "parameters": [
+                    {
+                        "description": "CA Generation Parameters",
+                        "name": "ca_request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.CACreateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "CA created successfully",
+                        "schema": {
+                            "$ref": "#/definitions/models.CertResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid input parameters",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized (JWT)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden (User is not a superuser)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error (filesystem, clab execution)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tools/certs/sign": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Creates a certificate/key and signs it with a previously generated CA. Requires SUPERUSER privileges. Files are stored relative to the CA's directory.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Tools - Certificates"
+                ],
+                "summary": "Sign Certificate",
+                "parameters": [
+                    {
+                        "description": "Certificate Signing Parameters",
+                        "name": "sign_request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.CertSignRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Certificate signed successfully",
+                        "schema": {
+                            "$ref": "#/definitions/models.CertResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid input parameters (name, hosts, CA name, etc.)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized (JWT)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden (User is not a superuser)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Specified CA not found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error (filesystem, clab execution)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tools/disable-tx-offload": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Disables TX checksum offload for the eth0 interface of a specific container. Requires SUPERUSER privileges.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Tools"
+                ],
+                "summary": "Disable TX Checksum Offload",
+                "parameters": [
+                    {
+                        "description": "Container Name",
+                        "name": "tx_request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.DisableTxOffloadRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Offload disabled successfully",
+                        "schema": {
+                            "$ref": "#/definitions/models.GenericSuccessResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid input",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized (JWT)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden (User is not a superuser)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Container not found",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -691,6 +1111,123 @@
         }
     },
     "definitions": {
+        "models.CACreateRequest": {
+            "type": "object",
+            "properties": {
+                "commonName": {
+                    "description": "Defaults to \"containerlab.dev\"",
+                    "type": "string",
+                    "example": "ca.example.com"
+                },
+                "country": {
+                    "description": "Defaults to \"Internet\"",
+                    "type": "string",
+                    "example": "US"
+                },
+                "expiry": {
+                    "description": "Duration string, defaults to \"87600h\" (10 years)",
+                    "type": "string",
+                    "example": "8760h"
+                },
+                "locality": {
+                    "description": "Defaults to \"Server\"",
+                    "type": "string",
+                    "example": "City"
+                },
+                "name": {
+                    "description": "Defaults to \"ca\" if empty",
+                    "type": "string",
+                    "example": "my-root-ca"
+                },
+                "orgUnit": {
+                    "description": "Defaults to \"Containerlab Tools\"",
+                    "type": "string",
+                    "example": "IT"
+                },
+                "organization": {
+                    "description": "Defaults to \"Containerlab\"",
+                    "type": "string",
+                    "example": "MyOrg"
+                }
+            }
+        },
+        "models.CertResponse": {
+            "type": "object",
+            "properties": {
+                "certPath": {
+                    "description": "e.g., \"my-root-ca/my-root-ca.pem\" or \"my-root-ca/node1.example.com.pem\"",
+                    "type": "string"
+                },
+                "csrPath": {
+                    "description": "e.g., \"my-root-ca/my-root-ca.csr\" or \"my-root-ca/node1.example.com.csr\"",
+                    "type": "string"
+                },
+                "keyPath": {
+                    "description": "e.g., \"my-root-ca/my-root-ca.key\" or \"my-root-ca/node1.example.com.key\"",
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.CertSignRequest": {
+            "type": "object",
+            "required": [
+                "caName",
+                "hosts",
+                "name"
+            ],
+            "properties": {
+                "caName": {
+                    "description": "Name of the CA cert/key files (without .pem/.key) previously generated",
+                    "type": "string",
+                    "example": "my-root-ca"
+                },
+                "commonName": {
+                    "description": "Defaults to Name if empty",
+                    "type": "string",
+                    "example": "node1.example.com"
+                },
+                "country": {
+                    "description": "Defaults to \"Internet\"",
+                    "type": "string",
+                    "example": "US"
+                },
+                "hosts": {
+                    "description": "SANs (DNS names or IPs), comma-separated in clab, array here",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "keySize": {
+                    "description": "Defaults to 2048",
+                    "type": "integer",
+                    "example": 4096
+                },
+                "locality": {
+                    "description": "Defaults to \"Server\"",
+                    "type": "string",
+                    "example": "City"
+                },
+                "name": {
+                    "description": "Required",
+                    "type": "string",
+                    "example": "node1.example.com"
+                },
+                "orgUnit": {
+                    "description": "Defaults to \"Containerlab Tools\"",
+                    "type": "string",
+                    "example": "Nodes"
+                },
+                "organization": {
+                    "description": "Defaults to \"Containerlab\"",
+                    "type": "string",
+                    "example": "MyOrg"
+                }
+            }
+        },
         "models.ClabContainerInfo": {
             "type": "object",
             "properties": {
@@ -781,11 +1318,23 @@
                 "topologyContent": {
                     "description": "Option 1: Direct Topology Content.\nProvide the full containerlab topology YAML as a single string.\nIf this is provided, 'topologySourceUrl' MUST be empty.",
                     "type": "string",
-                    "example": "# topology documentation: http://containerlab.dev/lab-examples/single-srl/\nname: srl01\ntopology:\n  kinds:\n    nokia_srlinux:\n      type: ixrd3\n      image: ghcr.io/nokia/srlinux\n\n  nodes:\n    srl1:\n      kind: nokia_srlinux\n    srl2:\n      kind: nokia_srlinux\n\n  links:\n    - endpoints: [\"srl1:e1-1\",\"srl2:e1-1\"]"
+                    "example": "# topology documentation: http://containerlab.dev/lab-examples/single-srl/\nname: srl01\ntopology:\n kinds:\n nokia_srlinux:\n type: ixrd3\n image: ghcr.io/nokia/srlinux\n\n nodes:\n srl1:\n kind: nokia_srlinux\n srl2:\n kind: nokia_srlinux\n\n links:\n - endpoints: [\"srl1:e1-1\",\"srl2:e1-1\"]"
                 },
                 "topologySourceUrl": {
                     "description": "Option 2: Remote Topology Source URL.\nProvide a URL to a Git repository, a specific .clab.yml file in Git (github/gitlab), or a raw HTTP(S) URL.\nIf this is provided, 'topologyContent' MUST be empty.",
                     "type": "string"
+                }
+            }
+        },
+        "models.DisableTxOffloadRequest": {
+            "type": "object",
+            "required": [
+                "containerName"
+            ],
+            "properties": {
+                "containerName": {
+                    "type": "string",
+                    "example": "clab-my-lab-srl1"
                 }
             }
         },
@@ -833,7 +1382,7 @@
                 "kind": {
                     "description": "Node kind (defaults to 'srl'/'nokia_srlinux' if omitted)",
                     "type": "string",
-                    "example": "ceos"
+                    "example": "nokia_srlinux"
                 },
                 "type": {
                     "description": "Node type within the kind",
@@ -845,6 +1394,7 @@
         "models.GenerateRequest": {
             "type": "object",
             "required": [
+                "images",
                 "name",
                 "tiers"
             ],
@@ -852,10 +1402,10 @@
                 "defaultKind": {
                     "description": "Default kind to use if not specified in a tier definition. Defaults to 'srl'.",
                     "type": "string",
-                    "example": "ceos"
+                    "example": "nokia_srlinux"
                 },
                 "deploy": {
-                    "description": "If true, immediately deploy the generated topology using 'clab deploy --reconfigure'.",
+                    "description": "If true, immediately deploy the generated topology using 'clab deploy --reconfigure'.\nThe topology file will be saved in the user's ~/.clab/\u003clabName\u003e/ directory.",
                     "type": "boolean"
                 },
                 "groupPrefix": {
@@ -864,7 +1414,7 @@
                     "example": "clos-tier"
                 },
                 "images": {
-                    "description": "Map of kind to container image. Example: { \"srl\": \"ghcr.io/nokia/srlinux:latest\", \"ceos\": \"ceos:4.32.0F\" }",
+                    "description": "Map of kind to container image. This field is MANDATORY.\nThe key is the node 'kind' (e.g., \"nokia_srlinux\", \"ceos\") and the value is the container image path.\n@Example map[string]string{\"nokia_srlinux\":\"ghcr.io/nokia/srlinux:latest\", \"linux\":\"ubuntu:latest\"}",
                     "type": "object",
                     "additionalProperties": {
                         "type": "string"
@@ -881,7 +1431,7 @@
                     "example": "2001:172:20:20::/64"
                 },
                 "licenses": {
-                    "description": "Map of kind to license file path (accessible to the clab command). Example: { \"srl\": \"/opt/licenses/srl.lic\" }",
+                    "description": "Map of kind to license file path (accessible to the clab command).\nThe key is the node 'kind' (e.g., \"srl\") and the value is the path to the license file on the server.\n@Example map[string]string{\"srl\":\"/opt/licenses/srl.lic\"}",
                     "type": "object",
                     "additionalProperties": {
                         "type": "string"
@@ -907,11 +1457,11 @@
                     "example": "clos-node"
                 },
                 "outputFile": {
-                    "description": "Optional: Path where the generated file should be saved *on the server*.\nIf empty and Deploy is false, YAML is returned directly.\nIf empty and Deploy is true, a temporary file is used.\nIf set, the file is saved here. USE WITH CAUTION regarding server paths.",
+                    "description": "Optional: Path where the generated file should be saved *on the server*.\nIf Deploy=true, this field is IGNORED.\nIf Deploy=false and this field is empty, YAML is returned directly in the response.\nIf Deploy=false and this field is set, the file is saved to this path on the server (API server user needs write permission).",
                     "type": "string"
                 },
                 "tiers": {
-                    "description": "Definition of the CLOS tiers. Order matters (leaf -\u003e spine -\u003e superspine).\nExample: [ { \"count\": 8, \"kind\": \"srl\", \"type\": \"ixrd3\" }, { \"count\": 4, \"kind\": \"ceos\" }, { \"count\": 2 } ]",
+                    "description": "Definition of the CLOS tiers. Order matters (leaf -\u003e spine -\u003e superspine).\nExample: [ { \"count\": 8, \"kind\": \"srl\", \"type\": \"ixrd3\" }, { \"count\": 4, \"kind\": \"nokia_srlinux\" }, { \"count\": 2 } ]",
                     "type": "array",
                     "minItems": 1,
                     "items": {
@@ -932,7 +1482,7 @@
                     "type": "string"
                 },
                 "savedFilePath": {
-                    "description": "Path where the file was saved (only if OutputFile was specified or Deploy=true).",
+                    "description": "Path where the file was saved (if Deploy=true, it's the path in the user's ~/.clab dir; if Deploy=false, it's the OutputFile path if provided).",
                     "type": "string"
                 },
                 "topologyYaml": {
@@ -1002,6 +1552,74 @@
             "properties": {
                 "token": {
                     "type": "string"
+                }
+            }
+        },
+        "models.NetemInterfaceInfo": {
+            "type": "object",
+            "properties": {
+                "corruption": {
+                    "description": "Percentage (might be missing in older clab versions)",
+                    "type": "number"
+                },
+                "delay": {
+                    "description": "Duration string or empty",
+                    "type": "string"
+                },
+                "interface": {
+                    "description": "Interface name",
+                    "type": "string"
+                },
+                "jitter": {
+                    "description": "Duration string or empty",
+                    "type": "string"
+                },
+                "packet_loss": {
+                    "description": "Percentage",
+                    "type": "number"
+                },
+                "rate": {
+                    "description": "Kbit/s",
+                    "type": "integer"
+                }
+            }
+        },
+        "models.NetemSetRequest": {
+            "type": "object",
+            "properties": {
+                "corruption": {
+                    "description": "Percentage (0.0 to 100.0)",
+                    "type": "number",
+                    "example": 0.1
+                },
+                "delay": {
+                    "description": "Duration string (e.g., \"100ms\", \"1s\")",
+                    "type": "string",
+                    "example": "50ms"
+                },
+                "jitter": {
+                    "description": "Duration string, requires Delay",
+                    "type": "string",
+                    "example": "5ms"
+                },
+                "loss": {
+                    "description": "Percentage (0.0 to 100.0)",
+                    "type": "number",
+                    "example": 10.5
+                },
+                "rate": {
+                    "description": "Kbit/s (non-negative integer)",
+                    "type": "integer",
+                    "example": 1000
+                }
+            }
+        },
+        "models.NetemShowResponse": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "array",
+                "items": {
+                    "$ref": "#/definitions/models.NetemInterfaceInfo"
                 }
             }
         },

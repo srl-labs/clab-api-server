@@ -1,4 +1,94 @@
 definitions:
+  models.CACreateRequest:
+    properties:
+      commonName:
+        description: Defaults to "containerlab.dev"
+        example: ca.example.com
+        type: string
+      country:
+        description: Defaults to "Internet"
+        example: US
+        type: string
+      expiry:
+        description: Duration string, defaults to "87600h" (10 years)
+        example: 8760h
+        type: string
+      locality:
+        description: Defaults to "Server"
+        example: City
+        type: string
+      name:
+        description: Defaults to "ca" if empty
+        example: my-root-ca
+        type: string
+      orgUnit:
+        description: Defaults to "Containerlab Tools"
+        example: IT
+        type: string
+      organization:
+        description: Defaults to "Containerlab"
+        example: MyOrg
+        type: string
+    type: object
+  models.CertResponse:
+    properties:
+      certPath:
+        description: e.g., "my-root-ca/my-root-ca.pem" or "my-root-ca/node1.example.com.pem"
+        type: string
+      csrPath:
+        description: e.g., "my-root-ca/my-root-ca.csr" or "my-root-ca/node1.example.com.csr"
+        type: string
+      keyPath:
+        description: e.g., "my-root-ca/my-root-ca.key" or "my-root-ca/node1.example.com.key"
+        type: string
+      message:
+        type: string
+    type: object
+  models.CertSignRequest:
+    properties:
+      caName:
+        description: Name of the CA cert/key files (without .pem/.key) previously
+          generated
+        example: my-root-ca
+        type: string
+      commonName:
+        description: Defaults to Name if empty
+        example: node1.example.com
+        type: string
+      country:
+        description: Defaults to "Internet"
+        example: US
+        type: string
+      hosts:
+        description: SANs (DNS names or IPs), comma-separated in clab, array here
+        items:
+          type: string
+        type: array
+      keySize:
+        description: Defaults to 2048
+        example: 4096
+        type: integer
+      locality:
+        description: Defaults to "Server"
+        example: City
+        type: string
+      name:
+        description: Required
+        example: node1.example.com
+        type: string
+      orgUnit:
+        description: Defaults to "Containerlab Tools"
+        example: Nodes
+        type: string
+      organization:
+        description: Defaults to "Containerlab"
+        example: MyOrg
+        type: string
+    required:
+    - caName
+    - hosts
+    - name
+    type: object
   models.ClabContainerInfo:
     properties:
       container_id:
@@ -70,19 +160,19 @@ definitions:
           # topology documentation: http://containerlab.dev/lab-examples/single-srl/
           name: srl01
           topology:
-            kinds:
-              nokia_srlinux:
-                type: ixrd3
-                image: ghcr.io/nokia/srlinux
+           kinds:
+           nokia_srlinux:
+           type: ixrd3
+           image: ghcr.io/nokia/srlinux
 
-            nodes:
-              srl1:
-                kind: nokia_srlinux
-              srl2:
-                kind: nokia_srlinux
+           nodes:
+           srl1:
+           kind: nokia_srlinux
+           srl2:
+           kind: nokia_srlinux
 
-            links:
-              - endpoints: ["srl1:e1-1","srl2:e1-1"]
+           links:
+           - endpoints: ["srl1:e1-1","srl2:e1-1"]
         type: string
       topologySourceUrl:
         description: |-
@@ -90,6 +180,14 @@ definitions:
           Provide a URL to a Git repository, a specific .clab.yml file in Git (github/gitlab), or a raw HTTP(S) URL.
           If this is provided, 'topologyContent' MUST be empty.
         type: string
+    type: object
+  models.DisableTxOffloadRequest:
+    properties:
+      containerName:
+        example: clab-my-lab-srl1
+        type: string
+    required:
+    - containerName
     type: object
   models.ErrorResponse:
     properties:
@@ -119,7 +217,7 @@ definitions:
         type: integer
       kind:
         description: Node kind (defaults to 'srl'/'nokia_srlinux' if omitted)
-        example: ceos
+        example: nokia_srlinux
         type: string
       type:
         description: Node type within the kind
@@ -133,11 +231,12 @@ definitions:
       defaultKind:
         description: Default kind to use if not specified in a tier definition. Defaults
           to 'srl'.
-        example: ceos
+        example: nokia_srlinux
         type: string
       deploy:
-        description: If true, immediately deploy the generated topology using 'clab
-          deploy --reconfigure'.
+        description: |-
+          If true, immediately deploy the generated topology using 'clab deploy --reconfigure'.
+          The topology file will be saved in the user's ~/.clab/<labName>/ directory.
         type: boolean
       groupPrefix:
         description: Prefix for node groups (used in graphing). Defaults to "tier".
@@ -146,8 +245,10 @@ definitions:
       images:
         additionalProperties:
           type: string
-        description: 'Map of kind to container image. Example: { "srl": "ghcr.io/nokia/srlinux:latest",
-          "ceos": "ceos:4.32.0F" }'
+        description: |-
+          Map of kind to container image. This field is MANDATORY.
+          The key is the node 'kind' (e.g., "nokia_srlinux", "ceos") and the value is the container image path.
+          @Example map[string]string{"nokia_srlinux":"ghcr.io/nokia/srlinux:latest", "linux":"ubuntu:latest"}
         type: object
       ipv4Subnet:
         description: Management network IPv4 subnet (CIDR). Defaults based on clab
@@ -162,8 +263,10 @@ definitions:
       licenses:
         additionalProperties:
           type: string
-        description: 'Map of kind to license file path (accessible to the clab command).
-          Example: { "srl": "/opt/licenses/srl.lic" }'
+        description: |-
+          Map of kind to license file path (accessible to the clab command).
+          The key is the node 'kind' (e.g., "srl") and the value is the path to the license file on the server.
+          @Example map[string]string{"srl":"/opt/licenses/srl.lic"}
         type: object
       managementNetwork:
         description: Name of the management network. Defaults to "clab".
@@ -185,19 +288,20 @@ definitions:
       outputFile:
         description: |-
           Optional: Path where the generated file should be saved *on the server*.
-          If empty and Deploy is false, YAML is returned directly.
-          If empty and Deploy is true, a temporary file is used.
-          If set, the file is saved here. USE WITH CAUTION regarding server paths.
+          If Deploy=true, this field is IGNORED.
+          If Deploy=false and this field is empty, YAML is returned directly in the response.
+          If Deploy=false and this field is set, the file is saved to this path on the server (API server user needs write permission).
         type: string
       tiers:
         description: |-
           Definition of the CLOS tiers. Order matters (leaf -> spine -> superspine).
-          Example: [ { "count": 8, "kind": "srl", "type": "ixrd3" }, { "count": 4, "kind": "ceos" }, { "count": 2 } ]
+          Example: [ { "count": 8, "kind": "srl", "type": "ixrd3" }, { "count": 4, "kind": "nokia_srlinux" }, { "count": 2 } ]
         items:
           $ref: '#/definitions/models.GenerateNodeTier'
         minItems: 1
         type: array
     required:
+    - images
     - name
     - tiers
     type: object
@@ -212,8 +316,9 @@ definitions:
         description: Message indicating success or failure.
         type: string
       savedFilePath:
-        description: Path where the file was saved (only if OutputFile was specified
-          or Deploy=true).
+        description: Path where the file was saved (if Deploy=true, it's the path
+          in the user's ~/.clab dir; if Deploy=false, it's the OutputFile path if
+          provided).
         type: string
       topologyYaml:
         description: The generated topology YAML (only if Deploy=false and OutputFile
@@ -263,6 +368,56 @@ definitions:
     properties:
       token:
         type: string
+    type: object
+  models.NetemInterfaceInfo:
+    properties:
+      corruption:
+        description: Percentage (might be missing in older clab versions)
+        type: number
+      delay:
+        description: Duration string or empty
+        type: string
+      interface:
+        description: Interface name
+        type: string
+      jitter:
+        description: Duration string or empty
+        type: string
+      packet_loss:
+        description: Percentage
+        type: number
+      rate:
+        description: Kbit/s
+        type: integer
+    type: object
+  models.NetemSetRequest:
+    properties:
+      corruption:
+        description: Percentage (0.0 to 100.0)
+        example: 0.1
+        type: number
+      delay:
+        description: Duration string (e.g., "100ms", "1s")
+        example: 50ms
+        type: string
+      jitter:
+        description: Duration string, requires Delay
+        example: 5ms
+        type: string
+      loss:
+        description: Percentage (0.0 to 100.0)
+        example: 10.5
+        type: number
+      rate:
+        description: Kbit/s (non-negative integer)
+        example: 1000
+        type: integer
+    type: object
+  models.NetemShowResponse:
+    additionalProperties:
+      items:
+        $ref: '#/definitions/models.NetemInterfaceInfo'
+      type: array
     type: object
   models.NodeInterfaceInfo:
     properties:
@@ -338,10 +493,15 @@ paths:
     post:
       consumes:
       - application/json
-      description: Generates a containerlab topology file based on CLOS definitions.
-        Optionally deploys it.
+      description: |-
+        Generates a containerlab topology file based on CLOS definitions. Optionally deploys it.
+        The 'images' and 'licenses' fields expect a map where the key is the node 'kind' and the value is the corresponding image or license path (e.g., {"nokia_srlinux": "ghcr.io/..."}).
+        If Deploy=true, the topology is saved to the user's ~/.clab/<labName>/ directory before deployment, and the 'outputFile' field is ignored.
+        If Deploy=false and 'outputFile' is empty, YAML is returned directly.
+        If Deploy=false and 'outputFile' is set, the file is saved to that path on the server (requires API server write permissions).
       parameters:
-      - description: Topology generation parameters
+      - description: 'Topology generation parameters. Note: ''images''/''licenses''
+          format is { \'
         in: body
         name: generate_request
         required: true
@@ -706,6 +866,152 @@ paths:
       summary: List Lab Interfaces
       tags:
       - Labs
+  /api/v1/labs/{labName}/nodes/{nodeName}/interfaces/{interfaceName}/netem:
+    delete:
+      description: Removes all network impairments from a specific interface of a
+        node within a lab. Checks lab ownership.
+      parameters:
+      - description: Name of the lab
+        in: path
+        name: labName
+        required: true
+        type: string
+      - description: Logical name of the node in the topology
+        in: path
+        name: nodeName
+        required: true
+        type: string
+      - description: Name of the interface within the container
+        in: path
+        name: interfaceName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Impairments reset successfully
+          schema:
+            $ref: '#/definitions/models.GenericSuccessResponse'
+        "400":
+          description: Invalid input (lab/node/interface name)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized (JWT)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Lab, node, or interface not found / not owned
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error or clab execution failed
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Reset Network Emulation
+      tags:
+      - Tools - Netem
+    put:
+      consumes:
+      - application/json
+      description: Sets network impairments (delay, jitter, loss, rate, corruption)
+        on a specific interface of a node within a lab. Checks lab ownership.
+      parameters:
+      - description: Name of the lab
+        in: path
+        name: labName
+        required: true
+        type: string
+      - description: Logical name of the node in the topology
+        in: path
+        name: nodeName
+        required: true
+        type: string
+      - description: Name of the interface within the container
+        in: path
+        name: interfaceName
+        required: true
+        type: string
+      - description: Network Emulation Parameters
+        in: body
+        name: netem_params
+        required: true
+        schema:
+          $ref: '#/definitions/models.NetemSetRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Impairments set successfully
+          schema:
+            $ref: '#/definitions/models.GenericSuccessResponse'
+        "400":
+          description: Invalid input (lab/node/interface name, netem params)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized (JWT)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Lab, node, or interface not found / not owned
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error or clab execution failed
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Set Network Emulation
+      tags:
+      - Tools - Netem
+  /api/v1/labs/{labName}/nodes/{nodeName}/netem:
+    get:
+      description: Shows network impairments for all interfaces on a specific node
+        within a lab. Checks lab ownership.
+      parameters:
+      - description: Name of the lab
+        in: path
+        name: labName
+        required: true
+        type: string
+      - description: Logical name of the node in the topology
+        in: path
+        name: nodeName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Current network emulation parameters
+          schema:
+            $ref: '#/definitions/models.NetemShowResponse'
+        "400":
+          description: Invalid input (lab/node name)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized (JWT)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Lab or node not found / not owned
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error or clab execution failed
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Show Network Emulation
+      tags:
+      - Tools - Netem
   /api/v1/labs/{labName}/save:
     post:
       description: Saves the running configuration for nodes in a specific lab. Checks
@@ -748,6 +1054,137 @@ paths:
       summary: Save Lab Configuration
       tags:
       - Labs
+  /api/v1/tools/certs/ca:
+    post:
+      consumes:
+      - application/json
+      description: Creates a CA certificate and private key. Requires SUPERUSER privileges.
+        Files are stored in a user-specific server directory.
+      parameters:
+      - description: CA Generation Parameters
+        in: body
+        name: ca_request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CACreateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: CA created successfully
+          schema:
+            $ref: '#/definitions/models.CertResponse'
+        "400":
+          description: Invalid input parameters
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized (JWT)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Forbidden (User is not a superuser)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error (filesystem, clab execution)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Create Certificate Authority (CA)
+      tags:
+      - Tools - Certificates
+  /api/v1/tools/certs/sign:
+    post:
+      consumes:
+      - application/json
+      description: Creates a certificate/key and signs it with a previously generated
+        CA. Requires SUPERUSER privileges. Files are stored relative to the CA's directory.
+      parameters:
+      - description: Certificate Signing Parameters
+        in: body
+        name: sign_request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CertSignRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Certificate signed successfully
+          schema:
+            $ref: '#/definitions/models.CertResponse'
+        "400":
+          description: Invalid input parameters (name, hosts, CA name, etc.)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized (JWT)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Forbidden (User is not a superuser)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Specified CA not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error (filesystem, clab execution)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Sign Certificate
+      tags:
+      - Tools - Certificates
+  /api/v1/tools/disable-tx-offload:
+    post:
+      consumes:
+      - application/json
+      description: Disables TX checksum offload for the eth0 interface of a specific
+        container. Requires SUPERUSER privileges.
+      parameters:
+      - description: Container Name
+        in: body
+        name: tx_request
+        required: true
+        schema:
+          $ref: '#/definitions/models.DisableTxOffloadRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Offload disabled successfully
+          schema:
+            $ref: '#/definitions/models.GenericSuccessResponse'
+        "400":
+          description: Invalid input
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized (JWT)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Forbidden (User is not a superuser)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Container not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error or clab execution failed
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Disable TX Checksum Offload
+      tags:
+      - Tools
   /login:
     post:
       consumes:
