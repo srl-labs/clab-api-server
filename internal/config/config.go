@@ -18,7 +18,9 @@ type Config struct {
 	TLSEnable   bool   `mapstructure:"TLS_ENABLE"`
 	TLSCertFile string `mapstructure:"TLS_CERT_FILE"`
 	TLSKeyFile  string `mapstructure:"TLS_KEY_FILE"`
-	// ----------------------
+	// --- Gin Settings ---
+	GinMode        string `mapstructure:"GIN_MODE"`
+	TrustedProxies string `mapstructure:"TRUSTED_PROXIES"` // Comma-separated list or "nil" to disable
 }
 
 var AppConfig Config
@@ -38,7 +40,9 @@ func LoadConfig() error {
 	viper.SetDefault("TLS_ENABLE", false) // Disabled by default
 	viper.SetDefault("TLS_CERT_FILE", "") // No default paths
 	viper.SetDefault("TLS_KEY_FILE", "")
-	// ------------------------
+	// --- Gin Settings Defaults ---
+	viper.SetDefault("GIN_MODE", "debug")   // Use 'release' for production
+	viper.SetDefault("TRUSTED_PROXIES", "") // Empty means trust all, "nil" means trust none
 
 	err := viper.ReadInConfig()
 	// Ignore if .env file not found, rely on defaults/env vars

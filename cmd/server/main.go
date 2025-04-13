@@ -90,8 +90,35 @@ func main() {
 	log.Info("'clab' command found in PATH.")
 
 	// --- Initialize Gin router ---
-	// gin.SetMode(gin.ReleaseMode) // Uncomment for production
+	if strings.ToLower(config.AppConfig.GinMode) == "release" {
+		gin.SetMode(gin.ReleaseMode)
+	} else if strings.ToLower(config.AppConfig.GinMode) == "test" {
+		gin.SetMode(gin.TestMode)
+	} else {
+		gin.SetMode(gin.DebugMode)
+	}
+	log.Infof("Gin running in '%s' mode", config.AppConfig.GinMode)
+
 	router := gin.Default()
+
+	// Configure trusted proxies
+	if config.AppConfig.TrustedProxies == "nil" {
+		// Explicitly disable proxy trust
+		log.Info("Proxy trust disabled (TRUSTED_PROXIES=nil)")
+		router.SetTrustedProxies(nil)
+	} else if config.AppConfig.TrustedProxies != "" {
+		// Set specific trusted proxies
+		proxyList := strings.Split(config.AppConfig.TrustedProxies, ",")
+		// Trim any whitespace
+		for i, proxy := range proxyList {
+			proxyList[i] = strings.TrimSpace(proxy)
+		}
+		log.Infof("Setting trusted proxies: %v", proxyList)
+		router.SetTrustedProxies(proxyList)
+	} else {
+		// Default behavior (trust all) - just log a warning
+		log.Warn("All proxies are trusted (default). Set TRUSTED_PROXIES=nil to disable proxy trust or provide a comma-separated list of trusted proxy IPs.")
+	}
 
 	// Setup API routes
 	api.SetupRoutes(router)
