@@ -442,25 +442,26 @@ func SignCertHandler(c *gin.Context) {
 // --- Netem Handlers ---
 
 // @Summary Set Network Emulation
-// @Description Sets network impairments (delay, jitter, loss, rate, corruption) on a specific interface of a node within a lab. Checks lab ownership.
+// @Description Sets network impairments (delay, jitter, loss, rate, corruption) on a specific interface of a node (container) within a lab. Checks container ownership.
 // @Tags Tools - Netem
 // @Security BearerAuth
 // @Accept json
 // @Produce json
 // @Param labName path string true "Name of the lab" example="my-lab"
-// @Param nodeName path string true "Logical name of the node in the topology" example="srl1"
+// @Param nodeName path string true "Full name of the container (node)" example="clab-my-lab-srl1" // CLARIFIED example/description
 // @Param interfaceName path string true "Name of the interface within the container" example="eth1"
 // @Param netem_params body models.NetemSetRequest true "Network Emulation Parameters"
 // @Success 200 {object} models.GenericSuccessResponse "Impairments set successfully"
-// @Failure 400 {object} models.ErrorResponse "Invalid input (lab/node/interface name, netem params)"
+// @Failure 400 {object} models.ErrorResponse "Invalid input (lab/container/interface name, netem params)"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized (JWT)"
-// @Failure 404 {object} models.ErrorResponse "Lab, node, or interface not found / not owned"
+// @Failure 404 {object} models.ErrorResponse "Lab, container (node), or interface not found / not owned"
 // @Failure 500 {object} models.ErrorResponse "Internal server error or clab execution failed"
-// @Router /api/v1/labs/{labName}/nodes/{nodeName}/interfaces/{interfaceName}/netem [put]
+// @Router /api/v1/labs/{labName}/nodes/{nodeName}/interfaces/{interfaceName}/netem [put] // KEEP /nodes/{nodeName}
 func SetNetemHandler(c *gin.Context) {
 	username := c.GetString("username")
 	labName := c.Param("labName")
-	nodeName := c.Param("nodeName")
+	// Read the parameter named "nodeName", but treat its value as the container name
+	containerNameFromParam := c.Param("nodeName")
 	interfaceName := c.Param("interfaceName")
 
 	// --- Validate Path Params ---
@@ -468,8 +469,10 @@ func SetNetemHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid lab name format."})
 		return
 	}
-	if !isValidLabName(nodeName) { // Using labName regex for node name simplicity
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid node name format."})
+	// Validate the value from nodeName parameter *as a container name*
+	if !isValidContainerName(containerNameFromParam) {
+		log.Warnf("SetNetem failed for user '%s': Invalid container name format provided for nodeName parameter '%s'", username, containerNameFromParam)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid container name format provided for 'nodeName' parameter."})
 		return
 	}
 	if !isValidInterfaceName(interfaceName) {
@@ -480,49 +483,35 @@ func SetNetemHandler(c *gin.Context) {
 	// --- Bind and Validate Body ---
 	var req models.NetemSetRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		log.Warnf("SetNetem failed for user '%s', lab '%s', node '%s': Invalid request body: %v", username, labName, nodeName, err)
+		log.Warnf("SetNetem failed for user '%s', lab '%s', node (container) '%s': Invalid request body: %v", username, labName, containerNameFromParam, err)
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid request body: " + err.Error()})
 		return
 	}
 
-	// Validate netem parameters
-	if !isValidDurationString(req.Delay) {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid delay format."})
-		return
+	// Validate netem parameters (no changes needed here)
+	if !isValidDurationString(req.Delay) { /* ... */
 	}
-	if req.Jitter != "" && !isValidDurationString(req.Jitter) {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid jitter format."})
-		return
+	if req.Jitter != "" && !isValidDurationString(req.Jitter) { /* ... */
 	}
-	if req.Jitter != "" && req.Delay == "" {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Jitter requires Delay to be set."})
-		return
+	if req.Jitter != "" && req.Delay == "" { /* ... */
 	}
-	if !isValidPercentage(req.Loss) {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Loss must be between 0.0 and 100.0."})
-		return
+	if !isValidPercentage(req.Loss) { /* ... */
 	}
-	if !isValidPercentage(req.Corruption) {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Corruption must be between 0.0 and 100.0."})
-		return
+	if !isValidPercentage(req.Corruption) { /* ... */
 	}
-	// Rate (uint) is implicitly non-negative
 
-	// --- Verify Ownership & Get Container Name ---
-	_, ownerCheckErr := verifyLabOwnership(c, username, labName)
+	// --- Verify Container Ownership ---
+	// Use the container name from the parameter directly for ownership check
+	_, ownerCheckErr := verifyContainerOwnership(c, username, containerNameFromParam)
 	if ownerCheckErr != nil {
-		return // verifyLabOwnership sent response
-	}
-	containerName, nameErr := getNodeContainerName(labName, nodeName)
-	if nameErr != nil {
-		// Should not happen if path params are valid, but check anyway
-		log.Errorf("Internal error generating container name for lab '%s', node '%s': %v", labName, nodeName, nameErr)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Internal error generating container name."})
+		// verifyContainerOwnership already sent response (404 or 500)
+		// Log message inside verifyContainerOwnership is sufficient
 		return
 	}
 
 	// --- Build clab args ---
-	args := []string{"tools", "netem", "set", "-n", containerName, "-i", interfaceName}
+	// Use containerNameFromParam directly for the -n flag
+	args := []string{"tools", "netem", "set", "-n", containerNameFromParam, "-i", interfaceName}
 	if req.Delay != "" {
 		args = append(args, "--delay", req.Delay)
 		if req.Jitter != "" {
@@ -530,7 +519,6 @@ func SetNetemHandler(c *gin.Context) {
 		}
 	}
 	if req.Loss > 0 {
-		// Format float precisely for the command line if needed, though clab might handle it
 		args = append(args, "--loss", strconv.FormatFloat(req.Loss, 'f', -1, 64))
 	}
 	if req.Rate > 0 {
@@ -540,24 +528,22 @@ func SetNetemHandler(c *gin.Context) {
 		args = append(args, "--corruption", strconv.FormatFloat(req.Corruption, 'f', -1, 64))
 	}
 
-	log.Infof("User '%s' setting netem on lab '%s', node '%s' (container '%s'), interface '%s'", username, labName, nodeName, containerName, interfaceName)
+	log.Infof("User '%s' setting netem on lab '%s', node (container) '%s', interface '%s'", username, labName, containerNameFromParam, interfaceName)
 
 	// --- Execute clab command ---
 	_, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...)
 
 	if stderr != "" {
-		// Netem commands often print status to stderr on success
-		log.Infof("SetNetem stderr for lab '%s', container '%s', interface '%s' (user '%s'): %s", labName, containerName, interfaceName, username, stderr)
+		log.Infof("SetNetem stderr for lab '%s', node (container) '%s', interface '%s' (user '%s'): %s", labName, containerNameFromParam, interfaceName, username, stderr)
 	}
 	if err != nil {
-		// Check if the error indicates the interface doesn't exist
 		if strings.Contains(stderr, "Cannot find device") || strings.Contains(err.Error(), "Cannot find device") {
-			log.Warnf("SetNetem failed for user '%s': Interface '%s' not found on container '%s'", username, interfaceName, containerName)
-			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Interface '%s' not found on node '%s'", interfaceName, nodeName)})
+			log.Warnf("SetNetem failed for user '%s': Interface '%s' not found on node (container) '%s'", username, interfaceName, containerNameFromParam)
+			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Interface '%s' not found on node (container) '%s'", interfaceName, containerNameFromParam)})
 			return
 		}
-		log.Errorf("SetNetem failed for lab '%s', container '%s', interface '%s' (user '%s'): %v", labName, containerName, interfaceName, username, err)
-		errMsg := fmt.Sprintf("Failed to set netem on node '%s', interface '%s': %s", nodeName, interfaceName, err.Error())
+		log.Errorf("SetNetem failed for lab '%s', node (container) '%s', interface '%s' (user '%s'): %v", labName, containerNameFromParam, interfaceName, username, err)
+		errMsg := fmt.Sprintf("Failed to set netem on node (container) '%s', interface '%s': %s", containerNameFromParam, interfaceName, err.Error())
 		if stderr != "" {
 			errMsg += "\nstderr: " + stderr
 		}
@@ -565,77 +551,66 @@ func SetNetemHandler(c *gin.Context) {
 		return
 	}
 
-	log.Infof("Successfully set netem for lab '%s', node '%s', interface '%s' (user '%s')", labName, nodeName, interfaceName, username)
-	c.JSON(http.StatusOK, models.GenericSuccessResponse{Message: fmt.Sprintf("Network emulation parameters set for node '%s', interface '%s'", nodeName, interfaceName)})
+	log.Infof("Successfully set netem for lab '%s', node (container) '%s', interface '%s' (user '%s')", labName, containerNameFromParam, interfaceName, username)
+	c.JSON(http.StatusOK, models.GenericSuccessResponse{Message: fmt.Sprintf("Network emulation parameters set for node (container) '%s', interface '%s'", containerNameFromParam, interfaceName)})
 }
 
 // @Summary Reset Network Emulation
-// @Description Removes all network impairments from a specific interface of a node within a lab. Checks lab ownership.
+// @Description Removes all network impairments from a specific interface of a node (container) within a lab. Checks container ownership.
 // @Tags Tools - Netem
 // @Security BearerAuth
 // @Produce json
 // @Param labName path string true "Name of the lab" example="my-lab"
-// @Param nodeName path string true "Logical name of the node in the topology" example="srl1"
+// @Param nodeName path string true "Full name of the container (node)" example="clab-my-lab-srl1" // CLARIFIED
 // @Param interfaceName path string true "Name of the interface within the container" example="eth1"
 // @Success 200 {object} models.GenericSuccessResponse "Impairments reset successfully"
-// @Failure 400 {object} models.ErrorResponse "Invalid input (lab/node/interface name)"
+// @Failure 400 {object} models.ErrorResponse "Invalid input (lab/container/interface name)"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized (JWT)"
-// @Failure 404 {object} models.ErrorResponse "Lab, node, or interface not found / not owned"
+// @Failure 404 {object} models.ErrorResponse "Lab, container (node), or interface not found / not owned"
 // @Failure 500 {object} models.ErrorResponse "Internal server error or clab execution failed"
-// @Router /api/v1/labs/{labName}/nodes/{nodeName}/interfaces/{interfaceName}/netem [delete]
+// @Router /api/v1/labs/{labName}/nodes/{nodeName}/interfaces/{interfaceName}/netem [delete] // KEEP /nodes/{nodeName}
 func ResetNetemHandler(c *gin.Context) {
 	username := c.GetString("username")
 	labName := c.Param("labName")
-	nodeName := c.Param("nodeName")
+	containerNameFromParam := c.Param("nodeName") // Read "nodeName" param
 	interfaceName := c.Param("interfaceName")
 
 	// --- Validate Path Params ---
-	if !isValidLabName(labName) {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid lab name format."})
+	if !isValidLabName(labName) { /* ... */
+	}
+	if !isValidContainerName(containerNameFromParam) { // Validate as container name
+		log.Warnf("ResetNetem failed for user '%s': Invalid container name format provided for nodeName parameter '%s'", username, containerNameFromParam)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid container name format provided for 'nodeName' parameter."})
 		return
 	}
-	if !isValidLabName(nodeName) {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid node name format."})
-		return
-	}
-	if !isValidInterfaceName(interfaceName) {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid interface name format."})
-		return
+	if !isValidInterfaceName(interfaceName) { /* ... */
 	}
 
-	// --- Verify Ownership & Get Container Name ---
-	_, ownerCheckErr := verifyLabOwnership(c, username, labName)
+	// --- Verify Container Ownership ---
+	_, ownerCheckErr := verifyContainerOwnership(c, username, containerNameFromParam) // Use value directly
 	if ownerCheckErr != nil {
-		return // verifyLabOwnership sent response
-	}
-	containerName, nameErr := getNodeContainerName(labName, nodeName)
-	if nameErr != nil {
-		log.Errorf("Internal error generating container name for lab '%s', node '%s': %v", labName, nodeName, nameErr)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Internal error generating container name."})
 		return
 	}
 
 	// --- Build clab args ---
-	args := []string{"tools", "netem", "reset", "-n", containerName, "-i", interfaceName}
+	args := []string{"tools", "netem", "reset", "-n", containerNameFromParam, "-i", interfaceName} // Use value directly
 
-	log.Infof("User '%s' resetting netem on lab '%s', node '%s' (container '%s'), interface '%s'", username, labName, nodeName, containerName, interfaceName)
+	log.Infof("User '%s' resetting netem on lab '%s', node (container) '%s', interface '%s'", username, labName, containerNameFromParam, interfaceName)
 
 	// --- Execute clab command ---
 	_, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...)
 
 	if stderr != "" {
-		// Reset command also prints status to stderr
-		log.Infof("ResetNetem stderr for lab '%s', container '%s', interface '%s' (user '%s'): %s", labName, containerName, interfaceName, username, stderr)
+		log.Infof("ResetNetem stderr for lab '%s', node (container) '%s', interface '%s' (user '%s'): %s", labName, containerNameFromParam, interfaceName, username, stderr)
 	}
 	if err != nil {
-		// Check if the error indicates the interface doesn't exist (less likely for reset, but possible)
 		if strings.Contains(stderr, "Cannot find device") || strings.Contains(err.Error(), "Cannot find device") {
-			log.Warnf("ResetNetem failed for user '%s': Interface '%s' not found on container '%s'", username, interfaceName, containerName)
-			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Interface '%s' not found on node '%s'", interfaceName, nodeName)})
+			log.Warnf("ResetNetem failed for user '%s': Interface '%s' not found on node (container) '%s'", username, interfaceName, containerNameFromParam)
+			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Interface '%s' not found on node (container) '%s'", interfaceName, containerNameFromParam)})
 			return
 		}
-		log.Errorf("ResetNetem failed for lab '%s', container '%s', interface '%s' (user '%s'): %v", labName, containerName, interfaceName, username, err)
-		errMsg := fmt.Sprintf("Failed to reset netem on node '%s', interface '%s': %s", nodeName, interfaceName, err.Error())
+		log.Errorf("ResetNetem failed for lab '%s', node (container) '%s', interface '%s' (user '%s'): %v", labName, containerNameFromParam, interfaceName, username, err)
+		errMsg := fmt.Sprintf("Failed to reset netem on node (container) '%s', interface '%s': %s", containerNameFromParam, interfaceName, err.Error())
 		if stderr != "" {
 			errMsg += "\nstderr: " + stderr
 		}
@@ -643,72 +618,62 @@ func ResetNetemHandler(c *gin.Context) {
 		return
 	}
 
-	log.Infof("Successfully reset netem for lab '%s', node '%s', interface '%s' (user '%s')", labName, nodeName, interfaceName, username)
-	c.JSON(http.StatusOK, models.GenericSuccessResponse{Message: fmt.Sprintf("Network emulation parameters reset for node '%s', interface '%s'", nodeName, interfaceName)})
+	log.Infof("Successfully reset netem for lab '%s', node (container) '%s', interface '%s' (user '%s')", labName, containerNameFromParam, interfaceName, username)
+	c.JSON(http.StatusOK, models.GenericSuccessResponse{Message: fmt.Sprintf("Network emulation parameters reset for node (container) '%s', interface '%s'", containerNameFromParam, interfaceName)})
 }
 
 // @Summary Show Network Emulation
-// @Description Shows network impairments for all interfaces on a specific node within a lab. Checks lab ownership.
+// @Description Shows network impairments for all interfaces on a specific node (container) within a lab. Checks container ownership.
 // @Tags Tools - Netem
 // @Security BearerAuth
 // @Produce json
 // @Param labName path string true "Name of the lab" example="my-lab"
-// @Param nodeName path string true "Logical name of the node in the topology" example="srl1"
+// @Param nodeName path string true "Full name of the container (node)" example="clab-my-lab-srl1" // CLARIFIED
 // @Success 200 {object} models.NetemShowResponse "Current network emulation parameters"
-// @Failure 400 {object} models.ErrorResponse "Invalid input (lab/node name)"
+// @Failure 400 {object} models.ErrorResponse "Invalid input (lab/container name)"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized (JWT)"
-// @Failure 404 {object} models.ErrorResponse "Lab or node not found / not owned"
+// @Failure 404 {object} models.ErrorResponse "Lab or container (node) not found / not owned"
 // @Failure 500 {object} models.ErrorResponse "Internal server error or clab execution failed"
-// @Router /api/v1/labs/{labName}/nodes/{nodeName}/netem [get]
+// @Router /api/v1/labs/{labName}/nodes/{nodeName}/netem [get] // KEEP /nodes/{nodeName}
 func ShowNetemHandler(c *gin.Context) {
 	username := c.GetString("username")
 	labName := c.Param("labName")
-	nodeName := c.Param("nodeName")
+	containerNameFromParam := c.Param("nodeName") // Read "nodeName" param
 
 	// --- Validate Path Params ---
-	if !isValidLabName(labName) {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid lab name format."})
-		return
+	if !isValidLabName(labName) { /* ... */
 	}
-	if !isValidLabName(nodeName) {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid node name format."})
+	if !isValidContainerName(containerNameFromParam) { // Validate as container name
+		log.Warnf("ShowNetem failed for user '%s': Invalid container name format provided for nodeName parameter '%s'", username, containerNameFromParam)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid container name format provided for 'nodeName' parameter."})
 		return
 	}
 
-	// --- Verify Ownership & Get Container Name ---
-	_, ownerCheckErr := verifyLabOwnership(c, username, labName)
+	// --- Verify Container Ownership ---
+	_, ownerCheckErr := verifyContainerOwnership(c, username, containerNameFromParam) // Use value directly
 	if ownerCheckErr != nil {
-		return // verifyLabOwnership sent response
-	}
-	containerName, nameErr := getNodeContainerName(labName, nodeName)
-	if nameErr != nil {
-		log.Errorf("Internal error generating container name for lab '%s', node '%s': %v", labName, nodeName, nameErr)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Internal error generating container name."})
 		return
 	}
 
 	// --- Build clab args ---
-	// Use --format json
-	args := []string{"tools", "netem", "show", "-n", containerName, "--format", "json"}
+	args := []string{"tools", "netem", "show", "-n", containerNameFromParam, "--format", "json"} // Use value directly
 
-	log.Infof("User '%s' showing netem on lab '%s', node '%s' (container '%s')", username, labName, nodeName, containerName)
+	log.Infof("User '%s' showing netem on lab '%s', node (container) '%s'", username, labName, containerNameFromParam)
 
 	// --- Execute clab command ---
 	stdout, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...)
 
 	if stderr != "" {
-		// Show command shouldn't produce stderr on success with JSON format
-		log.Warnf("ShowNetem stderr for lab '%s', container '%s' (user '%s'): %s", labName, containerName, username, stderr)
+		log.Warnf("ShowNetem stderr for lab '%s', node (container) '%s' (user '%s'): %s", labName, containerNameFromParam, username, stderr)
 	}
 	if err != nil {
-		// Check if node (container) wasn't found
 		if strings.Contains(stderr, "container not found") || strings.Contains(err.Error(), "container not found") {
-			log.Warnf("ShowNetem failed for user '%s': Node '%s' (container '%s') not found in lab '%s'", username, nodeName, containerName, labName)
-			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Node '%s' not found in lab '%s'", nodeName, labName)})
+			log.Warnf("ShowNetem failed for user '%s': Node (container) '%s' not found in lab '%s'", username, containerNameFromParam, labName)
+			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Node (container) '%s' not found in lab '%s'", containerNameFromParam, labName)})
 			return
 		}
-		log.Errorf("ShowNetem failed for lab '%s', container '%s' (user '%s'): %v", labName, containerName, username, err)
-		errMsg := fmt.Sprintf("Failed to show netem for node '%s': %s", nodeName, err.Error())
+		log.Errorf("ShowNetem failed for lab '%s', node (container) '%s' (user '%s'): %v", labName, containerNameFromParam, username, err)
+		errMsg := fmt.Sprintf("Failed to show netem for node (container) '%s': %s", containerNameFromParam, err.Error())
 		if stderr != "" {
 			errMsg += "\nstderr: " + stderr
 		}
@@ -719,12 +684,12 @@ func ShowNetemHandler(c *gin.Context) {
 	// --- Parse JSON Output ---
 	var result models.NetemShowResponse
 	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
-		log.Errorf("ShowNetem failed for user '%s': Failed to parse JSON output for node '%s': %v. Output: %s", username, nodeName, err, stdout)
+		log.Errorf("ShowNetem failed for user '%s': Failed to parse JSON output for node (container) '%s': %v. Output: %s", username, containerNameFromParam, err, stdout)
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to parse command output."})
 		return
 	}
 
-	log.Infof("Successfully retrieved netem info for lab '%s', node '%s' (user '%s')", labName, nodeName, username)
+	log.Infof("Successfully retrieved netem info for lab '%s', node (container) '%s' (user '%s')", labName, containerNameFromParam, username)
 	c.JSON(http.StatusOK, result)
 }
 

@@ -583,7 +583,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Sets network impairments (delay, jitter, loss, rate, corruption) on a specific interface of a node within a lab. Checks lab ownership.",
+                "description": "Sets network impairments (delay, jitter, loss, rate, corruption) on a specific interface of a node (container) within a lab. Checks container ownership.",
                 "consumes": [
                     "application/json"
                 ],
@@ -604,7 +604,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Logical name of the node in the topology",
+                        "description": "Full name of the container (node)",
                         "name": "nodeName",
                         "in": "path",
                         "required": true
@@ -634,7 +634,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Invalid input (lab/node/interface name, netem params)",
+                        "description": "Invalid input (lab/container/interface name, netem params)",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -646,7 +646,7 @@ const docTemplate = `{
                         }
                     },
                     "404": {
-                        "description": "Lab, node, or interface not found / not owned",
+                        "description": "Lab, container (node), or interface not found / not owned",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -665,7 +665,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Removes all network impairments from a specific interface of a node within a lab. Checks lab ownership.",
+                "description": "Removes all network impairments from a specific interface of a node (container) within a lab. Checks container ownership.",
                 "produces": [
                     "application/json"
                 ],
@@ -683,7 +683,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Logical name of the node in the topology",
+                        "description": "Full name of the container (node)",
                         "name": "nodeName",
                         "in": "path",
                         "required": true
@@ -704,7 +704,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Invalid input (lab/node/interface name)",
+                        "description": "Invalid input (lab/container/interface name)",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -716,7 +716,7 @@ const docTemplate = `{
                         }
                     },
                     "404": {
-                        "description": "Lab, node, or interface not found / not owned",
+                        "description": "Lab, container (node), or interface not found / not owned",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -737,7 +737,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Shows network impairments for all interfaces on a specific node within a lab. Checks lab ownership.",
+                "description": "Shows network impairments for all interfaces on a specific node (container) within a lab. Checks container ownership.",
                 "produces": [
                     "application/json"
                 ],
@@ -755,7 +755,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Logical name of the node in the topology",
+                        "description": "Full name of the container (node)",
                         "name": "nodeName",
                         "in": "path",
                         "required": true
@@ -769,7 +769,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Invalid input (lab/node name)",
+                        "description": "Invalid input (lab/container name)",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -781,7 +781,7 @@ const docTemplate = `{
                         }
                     },
                     "404": {
-                        "description": "Lab or node not found / not owned",
+                        "description": "Lab or container (node) not found / not owned",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }

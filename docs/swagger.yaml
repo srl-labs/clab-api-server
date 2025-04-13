@@ -923,14 +923,14 @@ paths:
   /api/v1/labs/{labName}/nodes/{nodeName}/interfaces/{interfaceName}/netem:
     delete:
       description: Removes all network impairments from a specific interface of a
-        node within a lab. Checks lab ownership.
+        node (container) within a lab. Checks container ownership.
       parameters:
       - description: Name of the lab
         in: path
         name: labName
         required: true
         type: string
-      - description: Logical name of the node in the topology
+      - description: Full name of the container (node)
         in: path
         name: nodeName
         required: true
@@ -948,7 +948,7 @@ paths:
           schema:
             $ref: '#/definitions/models.GenericSuccessResponse'
         "400":
-          description: Invalid input (lab/node/interface name)
+          description: Invalid input (lab/container/interface name)
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "401":
@@ -956,7 +956,7 @@ paths:
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "404":
-          description: Lab, node, or interface not found / not owned
+          description: Lab, container (node), or interface not found / not owned
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "500":
@@ -972,14 +972,15 @@ paths:
       consumes:
       - application/json
       description: Sets network impairments (delay, jitter, loss, rate, corruption)
-        on a specific interface of a node within a lab. Checks lab ownership.
+        on a specific interface of a node (container) within a lab. Checks container
+        ownership.
       parameters:
       - description: Name of the lab
         in: path
         name: labName
         required: true
         type: string
-      - description: Logical name of the node in the topology
+      - description: Full name of the container (node)
         in: path
         name: nodeName
         required: true
@@ -1003,7 +1004,7 @@ paths:
           schema:
             $ref: '#/definitions/models.GenericSuccessResponse'
         "400":
-          description: Invalid input (lab/node/interface name, netem params)
+          description: Invalid input (lab/container/interface name, netem params)
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "401":
@@ -1011,7 +1012,7 @@ paths:
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "404":
-          description: Lab, node, or interface not found / not owned
+          description: Lab, container (node), or interface not found / not owned
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "500":
@@ -1026,14 +1027,14 @@ paths:
   /api/v1/labs/{labName}/nodes/{nodeName}/netem:
     get:
       description: Shows network impairments for all interfaces on a specific node
-        within a lab. Checks lab ownership.
+        (container) within a lab. Checks container ownership.
       parameters:
       - description: Name of the lab
         in: path
         name: labName
         required: true
         type: string
-      - description: Logical name of the node in the topology
+      - description: Full name of the container (node)
         in: path
         name: nodeName
         required: true
@@ -1046,7 +1047,7 @@ paths:
           schema:
             $ref: '#/definitions/models.NetemShowResponse'
         "400":
-          description: Invalid input (lab/node name)
+          description: Invalid input (lab/container name)
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "401":
@@ -1054,7 +1055,7 @@ paths:
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "404":
-          description: Lab or node not found / not owned
+          description: Lab or container (node) not found / not owned
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "500":
