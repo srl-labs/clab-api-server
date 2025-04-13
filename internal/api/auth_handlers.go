@@ -7,8 +7,8 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
 
-	"github.com/FloSch62/clab-api/internal/auth"
-	"github.com/FloSch62/clab-api/internal/models"
+	"github.com/srl-labs/clab-api-server/internal/auth"
+	"github.com/srl-labs/clab-api-server/internal/models"
 )
 
 // LoginHandler - Handles user authentication

@@ -14,10 +14,10 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
 
-	"github.com/FloSch62/clab-api/internal/clab"
-	"github.com/FloSch62/clab-api/internal/models"
-	// "github.com/FloSch62/clab-api/internal/auth" // Already imported via helpers
-	// "github.com/FloSch62/clab-api/internal/config" // Already imported via helpers
+	"github.com/srl-labs/clab-api-server/internal/clab"
+	"github.com/srl-labs/clab-api-server/internal/models"
+	// "github.com/srl-labs/clab-api-server/internal/auth" // Already imported via helpers
+	// "github.com/srl-labs/clab-api-server/internal/config" // Already imported via helpers
 )
 
 // --- TX Offload Handler ---

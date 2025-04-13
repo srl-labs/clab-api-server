@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/FloSch62/clab-api/internal/config"
 	"github.com/charmbracelet/log"
+	"github.com/srl-labs/clab-api-server/internal/config"
 )
 
 const clabExecutable = "clab"          // Assumes clab is in PATH

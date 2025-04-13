@@ -9,8 +9,8 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
 
-	"github.com/FloSch62/clab-api/internal/clab"
-	"github.com/FloSch62/clab-api/internal/models"
+	"github.com/srl-labs/clab-api-server/internal/clab"
+	"github.com/srl-labs/clab-api-server/internal/models"
 )
 
 // @Summary Get Containerlab Version

@@ -12,9 +12,9 @@ import (
 	"github.com/gin-gonic/gin"
 
 	// Adjust these import paths if your module path is different
-	_ "github.com/FloSch62/clab-api/docs" // swagger docs
-	"github.com/FloSch62/clab-api/internal/api"
-	"github.com/FloSch62/clab-api/internal/config"
+	_ "github.com/srl-labs/clab-api-server/docs" // swagger docs
+	"github.com/srl-labs/clab-api-server/internal/api"
+	"github.com/srl-labs/clab-api-server/internal/config"
 )
 
 // @title Containerlab API

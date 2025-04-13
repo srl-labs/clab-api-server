@@ -17,10 +17,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"gopkg.in/yaml.v3"
 
-	"github.com/FloSch62/clab-api/internal/auth"
-	"github.com/FloSch62/clab-api/internal/clab"
-	"github.com/FloSch62/clab-api/internal/config"
-	"github.com/FloSch62/clab-api/internal/models"
+	"github.com/srl-labs/clab-api-server/internal/auth"
+	"github.com/srl-labs/clab-api-server/internal/clab"
+	"github.com/srl-labs/clab-api-server/internal/config"
+	"github.com/srl-labs/clab-api-server/internal/models"
 )
 
 // @Summary Deploy Lab

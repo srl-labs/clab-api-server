@@ -21,10 +21,10 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
 
-	"github.com/FloSch62/clab-api/internal/auth"
-	"github.com/FloSch62/clab-api/internal/clab"
-	"github.com/FloSch62/clab-api/internal/config"
-	"github.com/FloSch62/clab-api/internal/models"
+	"github.com/srl-labs/clab-api-server/internal/auth"
+	"github.com/srl-labs/clab-api-server/internal/clab"
+	"github.com/srl-labs/clab-api-server/internal/config"
+	"github.com/srl-labs/clab-api-server/internal/models"
 )
 
 // isValidLabName checks for potentially harmful characters in lab names.

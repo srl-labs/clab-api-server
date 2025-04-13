@@ -1,4 +1,4 @@
-module github.com/FloSch62/clab-api
+module github.com/srl-labs/clab-api-server
 
 go 1.24.2
 

@@ -24,7 +24,7 @@ Before running the `clab-api` server, ensure the following are set up on the ser
 
 ## Installation
 
-1.  **Download:** Obtain the latest `clab-api-server` binary for your architecture from the [Releases](https://github.com/FloSch62/clab-api/releases) page.
+1.  **Download:** Obtain the latest `clab-api-server` binary for your architecture from the [Releases](https://github.com/srl-labs/clab-api-server/releases) page.
 2.  **Place Binary:** Copy the downloaded binary to a suitable location on your server, for example, `/usr/local/bin/`.
     ```bash
     sudo mv ./clab-api-server_linux_amd64 /usr/local/bin/clab-api-server
@@ -243,7 +243,7 @@ These instructions are for developers contributing to the clab-api server. Users
 
 ### Setup
 
-1. **Clone:** `git clone https://github.com/FloSch62/clab-api.git && cd clab-api`
+1. **Clone:** `git clone https://github.com/srl-labs/clab-api-server.git && cd clab-api`
 2. **Install Dependencies:** `task deps` (Installs system build dependencies)
 3. **Configure Environment:** Copy `.env.example` to `.env` and set a strong `JWT_SECRET`.
 4. **Build:** `task` (Runs `go mod tidy`, generates Swagger docs, and builds the binary `clab-api-server`)
