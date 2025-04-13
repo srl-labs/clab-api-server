@@ -727,3 +727,268 @@ func ShowNetemHandler(c *gin.Context) {
 	log.Infof("Successfully retrieved netem info for lab '%s', node '%s' (user '%s')", labName, nodeName, username)
 	c.JSON(http.StatusOK, result)
 }
+
+// @Summary Create vEth Pair
+// @Description Creates a virtual Ethernet (vEth) pair between two specified endpoints (container, host, bridge, ovs-bridge). Requires SUPERUSER privileges.
+// @Tags Tools - vEth
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param veth_request body models.VethCreateRequest true "vEth Creation Parameters"
+// @Success 200 {object} models.GenericSuccessResponse "vEth pair created successfully"
+// @Failure 400 {object} models.ErrorResponse "Invalid input parameters (endpoints, MTU)"
+// @Failure 401 {object} models.ErrorResponse "Unauthorized (JWT)"
+// @Failure 403 {object} models.ErrorResponse "Forbidden (User is not a superuser)"
+// @Failure 500 {object} models.ErrorResponse "Internal server error (clab execution failed)"
+// @Router /api/v1/tools/veth [post]
+func CreateVethHandler(c *gin.Context) {
+	username := c.GetString("username")
+
+	// --- Authorization: Superuser Only ---
+	if !isSuperuser(username) {
+		log.Warnf("User '%s' attempted to use veth create without superuser privileges.", username)
+		c.JSON(http.StatusForbidden, models.ErrorResponse{Error: "Superuser privileges required for this operation."})
+		return
+	}
+
+	var req models.VethCreateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Warnf("CreateVeth failed for superuser '%s': Invalid request body: %v", username, err)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid request body: " + err.Error()})
+		return
+	}
+
+	// --- Validate Inputs ---
+	if !isValidVethEndpoint(req.AEndpoint) {
+		log.Warnf("CreateVeth failed for superuser '%s': Invalid format for aEndpoint '%s'", username, req.AEndpoint)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: fmt.Sprintf("Invalid format for aEndpoint: %s", req.AEndpoint)})
+		return
+	}
+	if !isValidVethEndpoint(req.BEndpoint) {
+		log.Warnf("CreateVeth failed for superuser '%s': Invalid format for bEndpoint '%s'", username, req.BEndpoint)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: fmt.Sprintf("Invalid format for bEndpoint: %s", req.BEndpoint)})
+		return
+	}
+	if req.Mtu < 0 { // Allow 0 to mean default, but not negative
+		log.Warnf("CreateVeth failed for superuser '%s': Invalid MTU value '%d'", username, req.Mtu)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid MTU value. Must be non-negative."})
+		return
+	}
+
+	// --- Build clab args ---
+	args := []string{"tools", "veth", "create", "-a", req.AEndpoint, "-b", req.BEndpoint}
+	if req.Mtu > 0 { // Only add MTU flag if explicitly set > 0
+		args = append(args, "-m", strconv.Itoa(req.Mtu))
+	}
+
+	log.Infof("Superuser '%s' creating vEth pair: %s <--> %s (MTU: %d)", username, req.AEndpoint, req.BEndpoint, req.Mtu)
+
+	// --- Execute clab command ---
+	_, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...)
+
+	if stderr != "" {
+		// veth create might output info to stderr on success
+		log.Infof("CreateVeth stderr for superuser '%s': %s", username, stderr)
+	}
+	if err != nil {
+		log.Errorf("CreateVeth failed for superuser '%s': %v", username, err)
+		errMsg := fmt.Sprintf("Failed to create vEth pair (%s <--> %s): %s", req.AEndpoint, req.BEndpoint, err.Error())
+		// Append stderr if it seems like a real error message
+		if stderr != "" && (strings.Contains(stderr, "level=error") || strings.Contains(stderr, "failed") || strings.Contains(stderr, "exist")) {
+			errMsg += "\nstderr: " + stderr
+		} else if stderr != "" { // Include stderr even if not obviously an error, as context
+			errMsg += "\nOutput:\n" + stderr
+		}
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: errMsg})
+		return
+	}
+
+	log.Infof("Successfully created vEth pair for superuser '%s': %s <--> %s", username, req.AEndpoint, req.BEndpoint)
+	c.JSON(http.StatusOK, models.GenericSuccessResponse{Message: fmt.Sprintf("vEth pair created successfully between %s and %s", req.AEndpoint, req.BEndpoint)})
+}
+
+// --- VxLAN Handlers ---
+
+// @Summary Create VxLAN Tunnel
+// @Description Creates a VxLAN tunnel interface and sets up tc rules for traffic redirection. Requires SUPERUSER privileges.
+// @Tags Tools - VxLAN
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param vxlan_request body models.VxlanCreateRequest true "VxLAN Creation Parameters"
+// @Success 200 {object} models.GenericSuccessResponse "VxLAN tunnel created successfully"
+// @Failure 400 {object} models.ErrorResponse "Invalid input parameters (remote, link, id, port, etc.)"
+// @Failure 401 {object} models.ErrorResponse "Unauthorized (JWT)"
+// @Failure 403 {object} models.ErrorResponse "Forbidden (User is not a superuser)"
+// @Failure 500 {object} models.ErrorResponse "Internal server error (clab execution failed)"
+// @Router /api/v1/tools/vxlan [post]
+func CreateVxlanHandler(c *gin.Context) {
+	username := c.GetString("username")
+
+	// --- Authorization: Superuser Only ---
+	if !isSuperuser(username) {
+		log.Warnf("User '%s' attempted to use vxlan create without superuser privileges.", username)
+		c.JSON(http.StatusForbidden, models.ErrorResponse{Error: "Superuser privileges required for this operation."})
+		return
+	}
+
+	var req models.VxlanCreateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Warnf("CreateVxlan failed for superuser '%s': Invalid request body: %v", username, err)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid request body: " + err.Error()})
+		return
+	}
+
+	// --- Validate Inputs ---
+	if !isValidIPAddress(req.Remote) { // Use helper if added, otherwise basic check
+		log.Warnf("CreateVxlan failed for superuser '%s': Invalid remote IP address format '%s'", username, req.Remote)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid remote IP address format."})
+		return
+	}
+	if !isValidInterfaceName(req.Link) { // Check the link interface name
+		log.Warnf("CreateVxlan failed for superuser '%s': Invalid link interface name format '%s'", username, req.Link)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid link interface name format."})
+		return
+	}
+	if req.ID < 0 {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid VNI (id). Must be non-negative."})
+		return
+	}
+	if req.Port < 0 || req.Port > 65535 {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid port number. Must be between 0 and 65535."})
+		return
+	}
+	if req.Dev != "" && !isValidInterfaceName(req.Dev) {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid device (dev) name format."})
+		return
+	}
+	if req.Mtu < 0 {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid MTU value. Must be non-negative."})
+		return
+	}
+
+	// --- Build clab args ---
+	args := []string{"tools", "vxlan", "create", "--remote", req.Remote, "-l", req.Link}
+	if req.ID > 0 { // clab default is 10, only add if different or explicitly set
+		args = append(args, "-i", strconv.Itoa(req.ID))
+	}
+	if req.Port > 0 { // clab default is 4789, only add if different or explicitly set
+		args = append(args, "-p", strconv.Itoa(req.Port))
+	}
+	if req.Dev != "" {
+		args = append(args, "--dev", req.Dev)
+	}
+	if req.Mtu > 0 {
+		args = append(args, "-m", strconv.Itoa(req.Mtu))
+	}
+
+	log.Infof("Superuser '%s' creating VxLAN tunnel: remote=%s, link=%s, id=%d, port=%d", username, req.Remote, req.Link, req.ID, req.Port)
+
+	// --- Execute clab command ---
+	_, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...)
+
+	if stderr != "" {
+		// vxlan create outputs info to stderr on success
+		log.Infof("CreateVxlan stderr for superuser '%s': %s", username, stderr)
+	}
+	if err != nil {
+		log.Errorf("CreateVxlan failed for superuser '%s': %v", username, err)
+		errMsg := fmt.Sprintf("Failed to create VxLAN tunnel (remote: %s, link: %s): %s", req.Remote, req.Link, err.Error())
+		if stderr != "" && (strings.Contains(stderr, "level=error") || strings.Contains(stderr, "failed")) {
+			errMsg += "\nstderr: " + stderr
+		} else if stderr != "" {
+			errMsg += "\nOutput:\n" + stderr
+		}
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: errMsg})
+		return
+	}
+
+	log.Infof("Successfully created VxLAN tunnel for superuser '%s': remote=%s, link=%s", username, req.Remote, req.Link)
+	c.JSON(http.StatusOK, models.GenericSuccessResponse{Message: fmt.Sprintf("VxLAN tunnel created successfully for link %s to remote %s", req.Link, req.Remote)})
+}
+
+// @Summary Delete VxLAN Tunnels by Prefix
+// @Description Deletes VxLAN tunnel interfaces matching a given prefix (default: 'vx-'). Requires SUPERUSER privileges.
+// @Tags Tools - VxLAN
+// @Security BearerAuth
+// @Produce json
+// @Param prefix query string false "Prefix of VxLAN interfaces to delete" default(vx-) example="vx-"
+// @Success 200 {object} models.GenericSuccessResponse "VxLAN tunnels deleted successfully"
+// @Failure 400 {object} models.ErrorResponse "Invalid prefix format"
+// @Failure 401 {object} models.ErrorResponse "Unauthorized (JWT)"
+// @Failure 403 {object} models.ErrorResponse "Forbidden (User is not a superuser)"
+// @Failure 500 {object} models.ErrorResponse "Internal server error (clab execution failed)"
+// @Router /api/v1/tools/vxlan [delete]
+func DeleteVxlanHandler(c *gin.Context) {
+	username := c.GetString("username")
+
+	// --- Authorization: Superuser Only ---
+	if !isSuperuser(username) {
+		log.Warnf("User '%s' attempted to use vxlan delete without superuser privileges.", username)
+		c.JSON(http.StatusForbidden, models.ErrorResponse{Error: "Superuser privileges required for this operation."})
+		return
+	}
+
+	// --- Get and Validate Query Param ---
+	prefix := c.DefaultQuery("prefix", "vx-") // Default prefix used by clab create
+	if !isValidPrefix(prefix) {               // Use helper if added
+		log.Warnf("DeleteVxlan failed for superuser '%s': Invalid prefix format '%s'", username, prefix)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid prefix format."})
+		return
+	}
+
+	// --- Build clab args ---
+	args := []string{"tools", "vxlan", "delete", "-p", prefix}
+
+	log.Infof("Superuser '%s' deleting VxLAN tunnels with prefix '%s'", username, prefix)
+
+	// --- Execute clab command ---
+	_, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...)
+
+	if stderr != "" {
+		// vxlan delete outputs info to stderr on success
+		log.Infof("DeleteVxlan stderr for superuser '%s' (prefix '%s'): %s", username, prefix, stderr)
+	}
+	if err != nil {
+		// Check if the error is just "no interfaces found" which isn't really a failure
+		if strings.Contains(stderr, "no links found") || strings.Contains(err.Error(), "no links found") {
+			log.Infof("DeleteVxlan for superuser '%s': No VxLAN interfaces found with prefix '%s' to delete.", username, prefix)
+			c.JSON(http.StatusOK, models.GenericSuccessResponse{Message: fmt.Sprintf("No VxLAN interfaces found with prefix '%s' to delete.", prefix)})
+			return
+		}
+
+		log.Errorf("DeleteVxlan failed for superuser '%s' (prefix '%s'): %v", username, prefix, err)
+		errMsg := fmt.Sprintf("Failed to delete VxLAN tunnels with prefix '%s': %s", prefix, err.Error())
+		if stderr != "" && (strings.Contains(stderr, "level=error") || strings.Contains(stderr, "failed")) {
+			errMsg += "\nstderr: " + stderr
+		} else if stderr != "" {
+			errMsg += "\nOutput:\n" + stderr
+		}
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: errMsg})
+		return
+	}
+
+	log.Infof("Successfully deleted VxLAN tunnels with prefix '%s' for superuser '%s'", prefix, username)
+	// Construct message based on stderr which lists deleted interfaces
+	deletedMsg := fmt.Sprintf("VxLAN tunnels with prefix '%s' deleted successfully.", prefix)
+	if stderr != "" {
+		// Try to extract deleted interface names if possible, otherwise just include stderr
+		lines := strings.Split(strings.TrimSpace(stderr), "\n")
+		deletedInterfaces := []string{}
+		for _, line := range lines {
+			if strings.Contains(line, "Deleting VxLAN link") {
+				parts := strings.Fields(line)
+				if len(parts) >= 5 { // Look for the interface name, usually 5th word
+					deletedInterfaces = append(deletedInterfaces, parts[4])
+				}
+			}
+		}
+		if len(deletedInterfaces) > 0 {
+			deletedMsg = fmt.Sprintf("Successfully deleted VxLAN interface(s): %s", strings.Join(deletedInterfaces, ", "))
+		} else {
+			deletedMsg += fmt.Sprintf(" Output:\n%s", stderr) // Fallback if parsing fails
+		}
+	}
+
+	c.JSON(http.StatusOK, models.GenericSuccessResponse{Message: deletedMsg})
+}

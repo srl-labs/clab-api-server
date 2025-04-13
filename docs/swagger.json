@@ -1057,6 +1057,188 @@
                 }
             }
         },
+        "/api/v1/tools/veth": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Creates a virtual Ethernet (vEth) pair between two specified endpoints (container, host, bridge, ovs-bridge). Requires SUPERUSER privileges.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Tools - vEth"
+                ],
+                "summary": "Create vEth Pair",
+                "parameters": [
+                    {
+                        "description": "vEth Creation Parameters",
+                        "name": "veth_request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.VethCreateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "vEth pair created successfully",
+                        "schema": {
+                            "$ref": "#/definitions/models.GenericSuccessResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid input parameters (endpoints, MTU)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized (JWT)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden (User is not a superuser)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error (clab execution failed)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/tools/vxlan": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Creates a VxLAN tunnel interface and sets up tc rules for traffic redirection. Requires SUPERUSER privileges.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Tools - VxLAN"
+                ],
+                "summary": "Create VxLAN Tunnel",
+                "parameters": [
+                    {
+                        "description": "VxLAN Creation Parameters",
+                        "name": "vxlan_request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.VxlanCreateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "VxLAN tunnel created successfully",
+                        "schema": {
+                            "$ref": "#/definitions/models.GenericSuccessResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid input parameters (remote, link, id, port, etc.)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized (JWT)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden (User is not a superuser)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error (clab execution failed)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Deletes VxLAN tunnel interfaces matching a given prefix (default: 'vx-'). Requires SUPERUSER privileges.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Tools - VxLAN"
+                ],
+                "summary": "Delete VxLAN Tunnels by Prefix",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "default": "vx-",
+                        "description": "Prefix of VxLAN interfaces to delete",
+                        "name": "prefix",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "VxLAN tunnels deleted successfully",
+                        "schema": {
+                            "$ref": "#/definitions/models.GenericSuccessResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid prefix format",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized (JWT)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden (User is not a superuser)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error (clab execution failed)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/login": {
             "post": {
                 "description": "Authenticate user and return JWT token",
@@ -1697,6 +1879,69 @@
                 "output": {
                     "description": "Detailed output from the 'clab save' command (often from stderr).",
                     "type": "string"
+                }
+            }
+        },
+        "models.VethCreateRequest": {
+            "type": "object",
+            "required": [
+                "aEndpoint",
+                "bEndpoint"
+            ],
+            "properties": {
+                "aEndpoint": {
+                    "description": "Endpoint A definition. Format: \u003cnode-name\u003e:\u003cinterface-name\u003e OR \u003ckind\u003e:\u003cnode-name\u003e:\u003cinterface-name\u003e\nExample: \"clab-demo-node1:eth1\" or \"bridge:br-1:br-eth1\" or \"host:veth-eth1\"",
+                    "type": "string",
+                    "example": "clab-demo-node1:eth1"
+                },
+                "bEndpoint": {
+                    "description": "Endpoint B definition. Format: \u003cnode-name\u003e:\u003cinterface-name\u003e OR \u003ckind\u003e:\u003cnode-name\u003e:\u003cinterface-name\u003e\nExample: \"clab-demo-node2:eth1\" or \"ovs-bridge:ovsbr-1:br-eth1\"",
+                    "type": "string",
+                    "example": "clab-demo-node2:eth1"
+                },
+                "mtu": {
+                    "description": "MTU for the vEth pair. Defaults to 9500 if omitted.",
+                    "type": "integer",
+                    "example": 1500
+                }
+            }
+        },
+        "models.VxlanCreateRequest": {
+            "type": "object",
+            "required": [
+                "link",
+                "remote"
+            ],
+            "properties": {
+                "dev": {
+                    "description": "Optional: Linux device to use for the tunnel source. Auto-detected if omitted.",
+                    "type": "string",
+                    "example": "eth0"
+                },
+                "id": {
+                    "description": "VxLAN Network Identifier (VNI). Defaults to 10 if omitted.",
+                    "type": "integer",
+                    "example": 100
+                },
+                "link": {
+                    "description": "Name of the existing interface in the root namespace to bridge traffic with.",
+                    "type": "string",
+                    "example": "srl_e1-1"
+                },
+                "mtu": {
+                    "description": "Optional: MTU for the VxLAN interface. Auto-calculated if omitted.",
+                    "type": "integer",
+                    "example": 1400
+                },
+                "port": {
+                    "description": "UDP port number for the VxLAN tunnel. Defaults to 4789 if omitted.",
+                    "type": "integer",
+                    "example": 4789
+                },
+                "remote": {
+                    "description": "Remote VTEP IP address.",
+                    "type": "string",
+                    "example": "10.0.0.20"
                 }
             }
         }

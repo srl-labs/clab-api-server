@@ -246,6 +246,43 @@ type CertResponse struct {
 	CSRPath  string `json:"csrPath,omitempty"`  // e.g., "my-root-ca/my-root-ca.csr" or "my-root-ca/node1.example.com.csr"
 }
 
+// VethCreateRequest represents the payload for `clab tools veth create`.
+type VethCreateRequest struct {
+	// Endpoint A definition. Format: <node-name>:<interface-name> OR <kind>:<node-name>:<interface-name>
+	// Example: "clab-demo-node1:eth1" or "bridge:br-1:br-eth1" or "host:veth-eth1"
+	AEndpoint string `json:"aEndpoint" binding:"required" example:"clab-demo-node1:eth1"`
+
+	// Endpoint B definition. Format: <node-name>:<interface-name> OR <kind>:<node-name>:<interface-name>
+	// Example: "clab-demo-node2:eth1" or "ovs-bridge:ovsbr-1:br-eth1"
+	BEndpoint string `json:"bEndpoint" binding:"required" example:"clab-demo-node2:eth1"`
+
+	// MTU for the vEth pair. Defaults to 9500 if omitted.
+	Mtu int `json:"mtu,omitempty" example:"1500"` // Use int, convert to string for command
+}
+
+// --- Structs for VxLAN Tool ---
+
+// VxlanCreateRequest represents the payload for `clab tools vxlan create`.
+type VxlanCreateRequest struct {
+	// Remote VTEP IP address.
+	Remote string `json:"remote" binding:"required" example:"10.0.0.20"`
+
+	// Name of the existing interface in the root namespace to bridge traffic with.
+	Link string `json:"link" binding:"required" example:"srl_e1-1"`
+
+	// VxLAN Network Identifier (VNI). Defaults to 10 if omitted.
+	ID int `json:"id,omitempty" example:"100"`
+
+	// UDP port number for the VxLAN tunnel. Defaults to 4789 if omitted.
+	Port int `json:"port,omitempty" example:"4789"` // Default is 4789 (IANA standard)
+
+	// Optional: Linux device to use for the tunnel source. Auto-detected if omitted.
+	Dev string `json:"dev,omitempty" example:"eth0"`
+
+	// Optional: MTU for the VxLAN interface. Auto-calculated if omitted.
+	Mtu int `json:"mtu,omitempty" example:"1400"`
+}
+
 // --- Structs for Netem Tool ---
 
 // NetemSetRequest represents the parameters for setting network emulation.

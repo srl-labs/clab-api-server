@@ -4,6 +4,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/user"
@@ -360,4 +361,52 @@ func verifyContainerOwnership(c *gin.Context, username, containerName string) (*
 
 	log.Debugf("Ownership confirmed for user '%s' on container '%s' (Owner: '%s').", username, containerName, foundContainer.Owner)
 	return foundContainer, nil // Success
+}
+
+// isValidVethEndpoint checks the basic format of a veth endpoint string.
+// It expects either "name:iface" or "kind:name:iface".
+func isValidVethEndpoint(endpoint string) bool {
+	if endpoint == "" {
+		return false
+	}
+	parts := strings.Split(endpoint, ":")
+	numParts := len(parts)
+
+	if numParts < 2 || numParts > 3 {
+		return false // Must have 2 or 3 parts
+	}
+
+	// Basic validation on parts (allow alphanumeric, hyphen, underscore)
+	// This is not exhaustive but prevents obvious injection issues.
+	nameRegex := regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`) // Allow dots for bridge/host names
+
+	for _, part := range parts {
+		if part == "" || !nameRegex.MatchString(part) {
+			return false
+		}
+	}
+
+	// Check interface name part specifically (last part)
+	if !isValidInterfaceName(parts[numParts-1]) {
+		return false
+	}
+
+	return true
+}
+
+// isValidIPAddress checks if a string is a valid IP address (v4 or v6).
+func isValidIPAddress(ipStr string) bool {
+	return net.ParseIP(ipStr) != nil
+}
+
+// isValidPrefix checks if a string is a plausible interface prefix.
+func isValidPrefix(prefix string) bool {
+	if prefix == "" {
+		return false // Prefix cannot be empty
+	}
+	// Allow alphanumeric, hyphen, underscore. Should not contain path separators.
+	if strings.ContainsAny(prefix, "/\\:") {
+		return false
+	}
+	return regexp.MustCompile(`^[a-zA-Z0-9_-]+$`).MatchString(prefix)
 }

@@ -86,7 +86,12 @@ func SetupRoutes(router *gin.Engine) {
 				certs.POST("/ca", CreateCAHandler)   // POST /api/v1/tools/certs/ca
 				certs.POST("/sign", SignCertHandler) // POST /api/v1/tools/certs/sign
 			}
-			// Excluded: veth, vxlan
+			// --- NEW: vEth Tools (Superuser Only) ---
+			tools.POST("/veth", CreateVethHandler) // POST /api/v1/tools/veth
+
+			// --- NEW: VxLAN Tools (Superuser Only) ---
+			tools.POST("/vxlan", CreateVxlanHandler)   // POST /api/v1/tools/vxlan
+			tools.DELETE("/vxlan", DeleteVxlanHandler) // DELETE
 		}
 	}
 }
