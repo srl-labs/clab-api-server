@@ -417,12 +417,6 @@ func DeployLabArchiveHandler(c *gin.Context) {
 		return
 	}
 
-	if extractionErr != nil {
-		log.Errorf("DeployLab (Archive) failed for user '%s': Error extracting archive '%s': %v", username, filename, extractionErr)
-		_ = os.RemoveAll(targetDir)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to extract archive: %s", extractionErr.Error())})
-		return
-	}
 	// --- Handle Extraction Errors ---
 	if extractionErr != nil {
 		log.Errorf("DeployLab (Archive) failed for user '%s': Error extracting archive '%s': %v", username, filename, extractionErr)
