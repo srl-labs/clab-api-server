@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/user" // <-- Ensure os/user is imported
 	"path/filepath"
-	"strconv"
+	"strconv" // <-- Ensure strconv is imported
 	"strings"
 
 	"github.com/charmbracelet/log"
@@ -92,7 +93,7 @@ func DisableTxOffloadHandler(c *gin.Context) {
 // --- Certificate Handlers ---
 
 // @Summary Create Certificate Authority (CA)
-// @Description Creates a CA certificate and private key. Requires SUPERUSER privileges. Files are stored in a user-specific server directory.
+// @Description Creates a CA certificate and private key. Requires SUPERUSER privileges. Files are stored in the user's ~/.clab/certs/<ca_name>/ directory on the server.
 // @Tags Tools - Certificates
 // @Security BearerAuth
 // @Accept json
@@ -133,35 +134,59 @@ func CreateCAHandler(c *gin.Context) {
 
 	expiry := strings.TrimSpace(req.Expiry)
 	if expiry == "" {
-		expiry = "87600h" // Default expiry
+		expiry = "87600h" // Default expiry (10 years)
 	}
 	if !isValidDurationString(expiry) {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid expiry duration format."})
 		return
 	}
+
 	// Other fields use clab defaults if empty
 
-	// --- Path Handling ---
-	basePath, err := getUserCertBasePath(username)
+	// --- Path Handling & Ownership Setup ---
+	basePath, err := getUserCertBasePath(username) // Get ~/.clab/certs path
 	if err != nil {
 		// Error already logged in helper
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
 		return
 	}
-	// Create a subdirectory for this specific CA's files
+
+	// Get user UID/GID again for Chown operations below
+	usr, lookupErr := user.Lookup(username)
+	uid, uidErr := -1, fmt.Errorf("user lookup failed") // Initialize with error state
+	gid, gidErr := -1, fmt.Errorf("user lookup failed")
+	if lookupErr == nil {
+		uid, uidErr = strconv.Atoi(usr.Uid)
+		gid, gidErr = strconv.Atoi(usr.Gid)
+	}
+	canChown := lookupErr == nil && uidErr == nil && gidErr == nil
+	if !canChown {
+		log.Warnf("CreateCA: Cannot reliably get UID/GID for user '%s'. Ownership of generated files might be incorrect.", username)
+	}
+
+	// Create the specific subdirectory for this CA within the user's cert base path
 	caDir := filepath.Join(basePath, caName)
-	if err := os.MkdirAll(caDir, 0700); err != nil {
+	// Use 0750 or 0700 permissions for the CA directory itself
+	if err := os.MkdirAll(caDir, 0750); err != nil {
 		log.Errorf("Failed to create CA subdirectory '%s': %v", caDir, err)
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to create CA directory"})
 		return
 	}
-	// Note: Ownership setting is tricky and might fail, handled in helper with warning
+
+	// Attempt to set ownership of the specific CA directory
+	if canChown {
+		if err := os.Chown(caDir, uid, gid); err != nil {
+			log.Warnf("Failed to set ownership of CA directory '%s' to user '%s': %v. Continuing...", caDir, username, err)
+		} else {
+			log.Debugf("Set ownership of CA directory '%s' to user '%s'", caDir, username)
+		}
+	}
 
 	// --- Build clab args ---
 	args := []string{"tools", "cert", "ca", "create"}
-	args = append(args, "--path", caDir) // Use the secured, absolute path
+	args = append(args, "--path", caDir) // Use the specific CA directory path
 	args = append(args, "--name", caName)
-	args = append(args, "--expiry", expiry)
+	args = append(args, "--expiry", expiry) // Use the validated expiry
 
 	if req.CommonName != "" {
 		args = append(args, "--cn", req.CommonName)
@@ -179,7 +204,7 @@ func CreateCAHandler(c *gin.Context) {
 		args = append(args, "--ou", req.OrgUnit)
 	}
 
-	log.Infof("Superuser '%s' creating CA '%s' in path '%s'", username, caName, caDir)
+	log.Infof("Superuser '%s' creating CA '%s' in user's path '%s'", username, caName, caDir)
 
 	// --- Execute clab command ---
 	_, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...)
@@ -198,23 +223,42 @@ func CreateCAHandler(c *gin.Context) {
 		return
 	}
 
-	log.Infof("Successfully created CA '%s' for superuser '%s'", caName, username)
+	// --- Attempt to set ownership of generated files ---
+	if canChown {
+		certFilePath := filepath.Join(caDir, caName+".pem")
+		keyFilePath := filepath.Join(caDir, caName+".key")
+		csrFilePath := filepath.Join(caDir, caName+".csr") // clab creates this too
 
-	// Construct relative paths for response
+		for _, fPath := range []string{certFilePath, keyFilePath, csrFilePath} {
+			if _, statErr := os.Stat(fPath); statErr == nil { // Check if file exists before chown
+				if chownErr := os.Chown(fPath, uid, gid); chownErr != nil {
+					log.Warnf("Failed to set ownership of generated file '%s' to user '%s': %v", fPath, username, chownErr)
+				} else {
+					log.Debugf("Set ownership of generated file '%s' to user '%s'", fPath, username)
+				}
+			} else if !os.IsNotExist(statErr) {
+				log.Warnf("Error checking status of generated file '%s' before chown: %v", fPath, statErr)
+			}
+		}
+	}
+
+	log.Infof("Successfully created CA '%s' for superuser '%s' in user directory", caName, username)
+
+	// Construct relative paths for response (relative to the user's cert base dir)
 	certRelPath := filepath.Join(caName, caName+".pem")
 	keyRelPath := filepath.Join(caName, caName+".key")
 	csrRelPath := filepath.Join(caName, caName+".csr")
 
 	c.JSON(http.StatusOK, models.CertResponse{
-		Message:  fmt.Sprintf("CA '%s' created successfully.", caName),
-		CertPath: certRelPath,
+		Message:  fmt.Sprintf("CA '%s' created successfully in user's cert directory.", caName),
+		CertPath: certRelPath, // These relative paths are correct
 		KeyPath:  keyRelPath,
 		CSRPath:  csrRelPath,
 	})
 }
 
 // @Summary Sign Certificate
-// @Description Creates a certificate/key and signs it with a previously generated CA. Requires SUPERUSER privileges. Files are stored relative to the CA's directory.
+// @Description Creates a certificate/key and signs it with a previously generated CA. Requires SUPERUSER privileges. Files are stored in the user's ~/.clab/certs/<ca_name>/ directory.
 // @Tags Tools - Certificates
 // @Security BearerAuth
 // @Accept json
@@ -257,6 +301,7 @@ func SignCertHandler(c *gin.Context) {
 	}
 	if len(req.Hosts) == 0 {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "At least one host (SAN) is required."})
+		return // Added return
 	}
 	// Basic validation for hosts - prevent obvious issues
 	for _, h := range req.Hosts {
@@ -280,13 +325,26 @@ func SignCertHandler(c *gin.Context) {
 		commonName = certName // Default CN to cert name
 	}
 
-	// --- Path Handling ---
-	basePath, err := getUserCertBasePath(username)
+	// --- Path Handling & Ownership Info ---
+	basePath, err := getUserCertBasePath(username) // Get ~/.clab/certs path
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
 		return
 	}
-	// Certs are stored *within* the specified CA's subdirectory
+
+	usr, lookupErr := user.Lookup(username)
+	uid, uidErr := -1, fmt.Errorf("user lookup failed") // Initialize with error state
+	gid, gidErr := -1, fmt.Errorf("user lookup failed")
+	if lookupErr == nil {
+		uid, uidErr = strconv.Atoi(usr.Uid)
+		gid, gidErr = strconv.Atoi(usr.Gid)
+	}
+	canChown := lookupErr == nil && uidErr == nil && gidErr == nil
+	if !canChown {
+		log.Warnf("SignCert: Cannot reliably get UID/GID for user '%s'. Ownership of generated files might be incorrect.", username)
+	}
+
+	// Certs are stored *within* the specified CA's subdirectory in the user's home
 	caDir := filepath.Join(basePath, caName)
 	caCertPath := filepath.Join(caDir, caName+".pem")
 	caKeyPath := filepath.Join(caDir, caName+".key")
@@ -294,24 +352,24 @@ func SignCertHandler(c *gin.Context) {
 	// Check if CA files exist before proceeding
 	if _, err := os.Stat(caCertPath); os.IsNotExist(err) {
 		log.Warnf("SignCert failed for user '%s': CA certificate not found at '%s'", username, caCertPath)
-		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("CA '%s' certificate not found.", caName)})
+		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("CA '%s' certificate not found in user's cert directory.", caName)})
 		return
 	}
 	if _, err := os.Stat(caKeyPath); os.IsNotExist(err) {
 		log.Warnf("SignCert failed for user '%s': CA key not found at '%s'", username, caKeyPath)
-		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("CA '%s' key not found.", caName)})
+		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("CA '%s' key not found in user's cert directory.", caName)})
 		return
 	}
 
 	// Output path for the new cert/key is the CA directory
-	outputPath := caDir
+	outputPath := caDir // clab will write the new cert/key/csr into this directory
 
 	// --- Build clab args ---
 	args := []string{"tools", "cert", "sign"}
-	args = append(args, "--path", outputPath) // Output directory
-	args = append(args, "--name", certName)   // Base name for new files
-	args = append(args, "--ca-cert", caCertPath)
-	args = append(args, "--ca-key", caKeyPath)
+	args = append(args, "--path", outputPath)    // Directory where new cert/key/csr are created
+	args = append(args, "--name", certName)      // Base name for new files
+	args = append(args, "--ca-cert", caCertPath) // Path to existing CA cert
+	args = append(args, "--ca-key", caKeyPath)   // Path to existing CA key
 	args = append(args, "--hosts", hostsStr)
 	args = append(args, "--cn", commonName)
 	args = append(args, "--key-size", strconv.Itoa(keySize))
@@ -329,7 +387,7 @@ func SignCertHandler(c *gin.Context) {
 		args = append(args, "--ou", req.OrgUnit)
 	}
 
-	log.Infof("Superuser '%s' signing certificate '%s' using CA '%s' in path '%s'", username, certName, caName, outputPath)
+	log.Infof("Superuser '%s' signing certificate '%s' using CA '%s' in user's path '%s'", username, certName, caName, outputPath)
 
 	// --- Execute clab command ---
 	_, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...)
@@ -347,16 +405,35 @@ func SignCertHandler(c *gin.Context) {
 		return
 	}
 
-	log.Infof("Successfully signed certificate '%s' using CA '%s' for superuser '%s'", certName, caName, username)
+	// --- Attempt to set ownership of newly generated files ---
+	if canChown {
+		certFilePath := filepath.Join(outputPath, certName+".pem")
+		keyFilePath := filepath.Join(outputPath, certName+".key")
+		csrFilePath := filepath.Join(outputPath, certName+".csr")
 
-	// Construct relative paths for response
+		for _, fPath := range []string{certFilePath, keyFilePath, csrFilePath} {
+			if _, statErr := os.Stat(fPath); statErr == nil { // Check if file exists
+				if chownErr := os.Chown(fPath, uid, gid); chownErr != nil {
+					log.Warnf("Failed to set ownership of generated file '%s' to user '%s': %v", fPath, username, chownErr)
+				} else {
+					log.Debugf("Set ownership of generated file '%s' to user '%s'", fPath, username)
+				}
+			} else if !os.IsNotExist(statErr) {
+				log.Warnf("Error checking status of generated file '%s' before chown: %v", fPath, statErr)
+			}
+		}
+	}
+
+	log.Infof("Successfully signed certificate '%s' using CA '%s' for superuser '%s' in user directory", certName, caName, username)
+
+	// Construct relative paths for response (relative to user's cert base dir)
 	certRelPath := filepath.Join(caName, certName+".pem")
 	keyRelPath := filepath.Join(caName, certName+".key")
 	csrRelPath := filepath.Join(caName, certName+".csr")
 
 	c.JSON(http.StatusOK, models.CertResponse{
-		Message:  fmt.Sprintf("Certificate '%s' signed successfully by CA '%s'.", certName, caName),
-		CertPath: certRelPath,
+		Message:  fmt.Sprintf("Certificate '%s' signed successfully by CA '%s' in user's cert directory.", certName, caName),
+		CertPath: certRelPath, // These relative paths are correct
 		KeyPath:  keyRelPath,
 		CSRPath:  csrRelPath,
 	})

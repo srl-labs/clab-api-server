@@ -9,6 +9,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time" // Needed for duration parsing
 
@@ -144,21 +145,43 @@ func isSuperuser(username string) bool {
 	return inGroup
 }
 
-// Helper to get and ensure the base directory for user certificates
+// Helper to get and ensure the base directory for user certificates IN THE USER'S HOME.
+// Attempts to set ownership of the base directory to the user.
 func getUserCertBasePath(username string) (string, error) {
 	usr, err := user.Lookup(username)
 	if err != nil {
 		log.Errorf("Cannot get user details for '%s': %v", username, err)
-		return "", fmt.Errorf("could not retrieve user details")
+		return "", fmt.Errorf("could not retrieve user details for '%s'", username)
 	}
 
-	basePath := filepath.Join(usr.HomeDir, ".clab-api", "certs", username)
+	// --- NEW PATH: Use user's home directory ---
+	// Store certs under ~/.clab/certs (consistent with potential user clab usage)
+	basePath := filepath.Join(usr.HomeDir, ".clab", "certs")
 
 	// Create directory if it doesn't exist
-	// Use 0700 permissions: only user can read/write/execute
-	if err := os.MkdirAll(basePath, 0700); err != nil {
-		log.Errorf("Failed to create cert directory '%s': %v", basePath, err)
-		return "", fmt.Errorf("failed to create certificate directory")
+	// Use 0750: User rwx, Group rx, Other --- (adjust if stricter 0700 is needed)
+	if err := os.MkdirAll(basePath, 0750); err != nil {
+		log.Errorf("Failed to create cert base directory '%s': %v", basePath, err)
+		return "", fmt.Errorf("failed to create certificate base directory")
+	}
+
+	// --- Attempt to set ownership to the user ---
+	uid, uidErr := strconv.Atoi(usr.Uid)
+	gid, gidErr := strconv.Atoi(usr.Gid)
+
+	if uidErr != nil || gidErr != nil {
+		log.Warnf("Could not parse UID/GID for user '%s' (%s/%s). Cannot set ownership for cert directory '%s'. Files might be owned by API server user.", username, usr.Uid, usr.Gid, basePath)
+		// Continue, but ownership will be wrong if the API user isn't the target user
+	} else {
+		// Attempt to change ownership of the base directory
+		if err := os.Chown(basePath, uid, gid); err != nil {
+			// This might fail if the API server user (e.g., root) doesn't have permission
+			// to chown files in the target user's home directory, or if filesystem restrictions apply.
+			log.Warnf("Failed to set ownership of cert base directory '%s' to user '%s' (uid:%d, gid:%d): %v. Certificate operations might proceed but file ownership may be incorrect.", basePath, username, uid, gid, err)
+			// Do not return an error here, allow the operation to proceed but log the warning.
+		} else {
+			log.Debugf("Successfully set ownership of cert base directory '%s' to user '%s'", basePath, username)
+		}
 	}
 
 	return basePath, nil

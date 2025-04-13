@@ -863,7 +863,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Creates a CA certificate and private key. Requires SUPERUSER privileges. Files are stored in a user-specific server directory.",
+                "description": "Creates a CA certificate and private key. Requires SUPERUSER privileges. Files are stored in the user's ~/.clab/certs/\u003cca_name\u003e/ directory on the server.",
                 "consumes": [
                     "application/json"
                 ],
@@ -926,7 +926,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Creates a certificate/key and signs it with a previously generated CA. Requires SUPERUSER privileges. Files are stored relative to the CA's directory.",
+                "description": "Creates a certificate/key and signs it with a previously generated CA. Requires SUPERUSER privileges. Files are stored in the user's ~/.clab/certs/\u003cca_name\u003e/ directory.",
                 "consumes": [
                     "application/json"
                 ],

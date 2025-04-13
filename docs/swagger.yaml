@@ -1059,7 +1059,7 @@ paths:
       consumes:
       - application/json
       description: Creates a CA certificate and private key. Requires SUPERUSER privileges.
-        Files are stored in a user-specific server directory.
+        Files are stored in the user's ~/.clab/certs/<ca_name>/ directory on the server.
       parameters:
       - description: CA Generation Parameters
         in: body
@@ -1100,7 +1100,8 @@ paths:
       consumes:
       - application/json
       description: Creates a certificate/key and signs it with a previously generated
-        CA. Requires SUPERUSER privileges. Files are stored relative to the CA's directory.
+        CA. Requires SUPERUSER privileges. Files are stored in the user's ~/.clab/certs/<ca_name>/
+        directory.
       parameters:
       - description: Certificate Signing Parameters
         in: body
