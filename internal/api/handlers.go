@@ -9,6 +9,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/log"
@@ -76,8 +77,8 @@ func LoginHandler(c *gin.Context) {
 }
 
 // @Summary Deploy Lab
-// @Description Deploys a containerlab topology, saving the file to the user's ~/.clab/<labname>/ directory.
-// @Description **Requires API server user to have write permissions in authenticated user's home directory.**
+// @Description Deploys a containerlab topology, saving the file to the user's ~/.clab/<labname>/ directory and setting ownership to the authenticated user.
+// @Description **Requires the API server process to run with privileges (e.g., as root or via sudo) sufficient to change file ownership (chown).**
 // @Tags Labs
 // @Security BearerAuth
 // @Accept json
@@ -86,7 +87,7 @@ func LoginHandler(c *gin.Context) {
 // @Success 200 {object} object "Raw JSON output from 'clab deploy' (or plain text on error)"
 // @Failure 400 {object} models.ErrorResponse "Invalid input (e.g., empty/invalid topology, missing name, invalid lab name)"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
-// @Failure 500 {object} models.ErrorResponse "Internal server error (e.g., permission denied, clab execution failed)"
+// @Failure 500 {object} models.ErrorResponse "Internal server error (e.g., permission denied for chown, clab execution failed)"
 // @Router /api/v1/labs [post]
 func DeployLabHandler(c *gin.Context) {
 	username := c.GetString("username") // Authenticated user
@@ -105,14 +106,27 @@ func DeployLabHandler(c *gin.Context) {
 		return
 	}
 
-	// --- Get User Home Directory ---
+	// --- Get User Home Directory AND UID/GID ---
 	usr, err := user.Lookup(username)
 	if err != nil {
-		log.Errorf("DeployLab failed for user '%s': Could not find user's home directory: %v", username, err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Could not determine user's home directory."})
+		log.Errorf("DeployLab failed for user '%s': Could not find user details: %v", username, err)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Could not determine user details."})
 		return
 	}
 	homeDir := usr.HomeDir
+	uid, err := strconv.Atoi(usr.Uid)
+	if err != nil {
+		log.Errorf("DeployLab failed for user '%s': Could not convert UID '%s' to int: %v", username, usr.Uid, err)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Could not process user UID."})
+		return
+	}
+	gid, err := strconv.Atoi(usr.Gid)
+	if err != nil {
+		log.Errorf("DeployLab failed for user '%s': Could not convert GID '%s' to int: %v", username, usr.Gid, err)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Could not process user GID."})
+		return
+	}
+	log.Debugf("DeployLab user '%s': Found user details (uid: %d, gid: %d, home: %s)", username, uid, gid, homeDir)
 
 	// --- Parse Topology to Extract Lab Name ---
 	var topoData map[string]interface{}
@@ -151,27 +165,48 @@ func DeployLabHandler(c *gin.Context) {
 	targetFilePath := filepath.Join(targetDir, labName+".clab.yml") // Standard naming convention
 
 	// --- Create Directory ---
-	// Permissions 0750: user(rwx), group(rx), other(-)
-	// The API server user will own this directory.
+	// Permissions 0750: user(rwx), group(rx), other(-) initially set by API server user
 	log.Debugf("DeployLab user '%s': Ensuring directory exists: '%s'", username, targetDir)
 	err = os.MkdirAll(targetDir, 0750)
 	if err != nil {
-		log.Errorf("DeployLab failed for user '%s': Failed to create directory '%s': %v. Check API server permissions.", username, targetDir, err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to create lab directory: %s. Check API server permissions.", err.Error())})
+		log.Errorf("DeployLab failed for user '%s': Failed to create directory '%s': %v.", username, targetDir, err)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to create lab directory: %s.", err.Error())})
 		return
 	}
-	log.Warnf("API server user created/ensured directory '%s' in user '%s' home. Ensure API server has correct permissions.", targetDir, username)
+
+	// --- Change Directory Ownership ---
+	log.Debugf("DeployLab user '%s': Setting ownership of directory '%s' to uid %d, gid %d", username, targetDir, uid, gid)
+	err = os.Chown(targetDir, uid, gid)
+	if err != nil {
+		log.Errorf("DeployLab failed for user '%s': Failed to chown directory '%s' to uid %d, gid %d: %v. Check API server privileges.", username, targetDir, uid, gid, err)
+		// Clean up the potentially wrongly-owned directory? Maybe not, could contain previous user data if MkdirAll didn't create it.
+		// For now, fail the request as ownership is critical.
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to set ownership on lab directory: %s. API server requires privileges (e.g., run as root).", err.Error())})
+		return
+	}
+	log.Infof("Set ownership of directory '%s' to user '%s' (uid %d, gid %d)", targetDir, username, uid, gid)
 
 	// --- Write Topology File ---
-	// Permissions 0640: user(rw), group(r), other(-)
+	// Permissions 0640: user(rw), group(r), other(-) initially set by API server user
 	log.Debugf("DeployLab user '%s': Writing topology file: '%s'", username, targetFilePath)
 	err = os.WriteFile(targetFilePath, []byte(trimmedContent), 0640)
 	if err != nil {
-		log.Errorf("DeployLab failed for user '%s': Failed to write topology file '%s': %v. Check API server permissions.", username, targetFilePath, err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to write topology file: %s. Check API server permissions.", err.Error())})
+		log.Errorf("DeployLab failed for user '%s': Failed to write topology file '%s': %v.", username, targetFilePath, err)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to write topology file: %s.", err.Error())})
 		return
 	}
-	log.Infof("Saved topology for user '%s' lab '%s' to '%s'", username, labName, targetFilePath)
+
+	// --- Change File Ownership ---
+	log.Debugf("DeployLab user '%s': Setting ownership of file '%s' to uid %d, gid %d", username, targetFilePath, uid, gid)
+	err = os.Chown(targetFilePath, uid, gid)
+	if err != nil {
+		log.Errorf("DeployLab failed for user '%s': Failed to chown file '%s' to uid %d, gid %d: %v. Check API server privileges.", username, targetFilePath, uid, gid, err)
+		// Clean up the wrongly-owned file?
+		_ = os.Remove(targetFilePath) // Attempt cleanup, ignore error
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to set ownership on topology file: %s. API server requires privileges (e.g., run as root).", err.Error())})
+		return
+	}
+	log.Infof("Saved topology and set ownership for user '%s' lab '%s' to '%s'", username, labName, targetFilePath)
 
 	// --- Execute clab deploy ---
 	// Use the persistent file path.
@@ -189,7 +224,7 @@ func DeployLabHandler(c *gin.Context) {
 		if stderr != "" {
 			errMsg += "\nstderr: " + stderr
 		}
-		// Don't automatically delete the written file on deploy failure, user might want it.
+		// File ownership was set correctly, but deploy failed. Leave the file.
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: errMsg})
 		return
 	}

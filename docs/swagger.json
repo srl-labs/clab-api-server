@@ -63,7 +63,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Deploys a containerlab topology, saving the file to the user's ~/.clab/\u003clabname\u003e/ directory.\n**Requires API server user to have write permissions in authenticated user's home directory.**",
+                "description": "Deploys a containerlab topology, saving the file to the user's ~/.clab/\u003clabname\u003e/ directory and setting ownership to the authenticated user.\n**Requires the API server process to run with privileges (e.g., as root or via sudo) sufficient to change file ownership (chown).**",
                 "consumes": [
                     "application/json"
                 ],
@@ -105,7 +105,7 @@
                         }
                     },
                     "500": {
-                        "description": "Internal server error (e.g., permission denied, clab execution failed)",
+                        "description": "Internal server error (e.g., permission denied for chown, clab execution failed)",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }

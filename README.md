@@ -165,8 +165,7 @@ Authorization: Bearer <your_jwt_token>
 - Creates and manages files in `~/.clab/<labname>/` directories
 - Directory permissions: 0750 (rwxr-x---)
 - File permissions: 0640 (rw-r-----)
-- All files owned by API server user, not authenticated users 
-- Permission will be changes soon, files should belong to the users
+- All files owned by by the authenticated users 
 
 ## Security Considerations
 
