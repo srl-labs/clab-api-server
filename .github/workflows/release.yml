@@ -23,40 +23,36 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24' # Adjust if needed
+          go-version: '1.24' 
 
-      # Install dependencies based on the target architecture
       - name: Install build dependencies (amd64)
-        if: matrix.goarch == 'amd64'
+        if: ${{ matrix.goarch == 'amd64' }}
         run: |
           sudo apt-get update -y
-          # Standard build tools and PAM dev libs for native amd64 build
           sudo apt-get install -y build-essential libpam0g-dev
 
       - name: Install build dependencies (arm64 cross)
-        if: matrix.goarch == 'arm64'
+        if: ${{ matrix.goarch == 'arm64' }}
         run: |
+          # Add support for ARM64 packages
+          sudo dpkg --add-architecture arm64
           sudo apt-get update -y
-          # Standard build tools + ARM64 cross-compiler + ARM64 C libs + ARM64 PAM dev libs
-          sudo apt-get install -y build-essential gcc-aarch64-linux-gnu libc6-dev-arm64-cross libpam0g-dev-arm64-cross
+          # Install standard build tools, ARM64 cross-compiler, C libraries and PAM dev headers for ARM64
+          sudo apt-get install -y build-essential gcc-aarch64-linux-gnu libc6-dev-arm64-cross libpam0g-dev:arm64
 
-      # Build the binary, explicitly setting the C compiler for cross-compilation
       - name: Build binary (${{ matrix.goos }}/${{ matrix.goarch }})
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
-          # Set CC environment variable for CGo to use the correct cross-compiler when targeting arm64
-          # For amd64, CC will be empty, letting Go find the default gcc installed by build-essential
+          # Use the ARM64 cross-compiler when building for arm64; default for amd64
           CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || '' }}
         run: |
           BINARY_NAME="clab-api-server-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}"
           echo "Building $BINARY_NAME..."
-          # Build the binary
           go build -v -ldflags="-s -w" -o $BINARY_NAME ./cmd/server
           echo "Build complete: $BINARY_NAME"
 
-      # Upload the built binary as a release asset
       - name: Upload Release Asset (${{ matrix.goos }}/${{ matrix.goarch }})
         uses: actions/upload-release-asset@v1
         env:
