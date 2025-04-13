@@ -212,6 +212,104 @@
                 }
             }
         },
+        "/api/v1/labs/archive": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Deploys a containerlab topology provided as a .zip or .tar.gz archive. The archive must contain the .clab.yml file and any necessary bind-mount files/directories.\nThe lab name is taken from the 'labName' query parameter. The archive is extracted to the user's ~/.clab/\u003clabName\u003e/ directory.",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Labs"
+                ],
+                "summary": "Deploy Lab from Archive",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "Lab archive (.zip or .tar.gz) containing topology file and bind mounts.",
+                        "name": "labArchive",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Name for the lab. This determines the extraction directory (~/.clab/\u003clabName\u003e).",
+                        "name": "labName",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Destroy lab and clean directory before deploying (default: false).",
+                        "name": "reconfigure",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Limit concurrent workers (0 or omit for default).",
+                        "name": "maxWorkers",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Custom Go template file for topology data export ('__full' for full export).",
+                        "name": "exportTemplate",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Comma-separated list of node names to deploy.",
+                        "name": "nodeFilter",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Skip post-deploy actions defined for nodes (default: false).",
+                        "name": "skipPostDeploy",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Skip setting extended ACLs on lab directory (default: false).",
+                        "name": "skipLabdirAcl",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Raw JSON output from 'clab deploy' (or plain text on error)",
+                        "schema": {
+                            "type": "object"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid input (e.g., missing archive, invalid labName, invalid archive format, missing topology file in archive)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error (e.g., file system errors, extraction errors, clab execution failed)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/labs/{labName}": {
             "get": {
                 "security": [

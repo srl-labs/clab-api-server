@@ -1130,6 +1130,76 @@ paths:
       summary: Save Lab Configuration
       tags:
       - Labs
+  /api/v1/labs/archive:
+    post:
+      consumes:
+      - multipart/form-data
+      description: |-
+        Deploys a containerlab topology provided as a .zip or .tar.gz archive. The archive must contain the .clab.yml file and any necessary bind-mount files/directories.
+        The lab name is taken from the 'labName' query parameter. The archive is extracted to the user's ~/.clab/<labName>/ directory.
+      parameters:
+      - description: Lab archive (.zip or .tar.gz) containing topology file and bind
+          mounts.
+        in: formData
+        name: labArchive
+        required: true
+        type: file
+      - description: Name for the lab. This determines the extraction directory (~/.clab/<labName>).
+        in: query
+        name: labName
+        required: true
+        type: string
+      - description: 'Destroy lab and clean directory before deploying (default: false).'
+        in: query
+        name: reconfigure
+        type: boolean
+      - description: Limit concurrent workers (0 or omit for default).
+        in: query
+        name: maxWorkers
+        type: integer
+      - description: Custom Go template file for topology data export ('__full' for
+          full export).
+        in: query
+        name: exportTemplate
+        type: string
+      - description: Comma-separated list of node names to deploy.
+        in: query
+        name: nodeFilter
+        type: string
+      - description: 'Skip post-deploy actions defined for nodes (default: false).'
+        in: query
+        name: skipPostDeploy
+        type: boolean
+      - description: 'Skip setting extended ACLs on lab directory (default: false).'
+        in: query
+        name: skipLabdirAcl
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Raw JSON output from 'clab deploy' (or plain text on error)
+          schema:
+            type: object
+        "400":
+          description: Invalid input (e.g., missing archive, invalid labName, invalid
+            archive format, missing topology file in archive)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error (e.g., file system errors, extraction
+            errors, clab execution failed)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Deploy Lab from Archive
+      tags:
+      - Labs
   /api/v1/tools/certs/ca:
     post:
       consumes:

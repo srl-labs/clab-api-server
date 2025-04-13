@@ -26,8 +26,11 @@ func SetupRoutes(router *gin.Engine) {
 		// Lab management routes
 		labs := apiV1.Group("/labs")
 		{
-			// Deploy new lab
+			// Deploy new lab (JSON/URL method)
 			labs.POST("", DeployLabHandler) // POST /api/v1/labs
+
+			// Deploy new lab (Archive method) - NEW
+			labs.POST("/archive", DeployLabArchiveHandler) // POST /api/v1/labs/archive
 
 			// List labs for user
 			labs.GET("", ListLabsHandler) // GET /api/v1/labs

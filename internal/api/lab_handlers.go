@@ -3,6 +3,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -265,6 +266,250 @@ func DeployLabHandler(c *gin.Context) {
 	var result interface{}
 	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
 		log.Warnf("DeployLab user '%s', lab '%s': Output from clab was not valid JSON: %v. Returning as plain text.", username, labName, err)
+		// Check if the non-JSON output indicates an error
+		if strings.Contains(stdout, "level=error") || strings.Contains(stdout, "failed") {
+			c.JSON(http.StatusInternalServerError, gin.H{"output": stdout, "warning": "Deployment finished but output indicates errors and was not valid JSON"})
+		} else {
+			c.JSON(http.StatusOK, gin.H{"output": stdout, "warning": "Output was not valid JSON"})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+// @Summary Deploy Lab from Archive
+// @Description Deploys a containerlab topology provided as a .zip or .tar.gz archive. The archive must contain the .clab.yml file and any necessary bind-mount files/directories.
+// @Description The lab name is taken from the 'labName' query parameter. The archive is extracted to the user's ~/.clab/<labName>/ directory.
+// @Tags Labs
+// @Security BearerAuth
+// @Accept multipart/form-data
+// @Produce json
+// @Param labArchive formData file true "Lab archive (.zip or .tar.gz) containing topology file and bind mounts."
+// @Param labName query string true "Name for the lab. This determines the extraction directory (~/.clab/<labName>)." example="my-archived-lab"
+// @Param reconfigure query boolean false "Destroy lab and clean directory before deploying (default: false)." example="true"
+// @Param maxWorkers query int false "Limit concurrent workers (0 or omit for default)." example="4"
+// @Param exportTemplate query string false "Custom Go template file for topology data export ('__full' for full export)." example="__full"
+// @Param nodeFilter query string false "Comma-separated list of node names to deploy." example="srl1,router2"
+// @Param skipPostDeploy query boolean false "Skip post-deploy actions defined for nodes (default: false)." example="false"
+// @Param skipLabdirAcl query boolean false "Skip setting extended ACLs on lab directory (default: false)." example="true"
+// @Success 200 {object} object "Raw JSON output from 'clab deploy' (or plain text on error)"
+// @Failure 400 {object} models.ErrorResponse "Invalid input (e.g., missing archive, invalid labName, invalid archive format, missing topology file in archive)"
+// @Failure 401 {object} models.ErrorResponse "Unauthorized"
+// @Failure 500 {object} models.ErrorResponse "Internal server error (e.g., file system errors, extraction errors, clab execution failed)"
+// @Router /api/v1/labs/archive [post]
+func DeployLabArchiveHandler(c *gin.Context) {
+	username := c.GetString("username")
+
+	// --- Get User Details (uid, gid, homeDir) ---
+	usr, err := user.Lookup(username)
+	if err != nil {
+		log.Errorf("DeployLab (Archive) failed for user '%s': Could not determine user details: %v", username, err)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Could not determine user details."})
+		return
+	}
+	uid, uidErr := strconv.Atoi(usr.Uid)
+	gid, gidErr := strconv.Atoi(usr.Gid)
+	if uidErr != nil || gidErr != nil {
+		log.Errorf("DeployLab (Archive) failed for user '%s': Could not process user UID/GID: %v / %v", username, uidErr, gidErr)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Could not process user UID/GID."})
+		return
+	}
+	homeDir := usr.HomeDir
+
+	// --- Get Lab Name (Required Query Parameter) ---
+	labName := c.Query("labName")
+	if labName == "" {
+		log.Warnf("DeployLab (Archive) failed for user '%s': Missing required 'labName' query parameter", username)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Missing required 'labName' query parameter."})
+		return
+	}
+	if !isValidLabName(labName) {
+		log.Warnf("DeployLab (Archive) failed for user '%s': Invalid characters in labName query param '%s'", username, labName)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in 'labName' query parameter."})
+		return
+	}
+	log.Debugf("DeployLab (Archive) user '%s': Preparing lab '%s'", username, labName)
+
+	// --- Get & Validate Optional Query Parameters ---
+	reconfigure := c.Query("reconfigure") == "true"
+	maxWorkersStr := c.DefaultQuery("maxWorkers", "0")
+	exportTemplate := c.Query("exportTemplate")
+	nodeFilter := c.Query("nodeFilter")
+	skipPostDeploy := c.Query("skipPostDeploy") == "true"
+	skipLabdirAcl := c.Query("skipLabdirAcl") == "true"
+
+	// Validate query param values
+	if !isValidNodeFilter(nodeFilter) {
+		log.Warnf("DeployLab (Archive) failed for user '%s', lab '%s': Invalid nodeFilter '%s'", username, labName, nodeFilter)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in 'nodeFilter' query parameter."})
+		return
+	}
+	if !isValidExportTemplate(exportTemplate) {
+		log.Warnf("DeployLab (Archive) failed for user '%s', lab '%s': Invalid exportTemplate '%s'", username, labName, exportTemplate)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid 'exportTemplate' query parameter."})
+		return
+	}
+	maxWorkers, err := strconv.Atoi(maxWorkersStr)
+	if err != nil || maxWorkers < 0 {
+		log.Warnf("DeployLab (Archive) failed for user '%s', lab '%s': Invalid maxWorkers '%s'", username, labName, maxWorkersStr)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid 'maxWorkers' query parameter: must be a non-negative integer."})
+		return
+	}
+
+	// --- Prepare Target Directory ---
+	targetDir := filepath.Join(homeDir, ".clab", labName)
+	// Clean up existing directory if reconfigure is true *before* extraction
+	if reconfigure {
+		log.Infof("DeployLab (Archive) user '%s': Reconfigure requested. Removing existing directory '%s' before extraction.", username, targetDir)
+		if err := os.RemoveAll(targetDir); err != nil {
+			log.Warnf("DeployLab (Archive) user '%s': Failed to remove existing directory '%s' during reconfigure: %v. Continuing...", username, targetDir, err)
+			// Don't necessarily fail here, MkdirAll might still work or handle it.
+		}
+	}
+
+	if err := os.MkdirAll(targetDir, 0750); err != nil {
+		log.Errorf("DeployLab (Archive) failed for user '%s': Failed to create lab directory '%s': %v", username, targetDir, err)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to create lab directory."})
+		return
+	}
+	if err := os.Chown(targetDir, uid, gid); err != nil {
+		// Log warning but continue. Extraction might still work if API user has permissions.
+		log.Warnf("DeployLab (Archive) user '%s': Failed to set ownership on lab directory '%s': %v. Continuing...", username, targetDir, err)
+	} else {
+		log.Debugf("DeployLab (Archive) user '%s': Ensured lab directory '%s' exists with correct ownership.", username, targetDir)
+	}
+
+	// --- Process Uploaded Archive ---
+	fileHeader, err := c.FormFile("labArchive") // Field name in the multipart form
+	if err != nil {
+		if err == http.ErrMissingFile {
+			log.Warnf("DeployLab (Archive) failed for user '%s': Missing 'labArchive' file in request", username)
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Missing 'labArchive' file in multipart form data."})
+		} else {
+			log.Warnf("DeployLab (Archive) failed for user '%s': Error retrieving 'labArchive' file: %v", username, err)
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Error retrieving 'labArchive' file: " + err.Error()})
+		}
+		return
+	}
+
+	// --- Open the uploaded file ---
+	archiveFile, err := fileHeader.Open()
+	if err != nil {
+		log.Errorf("DeployLab (Archive) failed for user '%s': Cannot open uploaded archive '%s': %v", username, fileHeader.Filename, err)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Cannot open uploaded archive."})
+		return
+	}
+	defer archiveFile.Close()
+
+	// --- Detect Type and Extract ---
+	filename := fileHeader.Filename
+	log.Infof("DeployLab (Archive) user '%s': Received archive '%s', size %d. Extracting to '%s'", username, filename, fileHeader.Size, targetDir)
+
+	extractionErr := errors.New("unsupported archive format") // Default error
+
+	if strings.HasSuffix(strings.ToLower(filename), ".zip") {
+		// Pass archiveFile directly (it implements io.ReaderAt)
+		extractionErr = extractZip(archiveFile, fileHeader.Size, targetDir, uid, gid)
+	} else if strings.HasSuffix(strings.ToLower(filename), ".tar.gz") || strings.HasSuffix(strings.ToLower(filename), ".tgz") {
+		extractionErr = extractTarGz(archiveFile, targetDir, uid, gid)
+	} else {
+		log.Warnf("DeployLab (Archive) failed for user '%s': Unsupported archive format for file '%s'", username, filename)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: fmt.Sprintf("Unsupported archive format: %s. Use .zip or .tar.gz.", filename)})
+		return
+	}
+
+	// --- Handle Extraction Errors ---
+	if extractionErr != nil {
+		log.Errorf("DeployLab (Archive) failed for user '%s': Error extracting archive '%s': %v", username, filename, extractionErr)
+		// Attempt to clean up partially extracted directory
+		_ = os.RemoveAll(targetDir)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to extract archive: %s", extractionErr.Error())})
+		return
+	}
+	log.Infof("DeployLab (Archive) user '%s': Successfully extracted archive '%s' to '%s'", username, filename, targetDir)
+
+	// --- Find Topology File within extracted directory ---
+	topoPathForClab := ""
+	// First, look for a file named exactly <labName>.clab.yml
+	expectedTopoPath := filepath.Join(targetDir, labName+".clab.yml")
+	if _, err := os.Stat(expectedTopoPath); err == nil {
+		topoPathForClab = expectedTopoPath
+		log.Debugf("DeployLab (Archive) user '%s': Found topology file matching lab name: '%s'", username, topoPathForClab)
+	} else {
+		// If not found, search for the first *.clab.yml or *.clab.yaml file in the root of targetDir
+		entries, readErr := os.ReadDir(targetDir)
+		if readErr != nil {
+			log.Errorf("DeployLab (Archive) failed for user '%s': Cannot read extracted directory '%s': %v", username, targetDir, readErr)
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to read extracted lab directory."})
+			_ = os.RemoveAll(targetDir)
+			return
+		}
+		for _, entry := range entries {
+			entryNameLower := strings.ToLower(entry.Name())
+			if !entry.IsDir() && (strings.HasSuffix(entryNameLower, ".clab.yml") || strings.HasSuffix(entryNameLower, ".clab.yaml")) {
+				topoPathForClab = filepath.Join(targetDir, entry.Name())
+				log.Debugf("DeployLab (Archive) user '%s': Found topology file by suffix: '%s'", username, topoPathForClab)
+				break // Use the first one found
+			}
+		}
+	}
+
+	if topoPathForClab == "" {
+		log.Errorf("DeployLab (Archive) failed for user '%s': No '*.clab.yml' or '*.clab.yaml' file found in the root of the extracted archive in '%s'.", username, targetDir)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "No '*.clab.yml' or '*.clab.yaml' file found in the root of the archive."})
+		_ = os.RemoveAll(targetDir)
+		return
+	}
+
+	// --- Construct clab deploy args ---
+	args := []string{"deploy", "--topo", topoPathForClab, "--format", "json"}
+	// Add optional flags
+	if reconfigure {
+		// Note: We already removed the dir, but --reconfigure tells clab to also remove containers first
+		args = append(args, "--reconfigure")
+	}
+	if maxWorkers > 0 {
+		args = append(args, "--max-workers", strconv.Itoa(maxWorkers))
+	}
+	if exportTemplate != "" {
+		args = append(args, "--export-template", exportTemplate)
+	}
+	if nodeFilter != "" {
+		args = append(args, "--node-filter", nodeFilter)
+	}
+	if skipPostDeploy {
+		args = append(args, "--skip-post-deploy")
+	}
+	if skipLabdirAcl {
+		args = append(args, "--skip-labdir-acl")
+	}
+
+	// --- Execute clab deploy ---
+	log.Infof("DeployLab (Archive) user '%s': Executing clab deploy for lab '%s' using topology '%s'...", username, labName, topoPathForClab)
+	stdout, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...)
+
+	// --- Handle command execution results ---
+	if stderr != "" {
+		log.Warnf("DeployLab (Archive) user '%s', lab '%s': clab deploy stderr: %s", username, labName, stderr)
+	}
+	if err != nil {
+		log.Errorf("DeployLab (Archive) failed for user '%s', lab '%s': clab deploy command execution error: %v", username, labName, err)
+		errMsg := fmt.Sprintf("Failed to deploy lab '%s' from archive: %s", labName, err.Error())
+		if stderr != "" && (strings.Contains(stderr, "level=error") || strings.Contains(stderr, "failed") || strings.Contains(stderr, "panic")) {
+			errMsg += "\nstderr: " + stderr
+		}
+		// Don't remove targetDir here, deployment failed but extraction succeeded, user might want to inspect
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: errMsg})
+		return
+	}
+
+	log.Infof("DeployLab (Archive) user '%s': clab deploy for lab '%s' executed successfully.", username, labName)
+
+	// --- Parse and return result ---
+	var result interface{}
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		log.Warnf("DeployLab (Archive) user '%s', lab '%s': Output from clab was not valid JSON: %v. Returning as plain text.", username, labName, err)
 		// Check if the non-JSON output indicates an error
 		if strings.Contains(stdout, "level=error") || strings.Contains(stdout, "failed") {
 			c.JSON(http.StatusInternalServerError, gin.H{"output": stdout, "warning": "Deployment finished but output indicates errors and was not valid JSON"})

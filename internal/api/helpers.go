@@ -2,8 +2,12 @@
 package api
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -12,7 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time" // Needed for duration parsing
+	"time"
 
 	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
@@ -409,4 +413,182 @@ func isValidPrefix(prefix string) bool {
 		return false
 	}
 	return regexp.MustCompile(`^[a-zA-Z0-9_-]+$`).MatchString(prefix)
+}
+
+// extractZip securely extracts a zip archive to the target directory.
+// It protects against Zip Slip and sets ownership of extracted files/dirs.
+func extractZip(archiveReader io.ReaderAt, archiveSize int64, targetDir string, uid, gid int) error {
+	zipReader, err := zip.NewReader(archiveReader, archiveSize)
+	if err != nil {
+		return fmt.Errorf("failed to create zip reader: %w", err)
+	}
+
+	// Clean the target directory path for reliable prefix checking
+	cleanTargetDir := filepath.Clean(targetDir)
+
+	for _, f := range zipReader.File {
+		// **Zip Slip Protection**
+		// filepath.Join cleans the path, removing potential "../" etc.
+		filePath := filepath.Join(cleanTargetDir, f.Name)
+		// Double check it's still within the target directory
+		if !strings.HasPrefix(filePath, cleanTargetDir+string(os.PathSeparator)) && filePath != cleanTargetDir {
+			return fmt.Errorf("illegal path in zip archive: '%s' attempts to escape target directory", f.Name)
+		}
+
+		// Create directories or files
+		if f.FileInfo().IsDir() {
+			if err := os.MkdirAll(filePath, 0750); err != nil { // Use 0750 for directories
+				return fmt.Errorf("failed to create directory '%s': %w", filePath, err)
+			}
+			// Attempt to set ownership on the directory
+			if err := os.Chown(filePath, uid, gid); err != nil {
+				log.Warnf("extractZip: Failed to set ownership on directory '%s': %v", filePath, err)
+				// Continue even if chown fails
+			}
+			continue
+		}
+
+		// Create parent directory if it doesn't exist
+		parentDir := filepath.Dir(filePath)
+		if err := os.MkdirAll(parentDir, 0750); err != nil {
+			return fmt.Errorf("failed to create parent directory '%s': %w", parentDir, err)
+		}
+		// Attempt ownership on parent dir (might be redundant but safe)
+		if err := os.Chown(parentDir, uid, gid); err != nil {
+			log.Warnf("extractZip: Failed to set ownership on parent directory '%s': %v", parentDir, err)
+		}
+
+		// Create and write the file
+		// Use file mode from archive, but ensure it's reasonable (e.g., mask out world write)
+		// 0640 is a reasonable default if archive mode is weird.
+		fileMode := f.Mode() & 0777 // Mask to standard permission bits
+		if fileMode == 0 {
+			fileMode = 0640
+		} // Fallback if mode is zero
+
+		dstFile, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileMode)
+		if err != nil {
+			return fmt.Errorf("failed to open destination file '%s': %w", filePath, err)
+		}
+
+		srcFile, err := f.Open()
+		if err != nil {
+			dstFile.Close() // Close dstFile before returning error
+			return fmt.Errorf("failed to open source file '%s' in archive: %w", f.Name, err)
+		}
+
+		_, copyErr := io.Copy(dstFile, srcFile)
+
+		// Close files regardless of copy error
+		closeSrcErr := srcFile.Close()
+		closeDstErr := dstFile.Close()
+
+		if copyErr != nil {
+			return fmt.Errorf("failed to copy file '%s': %w", f.Name, copyErr)
+		}
+		if closeSrcErr != nil {
+			log.Warnf("extractZip: Error closing source file '%s': %v", f.Name, closeSrcErr)
+		}
+		if closeDstErr != nil {
+			log.Warnf("extractZip: Error closing destination file '%s': %v", filePath, closeDstErr)
+		}
+
+		// Attempt to set ownership on the created file
+		if err := os.Chown(filePath, uid, gid); err != nil {
+			log.Warnf("extractZip: Failed to set ownership on file '%s': %v", filePath, err)
+			// Continue even if chown fails
+		}
+	}
+	return nil
+}
+
+// extractTarGz securely extracts a .tar.gz archive to the target directory.
+// It protects against Tar Slip and sets ownership of extracted files/dirs.
+func extractTarGz(archiveReader io.Reader, targetDir string, uid, gid int) error {
+	gzReader, err := gzip.NewReader(archiveReader)
+	if err != nil {
+		return fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer gzReader.Close()
+
+	tarReader := tar.NewReader(gzReader)
+	cleanTargetDir := filepath.Clean(targetDir)
+
+	for {
+		header, err := tarReader.Next()
+
+		if err == io.EOF {
+			break // End of archive
+		}
+		if err != nil {
+			return fmt.Errorf("failed to read tar header: %w", err)
+		}
+
+		// **Tar Slip Protection**
+		filePath := filepath.Join(cleanTargetDir, header.Name)
+		if !strings.HasPrefix(filePath, cleanTargetDir+string(os.PathSeparator)) && filePath != cleanTargetDir {
+			return fmt.Errorf("illegal path in tar archive: '%s' attempts to escape target directory", header.Name)
+		}
+
+		// Get FileInfo from header for mode/type
+		fileInfo := header.FileInfo()
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(filePath, 0750); err != nil { // Use 0750 for directories
+				return fmt.Errorf("failed to create directory '%s': %w", filePath, err)
+			}
+			// Attempt ownership
+			if err := os.Chown(filePath, uid, gid); err != nil {
+				log.Warnf("extractTarGz: Failed to set ownership on directory '%s': %v", filePath, err)
+			}
+
+		case tar.TypeReg:
+			// Create parent directory if it doesn't exist
+			parentDir := filepath.Dir(filePath)
+			if err := os.MkdirAll(parentDir, 0750); err != nil {
+				return fmt.Errorf("failed to create parent directory '%s': %w", parentDir, err)
+			}
+			// Attempt ownership on parent dir
+			if err := os.Chown(parentDir, uid, gid); err != nil {
+				log.Warnf("extractTarGz: Failed to set ownership on parent directory '%s': %v", parentDir, err)
+			}
+
+			// Create and write the file
+			// Use file mode from archive, masked
+			fileMode := fileInfo.Mode() & 0777
+			if fileMode == 0 {
+				fileMode = 0640
+			} // Fallback
+
+			dstFile, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileMode)
+			if err != nil {
+				return fmt.Errorf("failed to open destination file '%s': %w", filePath, err)
+			}
+
+			_, copyErr := io.Copy(dstFile, tarReader)
+			closeErr := dstFile.Close() // Close file regardless of copy error
+
+			if copyErr != nil {
+				return fmt.Errorf("failed to copy file '%s': %w", header.Name, copyErr)
+			}
+			if closeErr != nil {
+				log.Warnf("extractTarGz: Error closing destination file '%s': %v", filePath, closeErr)
+			}
+
+			// Attempt ownership
+			if err := os.Chown(filePath, uid, gid); err != nil {
+				log.Warnf("extractTarGz: Failed to set ownership on file '%s': %v", filePath, err)
+			}
+
+		case tar.TypeSymlink, tar.TypeLink, tar.TypeChar, tar.TypeBlock, tar.TypeFifo:
+			// Security: Explicitly ignore symlinks and other potentially problematic types for now.
+			log.Warnf("extractTarGz: Ignoring unsupported file type '%c' for entry '%s' in archive.", header.Typeflag, header.Name)
+			continue // Skip to the next entry
+
+		default:
+			log.Warnf("extractTarGz: Ignoring unknown file type '%c' for entry '%s' in archive.", header.Typeflag, header.Name)
+		}
+	}
+	return nil
 }
