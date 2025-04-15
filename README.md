@@ -17,29 +17,30 @@ This project provides a standalone RESTful API server written in Go to interact 
 
 Before running the `clab-api` server, ensure the following are set up on the server machine:
 
-1.  **Containerlab:** The `clab` executable must be installed and available in the system's `PATH` for the user running the API server. See [Containerlab Installation Guide](https://containerlab.dev/install/).
+1.  **Containerlab:** Requieres clab `v0.68.0+` The `clab` executable must be installed and available in the system's `PATH` for the user running the API server. See [Containerlab Installation Guide](https://containerlab.dev/install/).
 2.  **Linux System:** The API server is designed for Linux environments.
 3.  **PAM Configuration:** Pluggable Authentication Modules (PAM) must be configured correctly ( Linux default is good ). The API uses the `login` service by default. PAM is available on most Linux distributions out of the box and doesn't require additional installation for using the pre-built binary.
-4.  **User Group:** A Linux group named `clab_admins` must exist. Only users belonging to this group can successfully authenticate via the `/login` endpoint.
+4.  **User Group:** Linux groups need to exist according to your .env settings to successfully authenticate via the `/login` endpoint.
 
 ## Installation
 
-1.  **Download:** Obtain the latest `clab-api-server` binary for your architecture from the [Releases](https://github.com/srl-labs/clab-api-server/releases) page.
+1.  **Download:** Obtain the latest `clab-api-server` binary from the [Releases](https://github.com/srl-labs/clab-api-server/releases) page.
 2.  **Place Binary:** Copy the downloaded binary to a suitable location on your server, for example, `/usr/local/bin/`.
     ```bash
-    sudo mv ./clab-api-server_linux_amd64 /usr/local/bin/clab-api-server
+    sudo mv ./clab-api-server /usr/local/bin/clab-api-server
     sudo chmod +x /usr/local/bin/clab-api-server
     ```
-3.  **Create User Group:** Ensure the `clab_admins` group exists.
+3.  **Optional: Create User Group:** Ensure the `clab_api` group exists.
     ```bash
-    sudo groupadd clab_admins
+    sudo groupadd clab_api
     ```
-    
-4.  **Add Users:** Add any Linux users who should be allowed to use the API to the `clab_admins` group.
+
+4.  **Optional: Add Users:** Add any Linux users who should be allowed to use the API to the `clab_api` group.
     ```bash
-    sudo usermod -aG clab_admins your_linux_username
+    sudo usermod -aG clab_api your_linux_username
     ```
-    *(Users may need to log out and log back in for group changes to take effect)*
+> [!NOTE]
+> If the API_USER_GROUP is not set in the `.env` file, the user must be a member of the `clab_admins` group to authenticate via the `/login` endpoint.
 
 ## Configuration
 
@@ -64,6 +65,10 @@ The server is configured via environment variables or a `.env` file located in t
     # Optional: Specify a group whose members bypass ownership checks (e.g., "clab_superusers")
     # Leave empty ("") to disable superuser functionality.
     SUPERUSER_GROUP=""
+
+    # Optional: Specify a group whose members can use the API
+    # The API group name, if not defined, the user needs to be in clab_admins group
+    API_USER_GROUP=clab_api
 
     # --- Containerlab ---
     # Specify the container runtime clab should use (e.g., docker, podman). Defaults to 'docker'.
@@ -162,7 +167,7 @@ journalctl -u clab-api.service -f # View logs
   "password": "your_linux_password"
 }
 ```
-(Note: `your_linux_user` must be a member of the `clab_admins` group)
+(Note: `your_linux_user` must be a member of the `API_USER_GROUP` or be in the `clab_admins` group)
 
 - **Response (JSON):**
 ```json
@@ -212,7 +217,7 @@ The Swagger UI allows you to:
 - Read/write access to `~/.clab/` directories for all potential authenticated users if deploying topologies via content/archive or using certificate features. This is a significant permission requirement. Consider security implications carefully.
 - Read access to the `.env` configuration file.
 
-**Authenticated User:** The API authenticates Linux users via PAM and checks for `clab_admins` group membership.
+**Authenticated User:** The API authenticates Linux users via PAM and checks for `API_USER_GROUP` group membership.
 
 **Command Execution:** `clab` commands are executed as the server user, not the authenticated user.
 
