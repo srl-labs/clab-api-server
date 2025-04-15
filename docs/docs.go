@@ -31,7 +31,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Generates a containerlab topology file based on CLOS definitions. Optionally deploys it.\nThe 'images' and 'licenses' fields expect a map where the key is the node 'kind' and the value is the corresponding image or license path (e.g., {\"nokia_srlinux\": \"ghcr.io/...\"}).\nIf Deploy=true, the topology is saved to the user's ~/.clab/\u003clabName\u003e/ directory before deployment, and the 'outputFile' field is ignored.\nIf Deploy=false and 'outputFile' is empty, YAML is returned directly.\nIf Deploy=false and 'outputFile' is set, the file is saved to that path on the server (requires API server write permissions).",
+                "description": "Generates a containerlab topology file based on CLOS definitions. Optionally deploys it, setting the owner to the authenticated user.\nDeployment is DENIED if a lab with the target name already exists.\nThe 'images' and 'licenses' fields expect a map where the key is the node 'kind' and the value is the corresponding image or license path (e.g., {\"nokia_srlinux\": \"ghcr.io/...\"}).\nIf Deploy=true, the topology is saved to the user's ~/.clab/\u003clabName\u003e/ directory before deployment, and the 'outputFile' field is ignored.\nIf Deploy=false and 'outputFile' is empty, YAML is returned directly.\nIf Deploy=false and 'outputFile' is set, the file is saved to that path on the server (requires API server write permissions).",
                 "consumes": [
                     "application/json"
                 ],
@@ -68,6 +68,12 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict (Lab already exists and Deploy=true)",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -123,7 +129,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Deploys a containerlab topology. Requires EITHER 'topologyContent' OR 'topologySourceUrl' in the request body, but not both.\nOptional deployment flags are provided as query parameters.",
+                "description": "Deploys a containerlab topology. Requires EITHER 'topologyContent' OR 'topologySourceUrl' in the request body, but not both. The lab will be owned by the authenticated user.\nDeployment is DENIED if a lab with the target name already exists, UNLESS 'reconfigure=true' is specified AND the authenticated user owns the existing lab.\nOptional deployment flags are provided as query parameters.",
                 "consumes": [
                     "application/json"
                 ],
@@ -152,7 +158,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "boolean",
-                        "description": "Destroy lab and clean directory before deploying (default: false).",
+                        "description": "Allow overwriting an existing lab IF owned by the user (default: false).",
                         "name": "reconfigure",
                         "in": "query"
                     },
@@ -195,13 +201,25 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Invalid input (e.g., missing/both content/URL, invalid flags/params)",
+                        "description": "Invalid input (e.g., missing/both content/URL, invalid flags/params, invalid topology name)",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden (Attempting to reconfigure a lab owned by another user)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict (Lab already exists and reconfigure=false or not specified)",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -222,7 +240,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Deploys a containerlab topology provided as a .zip or .tar.gz archive. The archive must contain the .clab.yml file and any necessary bind-mount files/directories.\nThe lab name is taken from the 'labName' query parameter. The archive is extracted to the user's ~/.clab/\u003clabName\u003e/ directory.",
+                "description": "Deploys a containerlab topology provided as a .zip or .tar.gz archive. The archive must contain the .clab.yml file and any necessary bind-mount files/directories. The lab will be owned by the authenticated user.\nThe lab name is taken from the 'labName' query parameter. The archive is extracted to the user's ~/.clab/\u003clabName\u003e/ directory.\nDeployment is DENIED if a lab with the target name already exists, UNLESS 'reconfigure=true' is specified AND the authenticated user owns the existing lab.",
                 "consumes": [
                     "multipart/form-data"
                 ],
@@ -250,7 +268,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "boolean",
-                        "description": "Destroy lab and clean directory before deploying (default: false).",
+                        "description": "Allow overwriting an existing lab IF owned by the user (default: false).",
                         "name": "reconfigure",
                         "in": "query"
                     },
@@ -300,6 +318,18 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden (Attempting to reconfigure a lab owned by another user)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict (Lab already exists and reconfigure=false or not specified)",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }

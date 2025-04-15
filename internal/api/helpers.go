@@ -5,6 +5,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"context" // Import context
 	"encoding/json"
 	"fmt"
 	"io"
@@ -113,30 +114,6 @@ func isValidDurationString(durationStr string) bool {
 	return d >= 0 // Allow 0 duration
 }
 
-// isValidPercentage checks if a float is between 0.0 and 100.0
-func isValidPercentage(p float64) bool {
-	return p >= 0.0 && p <= 100.0
-}
-
-// Helper to get the conventional container name
-func getNodeContainerName(labName, nodeName string) (string, error) {
-	if !isValidLabName(labName) {
-		return "", fmt.Errorf("invalid lab name format: %s", labName)
-	}
-	// Node names within topology can be simple, reuse labNameRegex for basic check
-	if !isValidLabName(nodeName) {
-		return "", fmt.Errorf("invalid node name format: %s", nodeName)
-	}
-	// Default containerlab naming convention
-	containerName := fmt.Sprintf("clab-%s-%s", labName, nodeName)
-	// Validate the generated name just in case
-	if !isValidContainerName(containerName) {
-		// This should ideally not happen if labName and nodeName are valid
-		return "", fmt.Errorf("generated container name is invalid: %s", containerName)
-	}
-	return containerName, nil
-}
-
 // Helper to check if user is superuser
 func isSuperuser(username string) bool {
 	if config.AppConfig.SuperuserGroup == "" {
@@ -192,67 +169,84 @@ func getUserCertBasePath(username string) (string, error) {
 	return basePath, nil
 }
 
-// verifyLabOwnership checks if a lab exists and is owned by the user.
-// Returns the original topology path (if found) and nil error on success.
-// Sends appropriate HTTP error response and returns non-nil error on failure.
-func verifyLabOwnership(c *gin.Context, username, labName string) (string, error) {
-	log.Debugf("Verifying ownership for user '%s', lab '%s'", username, labName)
+// getLabInfo runs 'clab inspect --name <labName>' to check existence and get owner info.
+// It does NOT send HTTP responses directly.
+// Returns:
+// - info: Pointer to the first container's info if the lab exists.
+// - exists: Boolean indicating if the lab was found.
+// - err: Error if the clab command failed unexpectedly (not including "not found" errors).
+func getLabInfo(ctx context.Context, labName string) (info *models.ClabContainerInfo, exists bool, err error) {
+	log.Debugf("getLabInfo: Checking existence and owner for lab '%s'", labName)
 
-	// Run inspect specifically for the target lab name
 	inspectArgs := []string{"inspect", "--name", labName, "--format", "json"}
-	ctx := c.Request.Context()
-	inspectStdout, inspectStderr, inspectErr := clab.RunClabCommand(ctx, username, inspectArgs...)
+	// Run command without specifying a user context, as we just need info
+	inspectStdout, inspectStderr, inspectErr := clab.RunClabCommand(ctx, "api-server", inspectArgs...) // Use "api-server" or similar placeholder for user
 
 	if inspectErr != nil {
-		// Check common "not found" scenarios
+		// Check common "not found" scenarios - these are NOT errors for this function
 		errMsg := inspectErr.Error()
 		if strings.Contains(inspectStdout, "no containers found") ||
 			strings.Contains(errMsg, "no containers found") ||
 			strings.Contains(errMsg, "no containerlab labs found") ||
 			strings.Contains(inspectStderr, "no containers found") ||
 			strings.Contains(inspectStderr, "Could not find containers for lab") {
-			log.Infof("Ownership check failed for user '%s': Lab '%s' not found (inspect error).", username, labName)
-			err := fmt.Errorf("lab '%s' not found", labName)
-			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
-			return "", err
+			log.Debugf("getLabInfo: Lab '%s' not found (inspect reported no containers).", labName)
+			return nil, false, nil // Lab does not exist, no error
 		}
-		// Other inspect error
-		log.Errorf("Ownership check failed for user '%s': Failed to inspect lab '%s': %v. Stderr: %s", username, labName, inspectErr, inspectStderr)
-		err := fmt.Errorf("failed to inspect lab '%s' for ownership check: %w", labName, inspectErr)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
-		return "", err
+		// Other inspect error IS an error for this function
+		log.Errorf("getLabInfo: Failed to inspect lab '%s': %v. Stderr: %s", labName, inspectErr, inspectStderr)
+		return nil, false, fmt.Errorf("failed to inspect lab '%s': %w", labName, inspectErr)
 	}
+	// Log stderr only if it's unexpected (command succeeded but stderr has content)
 	if inspectStderr != "" {
-		log.Warnf("Ownership check (via inspect) stderr for user '%s', lab '%s': %s", username, labName, inspectStderr)
+		log.Warnf("getLabInfo: 'clab inspect' stderr for lab '%s' (command succeeded): %s", labName, inspectStderr)
 	}
 
-	// Unmarshal into the new map structure
+	// Unmarshal into the expected map structure
 	var inspectResult models.ClabInspectOutput
 	if err := json.Unmarshal([]byte(inspectStdout), &inspectResult); err != nil {
-		log.Errorf("Ownership check failed for user '%s': Could not parse inspect output for lab '%s'. Output: %s, Error: %v", username, labName, inspectStdout, err)
-		err := fmt.Errorf("could not parse inspect output for lab '%s'", labName)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
-		return "", err
+		log.Errorf("getLabInfo: Could not parse inspect output for lab '%s'. Output: %s, Error: %v", labName, inspectStdout, err)
+		return nil, false, fmt.Errorf("could not parse inspect output for lab '%s'", labName)
 	}
 
 	// Check if the map contains the labName key and has containers
 	containers, found := inspectResult[labName]
-	if !found {
-		log.Infof("Ownership check failed for user '%s': Lab '%s' not found (key missing in inspect output).", username, labName)
-		err := fmt.Errorf("lab '%s' not found", labName)
-		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
-		return "", err
-	}
-	if len(containers) == 0 {
-		log.Warnf("Ownership check failed for user '%s': Inspect for lab '%s' succeeded but returned no containers in array.", username, labName)
-		err := fmt.Errorf("lab '%s' not found (no containers returned)", labName)
-		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
-		return "", err
+	if !found || len(containers) == 0 {
+		log.Debugf("getLabInfo: Lab '%s' not found (key missing or empty in inspect output).", labName)
+		return nil, false, nil // Lab does not exist, no error
 	}
 
-	// Use the owner and path from the *first* container found for the lab
-	actualOwner := containers[0].Owner
-	originalTopoPath := containers[0].LabPath
+	// Lab exists, return info from the first container
+	log.Debugf("getLabInfo: Lab '%s' found. Owner: '%s'.", labName, containers[0].Owner)
+	return &containers[0], true, nil // Lab exists
+}
+
+// verifyLabOwnership checks if a lab exists and is owned by the user.
+// Returns the original topology path (if found) and nil error on success.
+// Sends appropriate HTTP error response and returns non-nil error on failure.
+func verifyLabOwnership(c *gin.Context, username, labName string) (string, error) {
+	log.Debugf("Verifying ownership for user '%s', lab '%s'", username, labName)
+
+	// Use getLabInfo to check existence and get owner in one step
+	labInfo, exists, err := getLabInfo(c.Request.Context(), labName)
+
+	if err != nil {
+		// getLabInfo already logged the error
+		errResp := fmt.Errorf("failed to check lab '%s' status: %w", labName, err)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: errResp.Error()})
+		return "", errResp
+	}
+
+	if !exists {
+		log.Infof("Ownership check failed for user '%s': Lab '%s' not found.", username, labName)
+		errResp := fmt.Errorf("lab '%s' not found", labName)
+		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: errResp.Error()})
+		return "", errResp
+	}
+
+	// Lab exists, now check ownership
+	actualOwner := labInfo.Owner
+	originalTopoPath := labInfo.LabPath // Use LabPath (relative) or AbsLabPath? LabPath is what clab usually needs.
 
 	// Check superuser status or direct ownership
 	if isSuperuser(username) {
@@ -264,18 +258,13 @@ func verifyLabOwnership(c *gin.Context, username, labName string) (string, error
 	if actualOwner != username {
 		log.Warnf("Ownership check failed for user '%s': Attempted to access lab '%s' but it is owned by '%s'. Access denied.", username, labName, actualOwner)
 		// Use 404 for security (don't reveal existence if not owned)
-		err := fmt.Errorf("lab '%s' not found or not owned by user", labName)
-		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()}) // Changed to 404
-		return "", err
+		errResp := fmt.Errorf("lab '%s' not found or not owned by user", labName)
+		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: errResp.Error()}) // Changed to 404
+		return "", errResp
 	}
 
 	log.Debugf("Ownership confirmed for user '%s' on lab '%s' (Owner: '%s', Original Path: '%s').", username, labName, actualOwner, originalTopoPath)
 	return originalTopoPath, nil // Success
-}
-
-// Helper function to count unique lab names in the new map structure
-func countUniqueLabs(inspectOutput models.ClabInspectOutput) int {
-	return len(inspectOutput) // The number of keys in the map is the number of unique labs
 }
 
 // verifyContainerOwnership checks if a specific container exists and is owned by the user using the NEW map format.

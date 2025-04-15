@@ -23,6 +23,7 @@ import (
 
 // @Summary Deploy Lab
 // @Description Deploys a containerlab topology. Requires EITHER 'topologyContent' OR 'topologySourceUrl' in the request body, but not both. The lab will be owned by the authenticated user.
+// @Description Deployment is DENIED if a lab with the target name already exists, UNLESS 'reconfigure=true' is specified AND the authenticated user owns the existing lab.
 // @Description Optional deployment flags are provided as query parameters.
 // @Tags Labs
 // @Security BearerAuth
@@ -30,19 +31,22 @@ import (
 // @Produce json
 // @Param deploy_request body models.DeployRequest true "Deployment Source: Provide 'topologyContent' OR 'topologySourceUrl'."
 // @Param labNameOverride query string false "Overrides the 'name' field within the topology or inferred from URL." example="my-specific-lab-run"
-// @Param reconfigure query boolean false "Destroy lab and clean directory before deploying (default: false)." example="true"
+// @Param reconfigure query boolean false "Allow overwriting an existing lab IF owned by the user (default: false)." example="true"
 // @Param maxWorkers query int false "Limit concurrent workers (0 or omit for default)." example="4"
 // @Param exportTemplate query string false "Custom Go template file for topology data export ('__full' for full export)." example="__full"
 // @Param nodeFilter query string false "Comma-separated list of node names to deploy." example="srl1,router2"
 // @Param skipPostDeploy query boolean false "Skip post-deploy actions defined for nodes (default: false)." example="false"
 // @Param skipLabdirAcl query boolean false "Skip setting extended ACLs on lab directory (default: false)." example="true"
 // @Success 200 {object} object "Raw JSON output from 'clab deploy' (or plain text on error)"
-// @Failure 400 {object} models.ErrorResponse "Invalid input (e.g., missing/both content/URL, invalid flags/params)"
+// @Failure 400 {object} models.ErrorResponse "Invalid input (e.g., missing/both content/URL, invalid flags/params, invalid topology name)"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
+// @Failure 403 {object} models.ErrorResponse "Forbidden (Attempting to reconfigure a lab owned by another user)"
+// @Failure 409 {object} models.ErrorResponse "Conflict (Lab already exists and reconfigure=false or not specified)"
 // @Failure 500 {object} models.ErrorResponse "Internal server error (e.g., file system errors, clab execution failed)"
 // @Router /api/v1/labs [post]
 func DeployLabHandler(c *gin.Context) {
 	username := c.GetString("username") // Authenticated user
+	ctx := c.Request.Context()
 
 	// --- Bind Request Body (Only contains topology source now) ---
 	var req models.DeployRequest
@@ -99,11 +103,9 @@ func DeployLabHandler(c *gin.Context) {
 		return
 	}
 
-	// --- Prepare Base Arguments ---
-	args := []string{"deploy", "--owner", username, "--format", "json"}
-
-	// --- Handle Topology Source and Lab Name ---
-	var labName string // Will hold the determined lab name for logging/cleanup reference
+	// --- Determine Effective Lab Name ---
+	var effectiveLabName string
+	var originalLabName string // Name from topology content, needed for directory structure
 	var topoPathForClab string
 
 	if hasUrl {
@@ -116,22 +118,100 @@ func DeployLabHandler(c *gin.Context) {
 			return
 		}
 		topoPathForClab = req.TopologySourceUrl
+
+		// If URL is used, clab determines the name unless overridden.
+		// We need the override name *now* for the existence check.
 		if labNameOverride != "" {
-			labName = labNameOverride
+			effectiveLabName = labNameOverride
 		} else {
-			// Try to infer name from URL for logging, but clab will determine the actual name
-			base := filepath.Base(req.TopologySourceUrl)
-			ext := filepath.Ext(base)
-			labName = strings.TrimSuffix(base, ext)
-			if !isValidLabName(labName) { // If inferred name is invalid, use placeholder
-				labName = "<determined_by_clab_from_url>"
-			}
+			// We cannot reliably determine the name clab will use from the URL beforehand.
+			// This check might need refinement or we accept that URL deploys without override
+			// might bypass the pre-check slightly differently. For now, assume override is needed for pre-check with URL.
+			// OR: We could try a dry-run or inspect after a potential partial fetch? Complex.
+			// Let's proceed assuming if no override, we cannot pre-check name collision effectively for URL source.
+			// Clab itself might still fail if the lab exists.
+			// For the purpose of the requirement "Prevent deployment if lab already exists",
+			// this path (URL source without override) doesn't fully meet it without more complex logic.
+			// Let's log a warning and proceed, relying on clab's potential failure later.
+			log.Warnf("DeployLab user '%s': Deploying from URL without labNameOverride. Pre-deployment existence check skipped. Clab will handle potential conflicts.", username)
+			effectiveLabName = "<determined_by_clab_from_url>" // Placeholder
 		}
 	} else { // hasContent
 		log.Infof("DeployLab user '%s': Deploying from provided topology content.", username)
 		trimmedContent := strings.TrimSpace(req.TopologyContent)
 
-		// --- Get User Home Directory, UID/GID, Parse YAML, Determine Lab Name ---
+		// Parse YAML to find the name
+		var topoData map[string]interface{}
+		err = yaml.Unmarshal([]byte(trimmedContent), &topoData)
+		if err != nil {
+			log.Warnf("DeployLab failed for user '%s': Invalid topology YAML: %v", username, err)
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid topology YAML: " + err.Error()})
+			return
+		}
+		originalLabNameValue, ok := topoData["name"]
+		if !ok {
+			log.Warnf("DeployLab failed for user '%s': Topology YAML missing 'name' field", username)
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Topology YAML must contain a top-level 'name' field."})
+			return
+		}
+		originalLabName, ok = originalLabNameValue.(string)
+		if !ok || originalLabName == "" {
+			log.Warnf("DeployLab failed for user '%s': Topology 'name' field is not a non-empty string", username)
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Topology 'name' field must be a non-empty string."})
+			return
+		}
+		if !isValidLabName(originalLabName) {
+			log.Warnf("DeployLab failed for user '%s': Invalid characters in topology 'name': %s", username, originalLabName)
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in topology 'name'."})
+			return
+		}
+
+		// Determine effective lab name
+		if labNameOverride != "" {
+			effectiveLabName = labNameOverride
+		} else {
+			effectiveLabName = originalLabName
+		}
+	}
+
+	// --- Pre-Deployment Check: Lab Existence and Ownership (if name is known) ---
+	if effectiveLabName != "<determined_by_clab_from_url>" {
+		labInfo, exists, checkErr := getLabInfo(ctx, effectiveLabName)
+		if checkErr != nil {
+			log.Errorf("DeployLab failed for user '%s': Error checking lab '%s' existence: %v", username, effectiveLabName, checkErr)
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Error checking lab '%s' status: %s", effectiveLabName, checkErr.Error())})
+			return
+		}
+
+		if exists {
+			if !reconfigure {
+				// Lab exists, reconfigure not requested -> Conflict
+				log.Warnf("DeployLab failed for user '%s': Lab '%s' already exists and reconfigure=false.", username, effectiveLabName)
+				c.JSON(http.StatusConflict, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' already exists. Use 'reconfigure=true' query parameter to overwrite.", effectiveLabName)})
+				return
+			} else {
+				// Lab exists, reconfigure requested -> Check ownership
+				if !isSuperuser(username) && labInfo.Owner != username {
+					// User is not owner (and not superuser) -> Forbidden
+					log.Warnf("DeployLab failed for user '%s': Attempted to reconfigure lab '%s' owned by '%s'.", username, effectiveLabName, labInfo.Owner)
+					c.JSON(http.StatusForbidden, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' exists but is owned by user '%s'. Reconfigure permission denied.", effectiveLabName, labInfo.Owner)})
+					return
+				}
+				// User is owner (or superuser) -> Allow reconfigure
+				log.Infof("DeployLab user '%s': Lab '%s' exists, reconfigure=true and ownership confirmed (owner: '%s'). Proceeding with deployment.", username, effectiveLabName, labInfo.Owner)
+			}
+		} else {
+			// Lab does not exist -> Proceed
+			log.Infof("DeployLab user '%s': Lab '%s' does not exist. Proceeding with deployment.", username, effectiveLabName)
+		}
+	} // End pre-deployment check
+
+	// --- Prepare Base Arguments ---
+	args := []string{"deploy", "--owner", username, "--format", "json"}
+
+	// --- Handle Topology Content Saving (if applicable) ---
+	if hasContent {
+		// --- Get User Home Directory, UID/GID ---
 		usr, err := user.Lookup(username)
 		if err != nil {
 			log.Errorf("DeployLab failed for user '%s': Could not determine user details: %v", username, err)
@@ -152,44 +232,14 @@ func DeployLabHandler(c *gin.Context) {
 			return
 		}
 
-		var topoData map[string]interface{}
-		err = yaml.Unmarshal([]byte(trimmedContent), &topoData)
-		if err != nil {
-			log.Warnf("DeployLab failed for user '%s': Invalid topology YAML: %v", username, err)
-			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid topology YAML: " + err.Error()})
-			return
-		}
-		originalLabNameValue, ok := topoData["name"]
-		if !ok {
-			log.Warnf("DeployLab failed for user '%s': Topology YAML missing 'name' field", username)
-			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Topology YAML must contain a top-level 'name' field."})
-			return
-		}
-		originalLabName, ok := originalLabNameValue.(string)
-		if !ok || originalLabName == "" {
-			log.Warnf("DeployLab failed for user '%s': Topology 'name' field is not a non-empty string", username)
-			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Topology 'name' field must be a non-empty string."})
-			return
-		}
-		if !isValidLabName(originalLabName) {
-			log.Warnf("DeployLab failed for user '%s': Invalid characters in topology 'name': %s", username, originalLabName)
-			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in topology 'name'."})
-			return
-		}
-
-		// Determine effective lab name
-		if labNameOverride != "" {
-			labName = labNameOverride
-		} else {
-			labName = originalLabName
-		}
-
 		// --- Construct Paths, Create Dirs, Set Ownership, Write File ---
+		// Use originalLabName for directory structure to match clab's behavior
 		clabUserDir := filepath.Join(homeDir, ".clab")
 		targetDir := filepath.Join(clabUserDir, originalLabName)
 		targetFilePath := filepath.Join(targetDir, originalLabName+".clab.yml")
-		topoPathForClab = targetFilePath
+		topoPathForClab = targetFilePath // Update path for clab command
 
+		// If reconfiguring, clab handles cleaning containers, but we might need to ensure dir exists
 		err = os.MkdirAll(targetDir, 0750)
 		if err != nil {
 			log.Errorf("DeployLab failed for user '%s': Failed to create lab directory '%s': %v", username, targetDir, err)
@@ -198,11 +248,10 @@ func DeployLabHandler(c *gin.Context) {
 		}
 		err = os.Chown(targetDir, uid, gid)
 		if err != nil {
-			log.Errorf("DeployLab failed for user '%s': Failed to set ownership on lab directory '%s': %v", username, targetDir, err)
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to set ownership on lab directory: %s.", err.Error())})
-			return
+			// Log warning, but proceed. File write/chown might still work.
+			log.Warnf("DeployLab user '%s': Failed to set ownership on lab directory '%s': %v. Continuing...", username, targetDir, err)
 		}
-		err = os.WriteFile(targetFilePath, []byte(trimmedContent), 0640)
+		err = os.WriteFile(targetFilePath, []byte(strings.TrimSpace(req.TopologyContent)), 0640)
 		if err != nil {
 			log.Errorf("DeployLab failed for user '%s': Failed to write topology file '%s': %v", username, targetFilePath, err)
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to write topology file: %s.", err.Error())})
@@ -245,16 +294,16 @@ func DeployLabHandler(c *gin.Context) {
 	}
 
 	// --- Execute clab deploy ---
-	log.Infof("DeployLab user '%s': Executing clab deploy for lab '%s'...", username, labName)
-	stdout, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...)
+	log.Infof("DeployLab user '%s': Executing clab deploy for lab '%s'...", username, effectiveLabName)
+	stdout, stderr, err := clab.RunClabCommand(ctx, username, args...)
 
 	// --- Handle command execution results ---
 	if stderr != "" {
-		log.Warnf("DeployLab user '%s', lab '%s': clab deploy stderr: %s", username, labName, stderr)
+		log.Warnf("DeployLab user '%s', lab '%s': clab deploy stderr: %s", username, effectiveLabName, stderr)
 	}
 	if err != nil {
-		log.Errorf("DeployLab failed for user '%s', lab '%s': clab deploy command execution error: %v", username, labName, err)
-		errMsg := fmt.Sprintf("Failed to deploy lab '%s': %s", labName, err.Error())
+		log.Errorf("DeployLab failed for user '%s', lab '%s': clab deploy command execution error: %v", username, effectiveLabName, err)
+		errMsg := fmt.Sprintf("Failed to deploy lab '%s': %s", effectiveLabName, err.Error())
 		// Only append stderr to the response if it looks like a significant error message
 		if stderr != "" && (strings.Contains(stderr, "level=error") || strings.Contains(stderr, "failed") || strings.Contains(stderr, "panic")) {
 			errMsg += "\nstderr: " + stderr
@@ -263,12 +312,12 @@ func DeployLabHandler(c *gin.Context) {
 		return
 	}
 
-	log.Infof("DeployLab user '%s': clab deploy for lab '%s' executed successfully.", username, labName)
+	log.Infof("DeployLab user '%s': clab deploy for lab '%s' executed successfully.", username, effectiveLabName)
 
 	// --- Parse and return result ---
 	var result interface{}
 	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
-		log.Warnf("DeployLab user '%s', lab '%s': Output from clab was not valid JSON: %v. Returning as plain text.", username, labName, err)
+		log.Warnf("DeployLab user '%s', lab '%s': Output from clab was not valid JSON: %v. Returning as plain text.", username, effectiveLabName, err)
 		// Check if the non-JSON output indicates an error
 		if strings.Contains(stdout, "level=error") || strings.Contains(stdout, "failed") {
 			c.JSON(http.StatusInternalServerError, gin.H{"output": stdout, "warning": "Deployment finished but output indicates errors and was not valid JSON"})
@@ -284,13 +333,14 @@ func DeployLabHandler(c *gin.Context) {
 // @Summary Deploy Lab from Archive
 // @Description Deploys a containerlab topology provided as a .zip or .tar.gz archive. The archive must contain the .clab.yml file and any necessary bind-mount files/directories. The lab will be owned by the authenticated user.
 // @Description The lab name is taken from the 'labName' query parameter. The archive is extracted to the user's ~/.clab/<labName>/ directory.
+// @Description Deployment is DENIED if a lab with the target name already exists, UNLESS 'reconfigure=true' is specified AND the authenticated user owns the existing lab.
 // @Tags Labs
 // @Security BearerAuth
 // @Accept multipart/form-data
 // @Produce json
 // @Param labArchive formData file true "Lab archive (.zip or .tar.gz) containing topology file and bind mounts."
 // @Param labName query string true "Name for the lab. This determines the extraction directory (~/.clab/<labName>)." example="my-archived-lab"
-// @Param reconfigure query boolean false "Destroy lab and clean directory before deploying (default: false)." example="true"
+// @Param reconfigure query boolean false "Allow overwriting an existing lab IF owned by the user (default: false)." example="true"
 // @Param maxWorkers query int false "Limit concurrent workers (0 or omit for default)." example="4"
 // @Param exportTemplate query string false "Custom Go template file for topology data export ('__full' for full export)." example="__full"
 // @Param nodeFilter query string false "Comma-separated list of node names to deploy." example="srl1,router2"
@@ -299,10 +349,13 @@ func DeployLabHandler(c *gin.Context) {
 // @Success 200 {object} object "Raw JSON output from 'clab deploy' (or plain text on error)"
 // @Failure 400 {object} models.ErrorResponse "Invalid input (e.g., missing archive, invalid labName, invalid archive format, missing topology file in archive)"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
+// @Failure 403 {object} models.ErrorResponse "Forbidden (Attempting to reconfigure a lab owned by another user)"
+// @Failure 409 {object} models.ErrorResponse "Conflict (Lab already exists and reconfigure=false or not specified)"
 // @Failure 500 {object} models.ErrorResponse "Internal server error (e.g., file system errors, extraction errors, clab execution failed)"
 // @Router /api/v1/labs/archive [post]
 func DeployLabArchiveHandler(c *gin.Context) {
 	username := c.GetString("username")
+	ctx := c.Request.Context()
 
 	// --- Get User Details (uid, gid, homeDir) ---
 	usr, err := user.Lookup(username)
@@ -360,17 +413,45 @@ func DeployLabArchiveHandler(c *gin.Context) {
 		return
 	}
 
-	// --- Prepare Target Directory ---
-	targetDir := filepath.Join(homeDir, ".clab", labName)
-	// Clean up existing directory if reconfigure is true *before* extraction
-	if reconfigure {
-		log.Infof("DeployLab (Archive) user '%s': Reconfigure requested. Removing existing directory '%s' before extraction.", username, targetDir)
-		if err := os.RemoveAll(targetDir); err != nil {
-			log.Warnf("DeployLab (Archive) user '%s': Failed to remove existing directory '%s' during reconfigure: %v. Continuing...", username, targetDir, err)
-			// Don't necessarily fail here, MkdirAll might still work or handle it.
-		}
+	// --- Pre-Extraction Check: Lab Existence and Ownership ---
+	labInfo, exists, checkErr := getLabInfo(ctx, labName)
+	if checkErr != nil {
+		log.Errorf("DeployLab (Archive) failed for user '%s': Error checking lab '%s' existence: %v", username, labName, checkErr)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Error checking lab '%s' status: %s", labName, checkErr.Error())})
+		return
 	}
 
+	targetDir := filepath.Join(homeDir, ".clab", labName)
+
+	if exists {
+		if !reconfigure {
+			// Lab exists, reconfigure not requested -> Conflict
+			log.Warnf("DeployLab (Archive) failed for user '%s': Lab '%s' already exists and reconfigure=false.", username, labName)
+			c.JSON(http.StatusConflict, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' already exists. Use 'reconfigure=true' query parameter to overwrite.", labName)})
+			return
+		} else {
+			// Lab exists, reconfigure requested -> Check ownership
+			if !isSuperuser(username) && labInfo.Owner != username {
+				// User is not owner (and not superuser) -> Forbidden
+				log.Warnf("DeployLab (Archive) failed for user '%s': Attempted to reconfigure lab '%s' owned by '%s'.", username, labName, labInfo.Owner)
+				c.JSON(http.StatusForbidden, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' exists but is owned by user '%s'. Reconfigure permission denied.", labName, labInfo.Owner)})
+				return
+			}
+			// User is owner (or superuser) -> Allow reconfigure
+			log.Infof("DeployLab (Archive) user '%s': Lab '%s' exists, reconfigure=true and ownership confirmed (owner: '%s'). Removing existing directory before extraction.", username, labName, labInfo.Owner)
+			// Remove existing directory *before* extraction
+			if err := os.RemoveAll(targetDir); err != nil {
+				log.Warnf("DeployLab (Archive) user '%s': Failed to remove existing directory '%s' during reconfigure: %v. Continuing...", username, targetDir, err)
+				// Don't necessarily fail here, MkdirAll might still work or handle it.
+			}
+		}
+	} else {
+		// Lab does not exist -> Proceed
+		log.Infof("DeployLab (Archive) user '%s': Lab '%s' does not exist. Proceeding with extraction.", username, labName)
+	}
+	// --- End Pre-Extraction Check ---
+
+	// --- Prepare Target Directory (Create if not exists after potential removal) ---
 	if err := os.MkdirAll(targetDir, 0750); err != nil {
 		log.Errorf("DeployLab (Archive) failed for user '%s': Failed to create lab directory '%s': %v", username, targetDir, err)
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to create lab directory."})
@@ -393,6 +474,7 @@ func DeployLabArchiveHandler(c *gin.Context) {
 			log.Warnf("DeployLab (Archive) failed for user '%s': Error retrieving 'labArchive' file: %v", username, err)
 			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Error retrieving 'labArchive' file: " + err.Error()})
 		}
+		_ = os.RemoveAll(targetDir) // Clean up created directory if upload failed
 		return
 	}
 
@@ -401,6 +483,7 @@ func DeployLabArchiveHandler(c *gin.Context) {
 	if err != nil {
 		log.Errorf("DeployLab (Archive) failed for user '%s': Cannot open uploaded archive '%s': %v", username, fileHeader.Filename, err)
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Cannot open uploaded archive."})
+		_ = os.RemoveAll(targetDir) // Clean up created directory
 		return
 	}
 	defer archiveFile.Close()
@@ -418,6 +501,7 @@ func DeployLabArchiveHandler(c *gin.Context) {
 	} else {
 		log.Warnf("DeployLab (Archive) failed for user '%s': Unsupported archive format for file '%s'", username, filename)
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: fmt.Sprintf("Unsupported archive format: %s. Use .zip or .tar.gz.", filename)})
+		_ = os.RemoveAll(targetDir) // Clean up created directory
 		return
 	}
 
@@ -469,7 +553,7 @@ func DeployLabArchiveHandler(c *gin.Context) {
 
 	// Add optional flags
 	if reconfigure {
-		// Note: We already removed the dir, but --reconfigure tells clab to also remove containers first
+		// Note: We already removed the dir if needed, but --reconfigure tells clab to also remove containers first
 		args = append(args, "--reconfigure")
 	}
 	if maxWorkers > 0 {
@@ -490,7 +574,7 @@ func DeployLabArchiveHandler(c *gin.Context) {
 
 	// --- Execute clab deploy ---
 	log.Infof("DeployLab (Archive) user '%s': Executing clab deploy for lab '%s' using topology '%s'...", username, labName, topoPathForClab)
-	stdout, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...)
+	stdout, stderr, err := clab.RunClabCommand(ctx, username, args...)
 
 	// --- Handle command execution results ---
 	if stderr != "" {
