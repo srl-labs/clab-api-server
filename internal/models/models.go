@@ -60,26 +60,25 @@ type GenericSuccessResponse struct {
 // --- Structs for parsing `clab inspect --format json` output ---
 
 // ClabInspectOutput matches the top-level structure of `clab inspect --all --format json`
-type ClabInspectOutput struct {
-	Containers []ClabContainerInfo `json:"containers"`
-}
+type ClabInspectOutput map[string][]ClabContainerInfo
+
+type ClabInspectOutputDetails map[string][]json.RawMessage
 
 // ClabContainerInfo matches the structure of each item in the "Containers" array
 type ClabContainerInfo struct {
-	Name        string `json:"name"`         // Name of the container node
+	Name        string `json:"name"`         // Name of the container node (e.g., "lab01-client1")
 	ContainerID string `json:"container_id"` // Docker container ID (short)
 	Image       string `json:"image"`        // Container image used
-	Kind        string `json:"kind"`         // e.g., "srl", "linux", "nokia_srlinux"
+	Kind        string `json:"kind"`         // e.g., "linux", "nokia_srlinux"
 	State       string `json:"state"`        // e.g., "running"
+	Status      string `json:"status"`       // e.g., "Up 18 hours"
 	IPv4Address string `json:"ipv4_address"` // Management IPv4 Address/Mask
 	IPv6Address string `json:"ipv6_address"` // Management IPv6 Address/Mask
-	LabName     string `json:"lab_name"`     // Name of the lab this node belongs to
-	LabPath     string `json:"labPath"`      // Path to the topology file used
+	LabName     string `json:"lab_name"`     // Name of the lab this node belongs to (redundant with map key but present)
+	LabPath     string `json:"labPath"`      // Path to the topology file used (relative)
+	AbsLabPath  string `json:"absLabPath"`   // Absolute path to topology file
 	Group       string `json:"group"`        // Group assigned in topology (Might not always be present)
 	Owner       string `json:"owner"`        // OS user from clab inspect output (Used for authorization)
-
-	// Fields potentially added by --details (use RawMessage if structure is too variable)
-	// Details json.RawMessage `json:"details,omitempty"` // Example if using RawMessage
 }
 
 // --- Structs for parsing `clab inspect interfaces --format json` output ---

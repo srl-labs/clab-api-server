@@ -1588,6 +1588,10 @@ const docTemplate = `{
         "models.ClabContainerInfo": {
             "type": "object",
             "properties": {
+                "absLabPath": {
+                    "description": "Absolute path to topology file",
+                    "type": "string"
+                },
                 "container_id": {
                     "description": "Docker container ID (short)",
                     "type": "string"
@@ -1609,19 +1613,19 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "kind": {
-                    "description": "e.g., \"srl\", \"linux\", \"nokia_srlinux\"",
+                    "description": "e.g., \"linux\", \"nokia_srlinux\"",
                     "type": "string"
                 },
                 "labPath": {
-                    "description": "Path to the topology file used",
+                    "description": "Path to the topology file used (relative)",
                     "type": "string"
                 },
                 "lab_name": {
-                    "description": "Name of the lab this node belongs to",
+                    "description": "Name of the lab this node belongs to (redundant with map key but present)",
                     "type": "string"
                 },
                 "name": {
-                    "description": "Name of the container node",
+                    "description": "Name of the container node (e.g., \"lab01-client1\")",
                     "type": "string"
                 },
                 "owner": {
@@ -1630,6 +1634,10 @@ const docTemplate = `{
                 },
                 "state": {
                     "description": "e.g., \"running\"",
+                    "type": "string"
+                },
+                "status": {
+                    "description": "e.g., \"Up 18 hours\"",
                     "type": "string"
                 }
             }
@@ -1660,12 +1668,10 @@ const docTemplate = `{
         },
         "models.ClabInspectOutput": {
             "type": "object",
-            "properties": {
-                "containers": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/models.ClabContainerInfo"
-                    }
+            "additionalProperties": {
+                "type": "array",
+                "items": {
+                    "$ref": "#/definitions/models.ClabContainerInfo"
                 }
             }
         },
@@ -2154,7 +2160,7 @@ const docTemplate = `{
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
 	Version:          "1.0",
-	Host:             "localhost:8080",
+	Host:             "",
 	BasePath:         "",
 	Schemes:          []string{"http", "https"},
 	Title:            "Containerlab API",

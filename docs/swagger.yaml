@@ -91,6 +91,9 @@ definitions:
     type: object
   models.ClabContainerInfo:
     properties:
+      absLabPath:
+        description: Absolute path to topology file
+        type: string
       container_id:
         description: Docker container ID (short)
         type: string
@@ -107,22 +110,26 @@ definitions:
         description: Management IPv6 Address/Mask
         type: string
       kind:
-        description: e.g., "srl", "linux", "nokia_srlinux"
+        description: e.g., "linux", "nokia_srlinux"
         type: string
       lab_name:
-        description: Name of the lab this node belongs to
+        description: Name of the lab this node belongs to (redundant with map key
+          but present)
         type: string
       labPath:
-        description: Path to the topology file used
+        description: Path to the topology file used (relative)
         type: string
       name:
-        description: Name of the container node
+        description: Name of the container node (e.g., "lab01-client1")
         type: string
       owner:
         description: OS user from clab inspect output (Used for authorization)
         type: string
       state:
         description: e.g., "running"
+        type: string
+      status:
+        description: e.g., "Up 18 hours"
         type: string
     type: object
   models.ClabExecInternalResult:
@@ -143,11 +150,10 @@ definitions:
         type: string
     type: object
   models.ClabInspectOutput:
-    properties:
-      containers:
-        items:
-          $ref: '#/definitions/models.ClabContainerInfo'
-        type: array
+    additionalProperties:
+      items:
+        $ref: '#/definitions/models.ClabContainerInfo'
+      type: array
     type: object
   models.DeployRequest:
     properties:
@@ -549,7 +555,6 @@ definitions:
     - link
     - remote
     type: object
-host: localhost:8080
 info:
   contact:
     email: support@swagger.io

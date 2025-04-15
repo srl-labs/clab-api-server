@@ -17,9 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gopkg.in/yaml.v3"
 
-	"github.com/srl-labs/clab-api-server/internal/auth"
 	"github.com/srl-labs/clab-api-server/internal/clab"
-	"github.com/srl-labs/clab-api-server/internal/config"
 	"github.com/srl-labs/clab-api-server/internal/models"
 )
 
@@ -793,15 +791,19 @@ func InspectLabHandler(c *gin.Context) {
 	}
 	log.Debugf("InspectLab user '%s': Inspecting lab '%s' (details=%t)", username, labName, details)
 
-	// --- Verify lab exists and belongs to the user (needed even if just inspecting) ---
+	// --- Verify lab exists and belongs to the user ---
+	// verifyLabOwnership implicitly runs inspect --name <labName> and checks ownership.
+	// We don't need the returned path here, just the success/failure.
 	_, ownerCheckErr := verifyLabOwnership(c, username, labName)
 	if ownerCheckErr != nil {
-		// verifyLabOwnership already sent the response
+		// verifyLabOwnership already sent the response (404, 500, etc.)
 		return
 	}
 	// Ownership confirmed
 
-	// --- Execute clab inspect ---
+	// --- Execute clab inspect again (this time potentially with --details) ---
+	// Although verifyLabOwnership ran inspect, we run it again here to easily get
+	// the --details output if requested and to ensure we have the latest state.
 	args := []string{"inspect", "--name", labName, "--format", "json"}
 	if details {
 		args = append(args, "--details")
@@ -809,49 +811,65 @@ func InspectLabHandler(c *gin.Context) {
 
 	stdout, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...)
 
-	if stderr != "" {
-		log.Warnf("InspectLab user '%s': clab inspect stderr for lab '%s': %s", username, labName, stderr)
-	}
+	// Error handling (similar to verifyLabOwnership, but focused on this specific call)
 	if err != nil {
-		// Error handling copied from original InspectLabHandler, checking for "not found"
 		errMsg := err.Error()
 		if strings.Contains(stdout, "no containers found") ||
 			strings.Contains(errMsg, "no containers found") ||
 			strings.Contains(errMsg, "no containerlab labs found") ||
 			strings.Contains(stderr, "no containers found") ||
 			strings.Contains(stderr, "Could not find containers for lab") {
-			log.Infof("InspectLab user '%s': Lab '%s' not found.", username, labName)
+			// This shouldn't happen if verifyLabOwnership passed, but handle defensively
+			log.Warnf("InspectLab user '%s': Lab '%s' not found on second inspect call (after ownership check).", username, labName)
 			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' not found.", labName)})
 			return
 		}
-		log.Errorf("InspectLab failed for user '%s': clab inspect command failed for lab '%s': %v", username, labName, err)
+		log.Errorf("InspectLab failed for user '%s': Second clab inspect command failed for lab '%s': %v. Stderr: %s", username, labName, err, stderr)
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to inspect lab '%s': %s", labName, err.Error())})
 		return
 	}
+	if stderr != "" {
+		log.Warnf("InspectLab user '%s': Second clab inspect stderr for lab '%s': %s", username, labName, stderr)
+	}
 
-	// --- Parse and Return Result ---
+	// --- Parse and Return Result based on --details flag ---
 	if details {
-		// For --details, the output structure is complex (like docker inspect).
-		// Return raw JSON to avoid complex model mapping.
-		var rawResult json.RawMessage
-		if err := json.Unmarshal([]byte(stdout), &rawResult); err != nil {
+		// Parse into the map structure for details
+		var resultMap models.ClabInspectOutputDetails
+		if err := json.Unmarshal([]byte(stdout), &resultMap); err != nil {
 			log.Errorf("InspectLab failed for user '%s': Failed to parse clab inspect --details JSON output for lab '%s': %v", username, labName, err)
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to parse clab inspect --details output: " + err.Error()})
 			return
 		}
+		// Extract the array for the specific lab
+		labDetails, found := resultMap[labName]
+		if !found {
+			// Should not happen if verifyOwnership passed, but handle defensively
+			log.Errorf("InspectLab user '%s': Lab '%s' key missing in --details output after ownership check.", username, labName)
+			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' details not found after ownership check.", labName)})
+			return
+		}
 		log.Debugf("InspectLab user '%s': Inspection (with details) of lab '%s' successful.", username, labName)
-		// Return the raw JSON directly. Gin handles marshalling json.RawMessage correctly.
-		c.Data(http.StatusOK, "application/json", rawResult)
+		c.JSON(http.StatusOK, labDetails) // Return the array of raw messages
+
 	} else {
-		// Standard inspect output handling
-		var result models.ClabInspectOutput
-		if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		// Parse into the standard map structure
+		var resultMap models.ClabInspectOutput
+		if err := json.Unmarshal([]byte(stdout), &resultMap); err != nil {
 			log.Errorf("InspectLab failed for user '%s': Failed to parse clab inspect JSON output for lab '%s': %v", username, labName, err)
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to parse clab inspect output: " + err.Error()})
 			return
 		}
+		// Extract the array for the specific lab
+		labContainers, found := resultMap[labName]
+		if !found {
+			// Should not happen if verifyOwnership passed, but handle defensively
+			log.Errorf("InspectLab user '%s': Lab '%s' key missing in standard inspect output after ownership check.", username, labName)
+			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' details not found after ownership check.", labName)})
+			return
+		}
 		log.Debugf("InspectLab user '%s': Inspection of lab '%s' successful.", username, labName)
-		c.JSON(http.StatusOK, result)
+		c.JSON(http.StatusOK, labContainers) // Return the array of ClabContainerInfo
 	}
 }
 
@@ -952,27 +970,14 @@ func InspectInterfacesHandler(c *gin.Context) {
 // @Failure 500 {object} models.ErrorResponse "Internal server error or clab execution failed"
 // @Router /api/v1/labs [get]
 func ListLabsHandler(c *gin.Context) {
-	username := c.GetString("username") // Authenticated user
+	username := c.GetString("username")  // Authenticated user
+	isSuperuser := isSuperuser(username) // Use helper
 
-	// --- Check for Superuser Status ---
-	isSuperuser := false
-	if config.AppConfig.SuperuserGroup != "" {
-		inGroup, err := auth.IsUserInGroup(username, config.AppConfig.SuperuserGroup)
-		if err != nil {
-			log.Errorf("ListLabs user '%s': Error checking superuser group membership for group '%s': %v. Proceeding with standard permissions.",
-				username, config.AppConfig.SuperuserGroup, err)
-		} else if inGroup {
-			isSuperuser = true
-			log.Infof("ListLabs user '%s': Identified as superuser (member of '%s'). Bypassing owner filtering.",
-				username, config.AppConfig.SuperuserGroup)
-		} else {
-			log.Debugf("ListLabs user '%s': Not a member of superuser group '%s'. Applying owner filtering.",
-				username, config.AppConfig.SuperuserGroup)
-		}
+	if isSuperuser {
+		log.Infof("ListLabs user '%s': Identified as superuser. Bypassing owner filtering.", username)
 	} else {
-		log.Debugf("ListLabs user '%s': No SUPERUSER_GROUP configured. Applying owner filtering.", username)
+		log.Debugf("ListLabs user '%s': Not a superuser. Applying owner filtering.", username)
 	}
-	// --- End Superuser Check ---
 
 	log.Debugf("ListLabs user '%s': Listing labs via 'clab inspect --all'...", username)
 	args := []string{"inspect", "--all", "--format", "json"}
@@ -987,7 +992,8 @@ func ListLabsHandler(c *gin.Context) {
 			strings.Contains(errMsg, "no containerlab labs found") ||
 			strings.Contains(stderr, "no containers found") {
 			log.Infof("ListLabs user '%s': No labs found via clab inspect.", username)
-			c.JSON(http.StatusOK, models.ClabInspectOutput{Containers: []models.ClabContainerInfo{}}) // Return empty list
+			// Return empty map for the new structure
+			c.JSON(http.StatusOK, models.ClabInspectOutput{})
 			return
 		}
 		log.Errorf("ListLabs failed for user '%s': clab inspect --all command failed: %v", username, err)
@@ -997,6 +1003,7 @@ func ListLabsHandler(c *gin.Context) {
 
 	log.Debugf("ListLabs user '%s': inspect --all command successful, parsing...", username)
 
+	// Unmarshal into the new map structure
 	var fullResult models.ClabInspectOutput
 	if err := json.Unmarshal([]byte(stdout), &fullResult); err != nil {
 		log.Errorf("ListLabs failed for user '%s': Failed to parse clab inspect --all JSON output: %v", username, err)
@@ -1008,41 +1015,43 @@ func ListLabsHandler(c *gin.Context) {
 	var finalResult models.ClabInspectOutput
 
 	if isSuperuser {
-		log.Debugf("ListLabs user '%s': Superuser returning all %d containers from %d labs.", username, len(fullResult.Containers), countUniqueLabs(fullResult.Containers))
-		finalResult = fullResult
+		log.Debugf("ListLabs user '%s': Superuser returning all %d labs.", username, len(fullResult))
+		finalResult = fullResult // Return the full map
 	} else {
-		filteredContainers := []models.ClabContainerInfo{}
-		labsFoundForUser := make(map[string]bool)
+		// Create a new map to store filtered results
+		finalResult = make(models.ClabInspectOutput)
+		labsFoundForUser := make(map[string]bool) // Track labs already processed
 
-		for _, cont := range fullResult.Containers {
-			if cont.Owner == username {
-				filteredContainers = append(filteredContainers, cont)
-				if !labsFoundForUser[cont.LabName] {
-					labsFoundForUser[cont.LabName] = true
-					log.Debugf("ListLabs user '%s': Found lab '%s' owned by user.", username, cont.LabName)
+		for labName, containers := range fullResult {
+			if _, checked := labsFoundForUser[labName]; checked {
+				continue // Already decided on this lab
+			}
+
+			userOwnsThisLab := false
+			for _, cont := range containers {
+				if cont.Owner == username {
+					userOwnsThisLab = true
+					break // Found one owned container, the whole lab is included
 				}
+			}
+
+			if userOwnsThisLab {
+				log.Debugf("ListLabs user '%s': Including lab '%s' as it contains containers owned by the user.", username, labName)
+				finalResult[labName] = containers // Add the full container list for this lab
+				labsFoundForUser[labName] = true
 			} else {
-				_, checked := labsFoundForUser[cont.LabName]
-				if !checked && cont.Owner != "" {
-					log.Debugf("ListLabs user '%s': Filtering out lab '%s' owned by '%s'.", username, cont.LabName, cont.Owner)
-					labsFoundForUser[cont.LabName] = false
+				// Log only once per lab that's being filtered out
+				if len(containers) > 0 { // Avoid logging for potentially empty labs
+					log.Debugf("ListLabs user '%s': Filtering out lab '%s' as no containers are owned by the user (e.g., owned by '%s').", username, labName, containers[0].Owner)
 				}
+				labsFoundForUser[labName] = false
 			}
 		}
-
-		ownedLabCount := 0
-		for _, owned := range labsFoundForUser {
-			if owned {
-				ownedLabCount++
-			}
-		}
-
-		log.Infof("ListLabs user '%s': Found %d containers belonging to %d labs owned by the user.", username, len(filteredContainers), ownedLabCount)
-		finalResult.Containers = filteredContainers
+		log.Infof("ListLabs user '%s': Found %d labs containing containers owned by the user.", username, len(finalResult))
 	}
 	// --- End Filtering ---
 
-	c.JSON(http.StatusOK, finalResult)
+	c.JSON(http.StatusOK, finalResult) // Return the potentially filtered map
 }
 
 // @Summary Save Lab Configuration
