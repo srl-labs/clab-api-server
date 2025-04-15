@@ -19,7 +19,7 @@ import (
 )
 
 // @Summary Generate Topology
-// @Description Generates a containerlab topology file based on CLOS definitions. Optionally deploys it.
+// @Description Generates a containerlab topology file based on CLOS definitions. Optionally deploys it, setting the owner to the authenticated user.
 // @Description The 'images' and 'licenses' fields expect a map where the key is the node 'kind' and the value is the corresponding image or license path (e.g., {"nokia_srlinux": "ghcr.io/..."}).
 // @Description If Deploy=true, the topology is saved to the user's ~/.clab/<labName>/ directory before deployment, and the 'outputFile' field is ignored.
 // @Description If Deploy=false and 'outputFile' is empty, YAML is returned directly.
@@ -266,11 +266,10 @@ func GenerateTopologyHandler(c *gin.Context) {
 		// --- Execute clab deploy ---
 		// No temp file cleanup needed
 
-		deployArgs := []string{"deploy", "-t", targetFilePath, "--reconfigure"} // Use the path in user's home
+		deployArgs := []string{"deploy", "--owner", username, "-t", targetFilePath, "--reconfigure", "--format", "json"}
 		if req.MaxWorkers > 0 {
 			deployArgs = append(deployArgs, "--max-workers", strconv.Itoa(req.MaxWorkers))
 		}
-		deployArgs = append(deployArgs, "--format", "json") // Request JSON output from deploy
 
 		log.Infof("GenerateTopology user '%s': Deploying generated topology '%s' from '%s'...", username, req.Name, targetFilePath)
 		deployStdout, deployStderr, deployErr := clab.RunClabCommand(c.Request.Context(), username, deployArgs...)

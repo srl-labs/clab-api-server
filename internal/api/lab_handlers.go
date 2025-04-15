@@ -22,7 +22,7 @@ import (
 )
 
 // @Summary Deploy Lab
-// @Description Deploys a containerlab topology. Requires EITHER 'topologyContent' OR 'topologySourceUrl' in the request body, but not both.
+// @Description Deploys a containerlab topology. Requires EITHER 'topologyContent' OR 'topologySourceUrl' in the request body, but not both. The lab will be owned by the authenticated user.
 // @Description Optional deployment flags are provided as query parameters.
 // @Tags Labs
 // @Security BearerAuth
@@ -100,7 +100,7 @@ func DeployLabHandler(c *gin.Context) {
 	}
 
 	// --- Prepare Base Arguments ---
-	args := []string{"deploy", "--format", "json"}
+	args := []string{"deploy", "--owner", username, "--format", "json"}
 
 	// --- Handle Topology Source and Lab Name ---
 	var labName string // Will hold the determined lab name for logging/cleanup reference
@@ -119,7 +119,13 @@ func DeployLabHandler(c *gin.Context) {
 		if labNameOverride != "" {
 			labName = labNameOverride
 		} else {
-			labName = "<determined_by_clab_from_url>"
+			// Try to infer name from URL for logging, but clab will determine the actual name
+			base := filepath.Base(req.TopologySourceUrl)
+			ext := filepath.Ext(base)
+			labName = strings.TrimSuffix(base, ext)
+			if !isValidLabName(labName) { // If inferred name is invalid, use placeholder
+				labName = "<determined_by_clab_from_url>"
+			}
 		}
 	} else { // hasContent
 		log.Infof("DeployLab user '%s': Deploying from provided topology content.", username)
@@ -276,7 +282,7 @@ func DeployLabHandler(c *gin.Context) {
 }
 
 // @Summary Deploy Lab from Archive
-// @Description Deploys a containerlab topology provided as a .zip or .tar.gz archive. The archive must contain the .clab.yml file and any necessary bind-mount files/directories.
+// @Description Deploys a containerlab topology provided as a .zip or .tar.gz archive. The archive must contain the .clab.yml file and any necessary bind-mount files/directories. The lab will be owned by the authenticated user.
 // @Description The lab name is taken from the 'labName' query parameter. The archive is extracted to the user's ~/.clab/<labName>/ directory.
 // @Tags Labs
 // @Security BearerAuth
@@ -459,7 +465,8 @@ func DeployLabArchiveHandler(c *gin.Context) {
 	}
 
 	// --- Construct clab deploy args ---
-	args := []string{"deploy", "--topo", topoPathForClab, "--format", "json"}
+	args := []string{"deploy", "--owner", username, "--topo", topoPathForClab, "--format", "json"}
+
 	// Add optional flags
 	if reconfigure {
 		// Note: We already removed the dir, but --reconfigure tells clab to also remove containers first
