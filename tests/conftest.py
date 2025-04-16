@@ -12,7 +12,6 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 
 # --- Basic API and Timeout Fixtures ---
-# ... (api_url, timeouts - remain the same) ...
 @pytest.fixture(scope="session")
 def api_url():
     return os.getenv("API_URL", "http://127.0.0.1:8080")
@@ -34,7 +33,6 @@ def lab_stabilize_pause():
     return int(os.getenv("PYTEST_STABILIZE_PAUSE", "10"))
 
 # --- Credential Fixtures ---
-# ... (superuser_credentials, apiuser_credentials, unauth_user_credentials - remain the same) ...
 @pytest.fixture(scope="session")
 def superuser_credentials():
     return (
@@ -57,7 +55,6 @@ def unauth_user_credentials():
     )
 
 # --- Token and Header Fixtures ---
-# ... (superuser_token, apiuser_token, unauth_user_token, auth_headers, apiuser_headers, superuser_headers - remain the same) ...
 @pytest.fixture
 def superuser_token(api_url, superuser_credentials, request_timeout):
     user, passwd = superuser_credentials
@@ -101,7 +98,6 @@ def superuser_headers(superuser_token):
 
 
 # --- Topology and Lab Name Fixtures ---
-# ... (simple_topology_content, lab_name_prefix - remain the same) ...
 @pytest.fixture(scope="session")
 def simple_topology_content():
     content = os.getenv("PYTEST_SIMPLE_TOPOLOGY_CONTENT")
@@ -114,7 +110,6 @@ def lab_name_prefix():
     return os.getenv("PYTEST_LAB_NAME_PREFIX", "pytest")
 
 # --- Helper Function ---
-# ... (random_suffix - remains the same) ...
 def random_suffix(length=5):
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
@@ -128,7 +123,7 @@ def ephemeral_lab(request, api_url, auth_headers, superuser_headers, simple_topo
     """
     suffix = random_suffix()
     lab_name = f"{lab_name_prefix}-eph-{suffix}"
-    logging.info(f"---> [SETUP] Creating ephemeral lab: {lab_name} (as apiuser)") # Use logging
+    logging.info(f"---> [SETUP] Creating ephemeral lab: {lab_name} (as apiuser)")
 
     topology_yaml = simple_topology_content.format(lab_name=lab_name)
     deploy_url = f"{api_url}/api/v1/labs"
@@ -137,7 +132,7 @@ def ephemeral_lab(request, api_url, auth_headers, superuser_headers, simple_topo
     try:
         resp = requests.post(deploy_url, json=req_body, headers=auth_headers, timeout=deploy_timeout) # Create as apiuser
         resp.raise_for_status()
-        logging.info(f"  `-> [SETUP] Lab '{lab_name}' created successfully.") # Use logging
+        logging.info(f"  `-> [SETUP] Lab '{lab_name}' created successfully.")
     except requests.exceptions.RequestException as e:
         logging.error(f"Failed to create ephemeral lab '{lab_name}': {e}\nResponse: {e.response.text if e.response else 'No Response'}")
         pytest.fail(f"Failed to create ephemeral lab '{lab_name}': {e}")
@@ -145,22 +140,22 @@ def ephemeral_lab(request, api_url, auth_headers, superuser_headers, simple_topo
     time.sleep(lab_stabilize_pause)
     yield lab_name
 
-    logging.info(f"<--- [TEARDOWN] Cleaning up ephemeral lab: {lab_name} (as superuser)") # Use logging
+    logging.info(f"<--- [TEARDOWN] Cleaning up ephemeral lab: {lab_name} (as superuser)")
     destroy_url = f"{api_url}/api/v1/labs/{lab_name}"
     params = {"cleanup": "true"}
     try:
         # Use SUPERUSER headers for teardown to guarantee cleanup
         resp_del = requests.delete(destroy_url, headers=superuser_headers, params=params, timeout=cleanup_timeout)
         if resp_del.status_code == 404:
-            logging.warning(f"  `-> [TEARDOWN] Warning: Lab '{lab_name}' not found during cleanup.") # Use logging
+            logging.warning(f"  `-> [TEARDOWN] Warning: Lab '{lab_name}' not found during cleanup.")
         elif resp_del.status_code != 200:
-            logging.warning(f"  `-> [TEARDOWN] Warning: Failed cleanup for lab '{lab_name}'. Status: {resp_del.status_code}, Response: {resp_del.text}") # Use logging
+            logging.warning(f"  `-> [TEARDOWN] Warning: Failed cleanup for lab '{lab_name}'. Status: {resp_del.status_code}, Response: {resp_del.text}")
         else:
-            logging.info(f"  `-> [TEARDOWN] Lab '{lab_name}' cleaned up successfully.") # Use logging
+            logging.info(f"  `-> [TEARDOWN] Lab '{lab_name}' cleaned up successfully.")
         cleanup_pause_duration = request.config.getoption("--cleanup-pause", default=3)
         time.sleep(cleanup_pause_duration)
     except requests.exceptions.RequestException as e:
-        logging.warning(f"  `-> [TEARDOWN] Warning: Exception during lab cleanup for '{lab_name}': {e}") # Use logging
+        logging.warning(f"  `-> [TEARDOWN] Warning: Exception during lab cleanup for '{lab_name}': {e}")
 
 
 @pytest.fixture
@@ -171,7 +166,7 @@ def superuser_lab(request, api_url, superuser_headers, simple_topology_content, 
     """
     suffix = random_suffix()
     lab_name = f"{lab_name_prefix}-su-eph-{suffix}"
-    logging.info(f"---> [SETUP-SU] Creating superuser ephemeral lab: {lab_name}") # Use logging
+    logging.info(f"---> [SETUP-SU] Creating superuser ephemeral lab: {lab_name}")
 
     topology_yaml = simple_topology_content.format(lab_name=lab_name)
     deploy_url = f"{api_url}/api/v1/labs"
@@ -180,7 +175,7 @@ def superuser_lab(request, api_url, superuser_headers, simple_topology_content, 
     try:
         resp = requests.post(deploy_url, json=req_body, headers=superuser_headers, timeout=deploy_timeout)
         resp.raise_for_status()
-        logging.info(f"  `-> [SETUP-SU] Lab '{lab_name}' created successfully.") # Use logging
+        logging.info(f"  `-> [SETUP-SU] Lab '{lab_name}' created successfully.")
     except requests.exceptions.RequestException as e:
         logging.error(f"Failed to create superuser ephemeral lab '{lab_name}': {e}\nResponse: {e.response.text if e.response else 'No Response'}")
         pytest.fail(f"Failed to create superuser ephemeral lab '{lab_name}': {e}")
@@ -188,22 +183,22 @@ def superuser_lab(request, api_url, superuser_headers, simple_topology_content, 
     time.sleep(lab_stabilize_pause)
     yield lab_name
 
-    logging.info(f"<--- [TEARDOWN-SU] Cleaning up superuser ephemeral lab: {lab_name}") # Use logging
+    logging.info(f"<--- [TEARDOWN-SU] Cleaning up superuser ephemeral lab: {lab_name}")
     destroy_url = f"{api_url}/api/v1/labs/{lab_name}"
     params = {"cleanup": "true"}
     try:
         # Superuser headers are already used here
         resp_del = requests.delete(destroy_url, headers=superuser_headers, params=params, timeout=cleanup_timeout)
         if resp_del.status_code == 404:
-            logging.warning(f"  `-> [TEARDOWN-SU] Warning: Lab '{lab_name}' not found during cleanup.") # Use logging
+            logging.warning(f"  `-> [TEARDOWN-SU] Warning: Lab '{lab_name}' not found during cleanup.")
         elif resp_del.status_code != 200:
-            logging.warning(f"  `-> [TEARDOWN-SU] Warning: Failed cleanup for lab '{lab_name}'. Status: {resp_del.status_code}, Response: {resp_del.text}") # Use logging
+            logging.warning(f"  `-> [TEARDOWN-SU] Warning: Failed cleanup for lab '{lab_name}'. Status: {resp_del.status_code}, Response: {resp_del.text}")
         else:
-            logging.info(f"  `-> [TEARDOWN-SU] Lab '{lab_name}' cleaned up successfully.") # Use logging
+            logging.info(f"  `-> [TEARDOWN-SU] Lab '{lab_name}' cleaned up successfully.")
         cleanup_pause_duration = request.config.getoption("--cleanup-pause", default=3)
         time.sleep(cleanup_pause_duration)
     except requests.exceptions.RequestException as e:
-        logging.warning(f"  `-> [TEARDOWN-SU] Warning: Exception during superuser lab cleanup for '{lab_name}': {e}") # Use logging
+        logging.warning(f"  `-> [TEARDOWN-SU] Warning: Exception during superuser lab cleanup for '{lab_name}': {e}")
 
 
 @pytest.fixture
@@ -212,15 +207,10 @@ def apiuser_lab(ephemeral_lab):
     return ephemeral_lab
 
 # --- Pytest Hooks ---
-# ... (pytest_addoption, pytest_configure - remain the same) ...
 def pytest_addoption(parser):
     parser.addoption(
         "--cleanup-pause", action="store", default=3, type=int, help="Seconds to pause after lab cleanup."
     )
 
 def pytest_configure(config):
-    # Basic logging configuration can be done here if needed,
-    # but using pyproject.toml is often cleaner for pytest integration.
-    # Example:
-    # logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
     pass
