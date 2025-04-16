@@ -2,10 +2,12 @@
 package tests_go
 
 import (
+	// Import bytes
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
+
+	// "os" // No longer needed for os.IsExist/IsPermission
 	"strings"
 	"testing"
 	"time"
@@ -35,11 +37,11 @@ func TestListLabsIncludesCreated(t *testing.T) {
 	listURL := fmt.Sprintf("%s/api/v1/labs", cfg.APIURL)
 	bodyBytes, statusCode, err := doRequest(t, "GET", listURL, userHeaders, nil, cfg.RequestTimeout)
 	if err != nil {
-		t.Fatalf("Failed to list labs: %v", err)
+		t.Fatalf("Failed to execute list labs request: %v", err)
 	}
 
 	if statusCode != http.StatusOK {
-		t.Fatalf("Expected status 200 listing labs, got %d. Body: %s", statusCode, string(bodyBytes))
+		t.Fatalf("Expected status %d listing labs, got %d. Body: %s", http.StatusOK, statusCode, string(bodyBytes))
 	}
 
 	var labsData ClabInspectOutput
@@ -63,11 +65,11 @@ func TestInspectCreatedLab(t *testing.T) {
 	inspectURL := fmt.Sprintf("%s/api/v1/labs/%s", cfg.APIURL, labName)
 	bodyBytes, statusCode, err := doRequest(t, "GET", inspectURL, userHeaders, nil, cfg.RequestTimeout)
 	if err != nil {
-		t.Fatalf("Failed to inspect lab: %v", err)
+		t.Fatalf("Failed to execute inspect lab request: %v", err)
 	}
 
 	if statusCode != http.StatusOK {
-		t.Fatalf("Expected status 200 inspecting lab '%s', got %d. Body: %s", labName, statusCode, string(bodyBytes))
+		t.Fatalf("Expected status %d inspecting lab '%s', got %d. Body: %s", http.StatusOK, labName, statusCode, string(bodyBytes))
 	}
 
 	var labDetails []ClabContainerInfo
@@ -90,19 +92,27 @@ func TestCreateDuplicateLabFails(t *testing.T) {
 	t.Logf("[TEST] Attempting to create duplicate lab '%s' (expecting 409).", labName)
 
 	topology := strings.ReplaceAll(cfg.SimpleTopologyContent, "{lab_name}", labName)
-	err := createLab(t, userHeaders, labName, topology, false, cfg.DeployTimeout) // reconfigure=false
+	// Call createLab helper, but check status code directly
+	bodyBytes, statusCode, err := createLab(t, userHeaders, labName, topology, false, cfg.DeployTimeout) // reconfigure=false
 
-	if err == nil {
-		t.Fatalf("Expected an error when creating duplicate lab '%s', but got nil", labName)
+	if err != nil {
+		// This checks for transport errors, not status codes
+		t.Fatalf("Failed to execute create duplicate lab request: %v", err)
 	}
 
-	// Check if the error indicates a conflict (os.ErrExist is used in our helper)
-	if !os.IsExist(err) { // Check if the error wraps os.ErrExist
-		t.Errorf("Expected a conflict error (os.ErrExist), but got: %v", err)
+	// Assert the status code
+	if statusCode != http.StatusConflict {
+		t.Errorf("Expected status %d (Conflict) when creating duplicate lab, but got %d. Body: %s", http.StatusConflict, statusCode, string(bodyBytes))
 	} else {
-		t.Logf("  `-> Correctly received conflict error when creating duplicate lab.")
+		t.Logf("  `-> Correctly received status %d (Conflict) when creating duplicate lab.", statusCode)
+		// Optionally check error message in body
+		var errResp struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(bodyBytes, &errResp) == nil && !strings.Contains(errResp.Error, "already exists") {
+			t.Logf("  `-> Warning: Conflict response body did not contain expected 'already exists' message: %s", errResp.Error)
+		}
 	}
-	// Status code check is implicitly done within the createLab helper for this specific test name pattern
 }
 
 func TestReconfigureLabOwnerSucceeds(t *testing.T) {
@@ -111,19 +121,27 @@ func TestReconfigureLabOwnerSucceeds(t *testing.T) {
 	t.Logf("[TEST] Attempting to reconfigure owned lab '%s' (expecting 200).", labName)
 
 	topology := strings.ReplaceAll(cfg.SimpleTopologyContent, "{lab_name}", labName)
-	err := createLab(t, userHeaders, labName, topology, true, cfg.DeployTimeout) // reconfigure=true
+	// Call createLab helper with reconfigure=true
+	bodyBytes, statusCode, err := createLab(t, userHeaders, labName, topology, true, cfg.DeployTimeout)
 
 	if err != nil {
-		t.Fatalf("Expected success when reconfiguring owned lab '%s', but got error: %v", labName, err)
+		t.Fatalf("Failed to execute reconfigure owned lab request: %v", err)
 	}
 
-	t.Logf("  `-> Reconfigure successful. Pausing for stabilization...")
+	// Assert the status code
+	if statusCode != http.StatusOK {
+		t.Errorf("Expected status %d (OK) when reconfiguring owned lab, but got %d. Body: %s", http.StatusOK, statusCode, string(bodyBytes))
+	} else {
+		t.Logf("  `-> Reconfigure successful.")
+	}
+
+	t.Logf("  `-> Pausing for stabilization...")
 	time.Sleep(cfg.StabilizePause)
 }
 
 func TestReconfigureLabNonOwnerFails(t *testing.T) {
 	// 1. Create a lab as superuser
-	suLabName, superuserHeaders := setupSuperuserLab(t)
+	suLabName, _ := setupSuperuserLab(t) // Cleanup handled by setup
 
 	// 2. Get headers for the regular apiuser
 	apiUserToken := login(t, cfg.APIUserUser, cfg.APIUserPass)
@@ -134,26 +152,30 @@ func TestReconfigureLabNonOwnerFails(t *testing.T) {
 
 	topology := strings.ReplaceAll(cfg.SimpleTopologyContent, "{lab_name}", suLabName)
 	// Use the apiuser headers to attempt the reconfigure
-	err := createLab(t, apiUserHeaders, suLabName, topology, true, cfg.DeployTimeout) // reconfigure=true
+	bodyBytes, statusCode, err := createLab(t, apiUserHeaders, suLabName, topology, true, cfg.DeployTimeout) // reconfigure=true
 
-	if err == nil {
-		// Cleanup the lab manually if the test failed unexpectedly
-		_ = destroyLab(t, superuserHeaders, suLabName, true, cfg.CleanupTimeout)
-		t.Fatalf("Expected an error when non-owner reconfiguring lab '%s', but got nil", suLabName)
+	if err != nil {
+		t.Fatalf("Failed to execute non-owner reconfigure request: %v", err)
 	}
 
-	// Check if the error indicates permission denied (os.ErrPermission is used in our helper)
-	if !os.IsPermission(err) {
-		t.Errorf("Expected a permission error (os.ErrPermission), but got: %v", err)
+	// Assert the status code
+	if statusCode != http.StatusForbidden {
+		t.Errorf("Expected status %d (Forbidden) when non-owner reconfiguring lab, but got %d. Body: %s", http.StatusForbidden, statusCode, string(bodyBytes))
 	} else {
-		t.Logf("  `-> Correctly received permission error when non-owner reconfiguring lab.")
+		t.Logf("  `-> Correctly received status %d (Forbidden) when non-owner reconfiguring lab.", statusCode)
+		// Optionally check error message in body
+		var errResp struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(bodyBytes, &errResp) == nil && !strings.Contains(errResp.Error, "permission denied") {
+			t.Logf("  `-> Warning: Forbidden response body did not contain expected 'permission denied' message: %s", errResp.Error)
+		}
 	}
-	// Status code check is implicitly done within the createLab helper for this specific test name pattern
 }
 
 func TestReconfigureLabSuperuserSucceeds(t *testing.T) {
 	// 1. Create a lab as apiuser
-	apiLabName, _ := setupEphemeralLab(t) // We only need the name, cleanup is handled
+	apiLabName, _ := setupEphemeralLab(t) // Cleanup handled by setup
 
 	// 2. Get headers for the superuser
 	superuserToken := login(t, cfg.SuperuserUser, cfg.SuperuserPass)
@@ -164,13 +186,20 @@ func TestReconfigureLabSuperuserSucceeds(t *testing.T) {
 
 	topology := strings.ReplaceAll(cfg.SimpleTopologyContent, "{lab_name}", apiLabName)
 	// Use the superuser headers to attempt the reconfigure
-	err := createLab(t, superuserHeaders, apiLabName, topology, true, cfg.DeployTimeout) // reconfigure=true
+	bodyBytes, statusCode, err := createLab(t, superuserHeaders, apiLabName, topology, true, cfg.DeployTimeout) // reconfigure=true
 
 	if err != nil {
-		t.Fatalf("Expected success when superuser reconfiguring lab '%s', but got error: %v", apiLabName, err)
+		t.Fatalf("Failed to execute superuser reconfigure request: %v", err)
 	}
 
-	t.Logf("  `-> Superuser reconfigure successful. Pausing for stabilization...")
+	// Assert the status code
+	if statusCode != http.StatusOK {
+		t.Errorf("Expected status %d (OK) when superuser reconfiguring lab, but got %d. Body: %s", http.StatusOK, statusCode, string(bodyBytes))
+	} else {
+		t.Logf("  `-> Superuser reconfigure successful.")
+	}
+
+	t.Logf("  `-> Pausing for stabilization...")
 	time.Sleep(cfg.StabilizePause)
 }
 
@@ -186,11 +215,11 @@ func TestListLabsSuperuser(t *testing.T) {
 	// Use superuser headers for the request
 	bodyBytes, statusCode, err := doRequest(t, "GET", listURL, superuserHeaders, nil, cfg.RequestTimeout)
 	if err != nil {
-		t.Fatalf("Failed to list labs as superuser: %v", err)
+		t.Fatalf("Failed to execute list labs request as superuser: %v", err)
 	}
 
 	if statusCode != http.StatusOK {
-		t.Fatalf("Expected status 200 listing labs as superuser, got %d. Body: %s", statusCode, string(bodyBytes))
+		t.Fatalf("Expected status %d listing labs as superuser, got %d. Body: %s", http.StatusOK, statusCode, string(bodyBytes))
 	}
 
 	var labsData ClabInspectOutput
@@ -232,11 +261,11 @@ func TestListLabsAPIUserFilters(t *testing.T) {
 	// Use apiuser headers for the request
 	bodyBytes, statusCode, err := doRequest(t, "GET", listURL, apiUserHeaders, nil, cfg.RequestTimeout)
 	if err != nil {
-		t.Fatalf("Failed to list labs as apiuser: %v", err)
+		t.Fatalf("Failed to execute list labs request as apiuser: %v", err)
 	}
 
 	if statusCode != http.StatusOK {
-		t.Fatalf("Expected status 200 listing labs as apiuser, got %d. Body: %s", statusCode, string(bodyBytes))
+		t.Fatalf("Expected status %d listing labs as apiuser, got %d. Body: %s", http.StatusOK, statusCode, string(bodyBytes))
 	}
 
 	var labsData ClabInspectOutput

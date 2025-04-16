@@ -13,6 +13,8 @@ __pycache__/
 .pytest_cache/
 test_report.html
 .venv/
+tests_go/*.json
+tests_go/*.html
 
 # IDE/editor configs
 .vscode/
