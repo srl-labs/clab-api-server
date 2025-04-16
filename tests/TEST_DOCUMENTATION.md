@@ -2,6 +2,36 @@
 
 This document explains the test suite for the Containerlab API server. The tests verify authentication and lab management functionality, ensuring that permissions, ownership validation, and multi-user segregation work as expected.
 
+## Running the Tests
+
+To run the entire test suite:
+
+```bash
+go test -v ./tests_go
+```
+
+To run specific tests:
+
+```bash
+go test -v ./tests_go -run TestLoginSuperuser
+```
+
+### Using gotestsum for Better Output and Reporting
+
+For more detailed output and JSON reporting:
+
+```bash
+gotestsum --format=standard-verbose --jsonfile=test-output.json -- ./...
+```
+
+To generate an HTML report from the JSON output:
+
+```bash
+cat test-output.json | go-test-report -o test-report.html
+```
+
+This creates a visual HTML report that makes it easier to analyze test results, especially in CI/CD pipelines.
+
 ## Setup and Configuration
 
 The test suite uses a configuration structure (`TestConfig`) that loads values from environment variables or defaults:
@@ -156,19 +186,3 @@ GOTEST_SIMPLE_TOPOLOGY_CONTENT=...
 ```
 
 The GOTEST_SIMPLE_TOPOLOGY_CONTENT must contain a `{lab_name}` placeholder that will be replaced with a generated lab name during testing.
-
-## Running the Tests
-
-To run the entire test suite:
-
-```bash
-go test -v ./tests_go
-```
-
-To run specific tests:
-
-```bash
-go test -v ./tests_go -run TestLoginSuperuser
-```
-
-The `-v` flag provides verbose output, which is useful for debugging.
