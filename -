@@ -1,0 +1,13 @@
+name: generated-clos-yaml-38c9b0
+prefix: null
+mgmt: {}
+settings: null
+topology:
+  kinds:
+    linux:
+      image: alpine:latest
+  nodes:
+    node1-1:
+      kind: linux
+      group: tier-1
+debug: false
