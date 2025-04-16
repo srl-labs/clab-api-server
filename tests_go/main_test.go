@@ -36,6 +36,7 @@ type TestConfig struct {
 	CleanupPause          time.Duration
 	LabNamePrefix         string
 	SimpleTopologyContent string
+	rng                   *rand.Rand
 }
 
 var cfg TestConfig
@@ -49,6 +50,9 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		fmt.Printf("Warning: Could not load .env file from %s: %v\n", envPath, err)
 	}
+
+	// Initialize the random number generator
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	cfg = TestConfig{
 		APIURL:                getEnv("API_URL", "http://127.0.0.1:8080"),
@@ -65,6 +69,7 @@ func TestMain(m *testing.M) {
 		CleanupPause:          getEnvDuration("GOTEST_CLEANUP_PAUSE", 3*time.Second),
 		LabNamePrefix:         getEnv("GOTEST_LAB_NAME_PREFIX", "gotest"),
 		SimpleTopologyContent: getEnvOrDie("GOTEST_SIMPLE_TOPOLOGY_CONTENT"),
+		rng:                   rng,
 	}
 
 	if !strings.Contains(cfg.SimpleTopologyContent, "{lab_name}") {
@@ -72,7 +77,6 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	rand.Seed(time.Now().UnixNano())
 	exitCode := m.Run()
 	os.Exit(exitCode)
 }
@@ -109,11 +113,12 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 	return valueInt
 }
 
+// Updated to use the provided random source
 func randomSuffix(length int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, length)
 	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))]
+		b[i] = letters[cfg.rng.Intn(len(letters))]
 	}
 	return string(b)
 }
