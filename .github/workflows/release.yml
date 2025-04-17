@@ -4,55 +4,45 @@ on:
   release:
     types: [created]
 
-# Add permissions block to allow writing to releases
 permissions:
-  contents: write
+  contents: write          # allow upload to the Release
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Get release tag
-        id: get_tag
-        run: echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-      
+      # 1. Checkout
+      - uses: actions/checkout@v4
+
+      # 2. Extract the tag (keeps your existing env usage)
+      - id: get_tag
+        run: echo "TAG=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      # 3. Prime the module cache & Go build cache
       - name: Setup Go
-        uses: WillAbides/setup-go-faster@v1.14.0
+        uses: actions/setup-go@v5        # Go 1.21.x is the current default
         with:
-          go-version: '1.21'  # Adjust to your project's Go version
-      
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential libpam-dev
-      
-      - name: Cache Go modules
-        uses: actions/cache@v4
+          go-version: '1.21'
+          cache: true                    # built‑in cache (no extra action)
+
+      # 4. Cross‑compile for linux/amd64 + linux/arm64 with CGO enabled
+      - name: Build multi‑arch binaries
+        uses: crazy-max/ghaction-xgo@v3
         with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
-      
-      - name: Build binary
-        run: |
-          go build -o clab-api-server cmd/server/main.go
-          # Make binary executable
-          chmod +x clab-api-server
-      
-      - name: Upload Release Asset
+          xgo_version: latest            # pulls the latest xgo container
+          go_version: 1.21
+          dest: dist                     # output folder
+          prefix: clab-api-server        # binary base name
+          pkg: ./cmd/server              # entry‑point package
+          targets: linux/amd64,linux/arm64
+          v: true                        # verbose build output
+          ldflags: -s -w                 # strip debug info
+
+      # 5. Upload both binaries to the GitHub Release that triggered the job
+      - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
         with:
-          files: ./clab-api-server
-      
-      - name: Upload binary as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: clab-api-server
-          path: clab-api-server
-          compression-level: 0
+          files: |
+            dist/clab-api-server-linux-amd64
+            dist/clab-api-server-linux-arm64
