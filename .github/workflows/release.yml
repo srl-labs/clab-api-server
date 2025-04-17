@@ -1,85 +1,82 @@
-name: Build and Release
+name: Build and Release (Debian host container)
 
 on:
   release:
     types: [created]
 
 permissions:
-  contents: write        # allow uploading assets to the Release page
+  contents: write            # allow uploading assets
 
 jobs:
   build:
-    # Switch to a Debian runner
-    runs-on: debian-latest # Or debian-12, debian-11 etc.
+    runs-on: ubuntu-latest    # VM host; job itself runs in container
+    container:
+      image: debian:bookworm  # every step below runs in this Debian 12 image
+      options: --platform linux/amd64
 
     steps:
-      # 1 Checkout
-      - name: Checkout code
-        uses: actions/checkout@v4
+      # 1 Get the source
+      - uses: actions/checkout@v4
 
-      # 2 Extract version tag
-      - name: Get release tag
-        id: get_tag
+      # 2 Save the tag for later
+      - id: tag
         run: echo "TAG=${GITHUB_REF#refs/tags/}" >>"$GITHUB_OUTPUT"
 
-      # 3 Fast Go installer (≈3 s on Ubuntu) - Should work fine on Debian too
-      - name: Setup Go (fast)
-        uses: WillAbides/setup-go-faster@v1.14.0
-        with:
-          go-version: '1.21.x'
-
-      # 4 Enable Arm64 multi‑arch & install build deps (Debian syntax)
-      - name: Install cross‑tool‑chains & PAM headers
+      # 3 Add backports + enable arm64, then install tool‑chains & headers
+      - name: Install build dependencies
         run: |
-          sudo dpkg --add-architecture arm64
-          # Update package lists after adding the new architecture
-          sudo apt-get update -qq
-          # Install dependencies - package names are likely the same
-          sudo apt-get install -y --no-install-recommends \
-            build-essential                                     \
-            gcc-aarch64-linux-gnu                               \ # cross C compiler
-            libpam0g-dev                                        \ # pam_appl.h for amd64 (native)
-            libpam0g-dev:arm64                                    # pam_appl.h for arm64 (foreign)
+          set -euo pipefail
+          echo "deb http://deb.debian.org/debian bookworm-backports main" \
+            > /etc/apt/sources.list.d/backports.list          # Go 1.21 :contentReference[oaicite:7]{index=7}
+          dpkg --add-architecture arm64                       # multi-arch :contentReference[oaicite:8]{index=8}
+          apt-get update -qq
+          apt-get install -y --no-install-recommends \
+            build-essential \
+            gcc-aarch64-linux-gnu \                           # cross compiler :contentReference[oaicite:9]{index=9}
+            libpam0g-dev libpam0g-dev:arm64 \                 # pam_appl.h :contentReference[oaicite:10]{index=10}
+            -t bookworm-backports golang-1.21-go              # Go 1.21 :contentReference[oaicite:11]{index=11}
+          export PATH=$PATH:/usr/lib/go-1.21/bin              # expose go :contentReference[oaicite:12]{index=12}
 
-      # 5 Cache Go modules & build cache
+      # 4 Cache Go modules & build cache (works inside container)
       - name: Cache Go modules
         uses: actions/cache@v4
         with:
           path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          # Adjust cache key for the OS change
+            /root/go/pkg/mod
+            /root/.cache/go-build
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-
 
-      # 6 Build linux/amd64 (native)
+      # 5 Build linux/amd64 (native inside Debian container)
       - name: Build linux/amd64
         run: |
           mkdir -p dist
           CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
-          go build -ldflags="-s -w" \
-              -o dist/clab-api-server-linux-amd64 ./cmd/server
+            go build -ldflags="-s -w" \
+            -o dist/clab-api-server-linux-amd64 ./cmd/server
 
-      # 7 Build linux/arm64 (cross‑compile)
+      # 6 Build linux/arm64 (cross‑compile)
       - name: Build linux/arm64
         env:
-          # CC might need adjustment if the compiler name differs on Debian,
-          # but aarch64-linux-gnu-gcc is standard.
           CC: aarch64-linux-gnu-gcc
         run: |
           CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
-          go build -ldflags="-s -w" \
-              -o dist/clab-api-server-linux-arm64 ./cmd/server
+            go build -ldflags="-s -w" \
+            -o dist/clab-api-server-linux-arm64 ./cmd/server
+          chmod +x dist/clab-api-server-linux-*
 
-      # 8 Make binaries executable
-      - name: Set execute bits
-        run: chmod +x dist/clab-api-server-linux-*
-
-      # 9 Upload binaries to the GitHub Release
-      - name: Upload Release Assets
+      # 7 Upload to the GitHub Release
+      - name: Upload release assets
         uses: softprops/action-gh-release@v1
         with:
           files: |
             dist/clab-api-server-linux-amd64
             dist/clab-api-server-linux-arm64
+
+      # 8  Keep artefacts for seven days
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clab-api-server-${{ steps.tag.outputs.TAG }}
+          path: dist/
+          retention-days: 7
