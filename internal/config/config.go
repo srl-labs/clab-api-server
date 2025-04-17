@@ -11,7 +11,8 @@ type Config struct {
 	APIPort              string        `mapstructure:"API_PORT"`
 	JWTSecret            string        `mapstructure:"JWT_SECRET"`
 	JWTExpirationMinutes time.Duration `mapstructure:"JWT_EXPIRATION_MINUTES"`
-	SuperuserGroup       string        `mapstructure:"SUPERUSER_GROUP"`
+	APIUserGroup         string        `mapstructure:"API_USER_GROUP"`  // <-- NEW: Group required for basic API login (alternative to clab_admins)
+	SuperuserGroup       string        `mapstructure:"SUPERUSER_GROUP"` // <-- REMAINS: Group for elevated privileges (view all labs, etc.)
 	ClabRuntime          string        `mapstructure:"CLAB_RUNTIME"`
 	LogLevel             string        `mapstructure:"LOG_LEVEL"`
 	// --- New TLS Fields ---
@@ -33,6 +34,7 @@ func LoadConfig() error {
 	viper.SetDefault("API_PORT", "8080")
 	viper.SetDefault("JWT_SECRET", "default_secret_change_me")
 	viper.SetDefault("JWT_EXPIRATION_MINUTES", 60)
+	viper.SetDefault("API_USER_GROUP", "")
 	viper.SetDefault("SUPERUSER_GROUP", "")
 	viper.SetDefault("CLAB_RUNTIME", "docker")
 	viper.SetDefault("LOG_LEVEL", "info")

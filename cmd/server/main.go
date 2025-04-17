@@ -29,16 +29,12 @@ import (
 // @license.name Apache 2.0
 // @license.url http://www.apache.org/licenses/LICENSE-2.0.html
 
-// @host localhost:8080
 // @schemes http https
 
 // @securityDefinitions.apikey BearerAuth
 // @in header
 // @name Authorization
 // @description Type "Bearer" followed by a space and JWT token. Example: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-
-// IMPORTANT: The @BasePath /api/v1 applies to the routes documented by Swagger below *within* the /api/v1 group.
-// The /login endpoint is intentionally kept separate at the root (POST /login) and is not part of this BasePath.
 func main() {
 	// --- Load configuration First ---
 	if err := config.LoadConfig(); err != nil {
@@ -123,20 +119,28 @@ func main() {
 	// Setup API routes
 	api.SetupRoutes(router)
 
-	// Determine protocol and base URL for root handler message
-	protocol := "http"
-	if config.AppConfig.TLSEnable {
-		protocol = "https"
-	}
-	baseURL := fmt.Sprintf("%s://localhost:%s", protocol, config.AppConfig.APIPort)
-
-	// Root handler
+	// Root handler - CORRECTED login_endpoint path
 	router.GET("/", func(c *gin.Context) {
+		// Determine protocol based on config OR request header if behind trusted proxy
+		protocol := "http"
+		if config.AppConfig.TLSEnable {
+			protocol = "https"
+		} else if c.Request.Header.Get("X-Forwarded-Proto") == "https" {
+			// If behind a trusted proxy that terminates TLS
+			protocol = "https"
+		}
+
+		// Use the Host from the request header
+		host := c.Request.Host // This includes hostname:port
+
+		// Construct baseURL dynamically
+		baseURL := fmt.Sprintf("%s://%s", protocol, host)
+
 		c.JSON(http.StatusOK, gin.H{
 			"message":        fmt.Sprintf("Containerlab API (Sudoless Mode) is running (%s).", protocol),
-			"documentation":  fmt.Sprintf("%s/swagger/index.html", baseURL),
+			"documentation":  fmt.Sprintf("%s/swagger/index.html", baseURL), // Dynamic URL
 			"login_endpoint": fmt.Sprintf("POST %s/login", baseURL),
-			"api_base_path":  fmt.Sprintf("%s/api/v1", baseURL),
+			"api_base_path":  fmt.Sprintf("%s/api/v1", baseURL), // Dynamic URL - This describes the base for *other* API calls
 			"clab_runtime":   config.AppConfig.ClabRuntime,
 			"notes": []string{
 				"Runs clab commands as the API server's user.",
@@ -149,10 +153,14 @@ func main() {
 
 	// --- Start the server ---
 	listenAddr := fmt.Sprintf(":%s", config.AppConfig.APIPort)
+	serverBaseURL := fmt.Sprintf("http://localhost:%s", config.AppConfig.APIPort) // Base for logging start message
+	if config.AppConfig.TLSEnable {
+		serverBaseURL = fmt.Sprintf("https://localhost:%s", config.AppConfig.APIPort)
+	}
 
 	if config.AppConfig.TLSEnable {
 		// Start HTTPS server
-		log.Infof("Starting HTTPS server on %s", baseURL)
+		log.Infof("Starting HTTPS server, accessible locally at %s (and potentially other IPs)", serverBaseURL)
 		if config.AppConfig.TLSCertFile == "" || config.AppConfig.TLSKeyFile == "" {
 			log.Fatalf("TLS is enabled but TLS_CERT_FILE or TLS_KEY_FILE is not set in config.")
 		}
@@ -169,7 +177,7 @@ func main() {
 		}
 	} else {
 		// Start HTTP server
-		log.Infof("Starting HTTP server on %s", baseURL)
+		log.Infof("Starting HTTP server, accessible locally at %s (and potentially other IPs)", serverBaseURL)
 		if err := router.Run(listenAddr); err != nil {
 			log.Fatalf("Failed to start HTTP server: %v", err)
 		}

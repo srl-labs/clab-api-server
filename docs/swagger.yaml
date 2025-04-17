@@ -91,6 +91,9 @@ definitions:
     type: object
   models.ClabContainerInfo:
     properties:
+      absLabPath:
+        description: Absolute path to topology file
+        type: string
       container_id:
         description: Docker container ID (short)
         type: string
@@ -107,22 +110,26 @@ definitions:
         description: Management IPv6 Address/Mask
         type: string
       kind:
-        description: e.g., "srl", "linux", "nokia_srlinux"
+        description: e.g., "linux", "nokia_srlinux"
         type: string
       lab_name:
-        description: Name of the lab this node belongs to
+        description: Name of the lab this node belongs to (redundant with map key
+          but present)
         type: string
       labPath:
-        description: Path to the topology file used
+        description: Path to the topology file used (relative)
         type: string
       name:
-        description: Name of the container node
+        description: Name of the container node (e.g., "lab01-client1")
         type: string
       owner:
         description: OS user from clab inspect output (Used for authorization)
         type: string
       state:
         description: e.g., "running"
+        type: string
+      status:
+        description: e.g., "Up 18 hours"
         type: string
     type: object
   models.ClabExecInternalResult:
@@ -143,11 +150,10 @@ definitions:
         type: string
     type: object
   models.ClabInspectOutput:
-    properties:
-      containers:
-        items:
-          $ref: '#/definitions/models.ClabContainerInfo'
-        type: array
+    additionalProperties:
+      items:
+        $ref: '#/definitions/models.ClabContainerInfo'
+      type: array
     type: object
   models.DeployRequest:
     properties:
@@ -549,7 +555,6 @@ definitions:
     - link
     - remote
     type: object
-host: localhost:8080
 info:
   contact:
     email: support@swagger.io
@@ -569,7 +574,8 @@ paths:
       consumes:
       - application/json
       description: |-
-        Generates a containerlab topology file based on CLOS definitions. Optionally deploys it.
+        Generates a containerlab topology file based on CLOS definitions. Optionally deploys it, setting the owner to the authenticated user.
+        Deployment is DENIED if a lab with the target name already exists.
         The 'images' and 'licenses' fields expect a map where the key is the node 'kind' and the value is the corresponding image or license path (e.g., {"nokia_srlinux": "ghcr.io/..."}).
         If Deploy=true, the topology is saved to the user's ~/.clab/<labName>/ directory before deployment, and the 'outputFile' field is ignored.
         If Deploy=false and 'outputFile' is empty, YAML is returned directly.
@@ -595,6 +601,10 @@ paths:
             $ref: '#/definitions/models.ErrorResponse'
         "401":
           description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "409":
+          description: Conflict (Lab already exists and Deploy=true)
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "500":
@@ -634,7 +644,8 @@ paths:
       consumes:
       - application/json
       description: |-
-        Deploys a containerlab topology. Requires EITHER 'topologyContent' OR 'topologySourceUrl' in the request body, but not both.
+        Deploys a containerlab topology. Requires EITHER 'topologyContent' OR 'topologySourceUrl' in the request body, but not both. The lab will be owned by the authenticated user.
+        Deployment is DENIED if a lab with the target name already exists, UNLESS 'reconfigure=true' is specified AND the authenticated user owns the existing lab.
         Optional deployment flags are provided as query parameters.
       parameters:
       - description: 'Deployment Source: Provide ''topologyContent'' OR ''topologySourceUrl''.'
@@ -648,7 +659,8 @@ paths:
         in: query
         name: labNameOverride
         type: string
-      - description: 'Destroy lab and clean directory before deploying (default: false).'
+      - description: 'Allow overwriting an existing lab IF owned by the user (default:
+          false).'
         in: query
         name: reconfigure
         type: boolean
@@ -681,11 +693,21 @@ paths:
           schema:
             type: object
         "400":
-          description: Invalid input (e.g., missing/both content/URL, invalid flags/params)
+          description: Invalid input (e.g., missing/both content/URL, invalid flags/params,
+            invalid topology name)
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "401":
           description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Forbidden (Attempting to reconfigure a lab owned by another
+            user)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "409":
+          description: Conflict (Lab already exists and reconfigure=false or not specified)
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "500":
@@ -1135,8 +1157,9 @@ paths:
       consumes:
       - multipart/form-data
       description: |-
-        Deploys a containerlab topology provided as a .zip or .tar.gz archive. The archive must contain the .clab.yml file and any necessary bind-mount files/directories.
+        Deploys a containerlab topology provided as a .zip or .tar.gz archive. The archive must contain the .clab.yml file and any necessary bind-mount files/directories. The lab will be owned by the authenticated user.
         The lab name is taken from the 'labName' query parameter. The archive is extracted to the user's ~/.clab/<labName>/ directory.
+        Deployment is DENIED if a lab with the target name already exists, UNLESS 'reconfigure=true' is specified AND the authenticated user owns the existing lab.
       parameters:
       - description: Lab archive (.zip or .tar.gz) containing topology file and bind
           mounts.
@@ -1149,7 +1172,8 @@ paths:
         name: labName
         required: true
         type: string
-      - description: 'Destroy lab and clean directory before deploying (default: false).'
+      - description: 'Allow overwriting an existing lab IF owned by the user (default:
+          false).'
         in: query
         name: reconfigure
         type: boolean
@@ -1188,6 +1212,15 @@ paths:
             $ref: '#/definitions/models.ErrorResponse'
         "401":
           description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Forbidden (Attempting to reconfigure a lab owned by another
+            user)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "409":
+          description: Conflict (Lab already exists and reconfigure=false or not specified)
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "500":

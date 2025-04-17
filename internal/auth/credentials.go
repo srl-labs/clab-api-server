@@ -7,13 +7,15 @@ import (
 
 	"github.com/charmbracelet/log"
 	"github.com/msteinert/pam"
+
+	"github.com/srl-labs/clab-api-server/internal/config" // Ensure config is imported
 )
 
-// Define the required group name as a constant
+// Define the primary required group name as a constant
 const requiredAdminGroup = "clab_admins"
 
 // ValidateCredentials checks if the Linux user exists, validates the password using PAM,
-// and verifies membership in the requiredAdminGroup.
+// and verifies membership in EITHER the requiredAdminGroup OR the configured APIUserGroup.
 func ValidateCredentials(username, password string) (bool, error) {
 	// 1. Check if the user exists on the system
 	_, err := user.Lookup(username)
@@ -57,35 +59,65 @@ func ValidateCredentials(username, password string) (bool, error) {
 		return false, nil // Treat PAM auth failure as invalid credentials
 	}
 
-	// --- Group Membership Check (Added) ---
-	// This check runs ONLY if PAM authentication (password check) was successful.
-	log.Debugf("PAM authentication successful for '%s'. Checking membership in required group '%s'.", username, requiredAdminGroup)
-	isInGroup, groupErr := IsUserInGroup(username, requiredAdminGroup) // Use the existing function from group.go
+	// --- Login Group Membership Check ---
+	// User MUST be in EITHER clab_admins OR the configured API_USER_GROUP to log in.
+	log.Debugf("PAM authentication successful for '%s'. Checking login group memberships.", username)
 
-	if groupErr != nil {
-		log.Errorf("Error checking group membership for user '%s' in group '%s': %v", username, requiredAdminGroup, groupErr)
-		// Treat group check error as an internal server error, preventing login even if password was right
-		return false, fmt.Errorf("error checking group membership: %w", groupErr)
+	// 1. Check primary group (clab_admins)
+	isInAdminGroup, adminGroupErr := IsUserInGroup(username, requiredAdminGroup)
+	if adminGroupErr != nil {
+		log.Errorf("Error checking group membership for user '%s' in group '%s': %v", username, requiredAdminGroup, adminGroupErr)
+		// Treat group check error as an internal server error, preventing login
+		return false, fmt.Errorf("error checking group membership for %s: %w", requiredAdminGroup, adminGroupErr)
 	}
 
-	if !isInGroup {
-		// Password was correct, but user is not in the required group. Deny login.
-		log.Infof("Login attempt denied for user '%s': Authenticated successfully via PAM, but is NOT a member of the required group '%s'.", username, requiredAdminGroup)
-		return false, nil // Return false (not authorized) but no error (credentials technically valid, just not permitted)
+	if isInAdminGroup {
+		// User is in the primary group, login authorization check passed.
+		log.Debugf("User '%s' is a member of the primary login group '%s'. Login authorized.", username, requiredAdminGroup)
+		// Proceed to optional AcctMgmt check below
+	} else {
+		// User is NOT in the primary group. Check the configured API_USER_GROUP.
+		configuredApiUserGroup := config.AppConfig.APIUserGroup
+		log.Debugf("User '%s' is NOT a member of '%s'. Checking configured API_USER_GROUP ('%s').", username, requiredAdminGroup, configuredApiUserGroup)
+
+		if configuredApiUserGroup == "" {
+			// No API_USER_GROUP configured, and user wasn't in the primary group. Deny login.
+			log.Infof("Login attempt denied for user '%s': Authenticated successfully via PAM, but is NOT a member of the required group '%s' and no API_USER_GROUP is configured.", username, requiredAdminGroup)
+			return false, nil // Not authorized for login
+		}
+
+		// 2. Check configured API_USER_GROUP
+		isInApiUserGroup, apiUserGroupErr := IsUserInGroup(username, configuredApiUserGroup)
+		if apiUserGroupErr != nil {
+			log.Errorf("Error checking group membership for user '%s' in configured API_USER_GROUP '%s': %v", username, configuredApiUserGroup, apiUserGroupErr)
+			// Treat group check error as an internal server error, preventing login
+			return false, fmt.Errorf("error checking group membership for %s: %w", configuredApiUserGroup, apiUserGroupErr)
+		}
+
+		if !isInApiUserGroup {
+			// User is in neither group. Deny login.
+			log.Infof("Login attempt denied for user '%s': Authenticated successfully via PAM, but is NOT a member of required group '%s' OR configured API_USER_GROUP '%s'.", username, requiredAdminGroup, configuredApiUserGroup)
+			return false, nil // Not authorized for login
+		}
+
+		// User is in the configured API_USER_GROUP. Login authorization check passed.
+		log.Debugf("User '%s' is a member of the configured API_USER_GROUP '%s'. Login authorized.", username, configuredApiUserGroup)
+		// Proceed to optional AcctMgmt check below
 	}
-	// --- End Group Membership Check ---
+	// --- End Login Group Membership Check ---
 
 	// 4. Optional: Check account validity (e.g., is the account locked or expired?)
-	// This remains optional as before.
+	// This check runs only if PAM authentication and the login group membership check succeeded.
 	err = t.AcctMgmt(0)
 	if err != nil {
 		log.Warnf("PAM account management check failed for user '%s' (but login allowed as Authenticate and Group Check passed): %v", username, err)
-		// Decide if this should prevent login. For now, let's treat it as a warning
-		// and allow login if Authenticate and Group Check succeeded. You might return false here for stricter checks.
+		// Decide if this should prevent login. For now, treat it as a warning
+		// and allow login if Authenticate and Group Check succeeded.
+		// You might return false here for stricter checks:
 		// return false, fmt.Errorf("PAM account validation failed: %w", err)
 	}
 
-	// 5. Success: Authenticated AND in the required group
-	log.Infof("Authentication successful for user '%s': Valid password via PAM and member of group '%s'.", username, requiredAdminGroup)
+	// 5. Success: Authenticated AND in one of the required login groups
+	log.Infof("Authentication successful for user '%s': Valid password via PAM and member of an authorized login group.", username)
 	return true, nil
 }

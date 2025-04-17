@@ -2,10 +2,26 @@ version: '3'
 
 tasks:
   deps:
-    desc: Install system dependencies
+    desc: Install system dependencies and swag
     cmds:
-      - sudo apt-get update
-      - sudo apt-get install -y build-essential libpam-dev
+      - |
+        if command -v apt-get > /dev/null; then
+          echo "Using apt-get..."
+          sudo apt-get update
+          sudo apt-get install -y build-essential libpam-dev
+        elif command -v dnf > /dev/null; then
+          echo "Using dnf..."
+          sudo dnf groupinstall -y "Development Tools"
+          sudo dnf install -y pam-devel
+        elif command -v yum > /dev/null; then
+          echo "Using yum..."
+          sudo yum groupinstall -y "Development Tools"
+          sudo yum install -y pam-devel
+        else
+          echo "Unsupported package manager. Please install the dependencies manually."
+          exit 1
+        fi
+      - go install github.com/swaggo/swag/cmd/swag@latest
 
   tidy:
     desc: Run go mod tidy

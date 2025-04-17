@@ -19,7 +19,8 @@ import (
 )
 
 // @Summary Generate Topology
-// @Description Generates a containerlab topology file based on CLOS definitions. Optionally deploys it.
+// @Description Generates a containerlab topology file based on CLOS definitions. Optionally deploys it, setting the owner to the authenticated user.
+// @Description Deployment is DENIED if a lab with the target name already exists.
 // @Description The 'images' and 'licenses' fields expect a map where the key is the node 'kind' and the value is the corresponding image or license path (e.g., {"nokia_srlinux": "ghcr.io/..."}).
 // @Description If Deploy=true, the topology is saved to the user's ~/.clab/<labName>/ directory before deployment, and the 'outputFile' field is ignored.
 // @Description If Deploy=false and 'outputFile' is empty, YAML is returned directly.
@@ -32,10 +33,12 @@ import (
 // @Success 200 {object} models.GenerateResponse "Generation successful (YAML or deploy output)"
 // @Failure 400 {object} models.ErrorResponse "Invalid input parameters"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
+// @Failure 409 {object} models.ErrorResponse "Conflict (Lab already exists and Deploy=true)"
 // @Failure 500 {object} models.ErrorResponse "Internal server error or clab execution failed"
 // @Router /api/v1/generate [post]
 func GenerateTopologyHandler(c *gin.Context) {
 	username := c.GetString("username") // Needed for potential deploy logging/context
+	ctx := c.Request.Context()
 
 	var req models.GenerateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -61,6 +64,23 @@ func GenerateTopologyHandler(c *gin.Context) {
 	// Add more validation for tier contents, image/license formats if needed
 
 	log.Debugf("GenerateTopology user '%s': Generating topology '%s' (deploy=%t)", username, req.Name, req.Deploy)
+
+	// --- Pre-Deployment Check (if Deploy=true) ---
+	if req.Deploy {
+		labInfo, exists, checkErr := getLabInfo(ctx, req.Name) // Use req.Name as the lab name
+		if checkErr != nil {
+			log.Errorf("GenerateTopology failed for user '%s': Error checking lab '%s' existence: %v", username, req.Name, checkErr)
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Error checking lab '%s' status: %s", req.Name, checkErr.Error())})
+			return
+		}
+		if exists {
+			log.Warnf("GenerateTopology failed for user '%s': Lab '%s' already exists (owner: '%s'). Deployment with generate is not allowed if lab exists.", username, req.Name, labInfo.Owner)
+			c.JSON(http.StatusConflict, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' already exists. Cannot generate and deploy.", req.Name)})
+			return
+		}
+		log.Infof("GenerateTopology user '%s': Lab '%s' does not exist. Proceeding with generation and deployment.", username, req.Name)
+	}
+	// --- End Pre-Deployment Check ---
 
 	// --- Construct clab generate arguments ---
 	args := []string{"generate", "--name", req.Name}
@@ -223,7 +243,7 @@ func GenerateTopologyHandler(c *gin.Context) {
 
 	// --- Execute clab generate ---
 	log.Infof("GenerateTopology user '%s': Executing clab generate...", username)
-	genStdout, genStderr, genErr := clab.RunClabCommand(c.Request.Context(), username, args...)
+	genStdout, genStderr, genErr := clab.RunClabCommand(ctx, username, args...)
 
 	if genStderr != "" {
 		log.Warnf("GenerateTopology user '%s': clab generate stderr: %s", username, genStderr)
@@ -266,14 +286,14 @@ func GenerateTopologyHandler(c *gin.Context) {
 		// --- Execute clab deploy ---
 		// No temp file cleanup needed
 
-		deployArgs := []string{"deploy", "-t", targetFilePath, "--reconfigure"} // Use the path in user's home
+		// Use --reconfigure because generate+deploy implies starting fresh for this specific generated topology
+		deployArgs := []string{"deploy", "--owner", username, "-t", targetFilePath, "--reconfigure", "--format", "json"}
 		if req.MaxWorkers > 0 {
 			deployArgs = append(deployArgs, "--max-workers", strconv.Itoa(req.MaxWorkers))
 		}
-		deployArgs = append(deployArgs, "--format", "json") // Request JSON output from deploy
 
 		log.Infof("GenerateTopology user '%s': Deploying generated topology '%s' from '%s'...", username, req.Name, targetFilePath)
-		deployStdout, deployStderr, deployErr := clab.RunClabCommand(c.Request.Context(), username, deployArgs...)
+		deployStdout, deployStderr, deployErr := clab.RunClabCommand(ctx, username, deployArgs...)
 
 		if deployStderr != "" {
 			log.Warnf("GenerateTopology (deploy step) user '%s': clab deploy stderr: %s", username, deployStderr)

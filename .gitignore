@@ -5,6 +5,17 @@ certs/
 .DS_Store
 Thumbs.db
 
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+test_report.html
+.venv/
+tests/*.json
+tests/*.html
+
 # IDE/editor configs
 .vscode/
 .idea/
