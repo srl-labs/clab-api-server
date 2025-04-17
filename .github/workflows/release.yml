@@ -22,16 +22,25 @@ jobs:
 
       - name: Install dependencies (including cross-compilation tools)
         run: |
-          sudo apt-get update
+          sudo apt-get update # Update native architecture first
           # Install build tools for the host (amd64)
           sudo apt-get install -y build-essential libpam-dev
           # Install the C cross-compiler for arm64
           sudo apt-get install -y gcc-aarch64-linux-gnu
-          # Enable multi-arch and install arm64 pam dev libraries
-          # Note: This might pull in other arm64 dependencies
+
+          # Enable multi-arch
           sudo dpkg --add-architecture arm64
+
+          # Update package lists for *both* architectures
+          # This is the step that was failing
+          echo "Attempting multi-arch apt update..."
           sudo apt-get update
-          sudo apt-get install -y libpam0g-dev:arm64 # Use libpam0g-dev for Ubuntu 22.04+
+          echo "Multi-arch apt update finished."
+
+          # Install arm64 pam dev libraries
+          echo "Attempting to install libpam0g-dev:arm64..."
+          sudo apt-get install -y libpam0g-dev:arm64
+          echo "Finished installing libpam0g-dev:arm64."
 
       - name: Cache Go modules
         uses: actions/cache@v4
