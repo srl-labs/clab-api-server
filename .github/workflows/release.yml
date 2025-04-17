@@ -2,83 +2,57 @@ name: Build and Release
 
 on:
   release:
-    types: [created] # Trigger workflow when a new release is published
+    types: [created]
 
-# Add permissions block to allow writing to releases
 permissions:
-  contents: write # Needed to upload release assets
+  contents: write
 
 jobs:
   build:
-    runs-on: ubuntu-22.04 # We can cross-compile from amd64
+    runs-on: ubuntu-22.04
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # Removed 'Get release tag' step as it wasn't used,
-      # but GITHUB_REF is available if needed later.
+      - name: Get release tag
+        id: get_tag
+        run: echo "TAG=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
-      - name: Setup Go
+      - name: Setup Go (fast)
         uses: WillAbides/setup-go-faster@v1.14.0
         with:
-          go-version: '1.21'  # Adjust to your project's Go version
+          go-version: '1.21.x'
 
-      - name: Install dependencies (if CGO is needed)
+      # Host headers for CGO‑using tools (optional but safe)
+      - name: Install PAM headers (host)
         run: |
-          # These are needed if your Go code uses CGO (like for libpam)
-          # For cross-compiling CGO, you might need target-specific compilers
-          # e.g., sudo apt-get install -y gcc-aarch64-linux-gnu
           sudo apt-get update
-          sudo apt-get install -y build-essential libpam-dev
+          sudo apt-get install -y libpam0g-dev
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
+      # Cache as before
+      - uses: actions/cache@v4
         with:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
+          restore-keys: ${{ runner.os }}-go-
 
-      - name: Build binaries for Linux (amd64 & arm64)
-        run: |
-          # Define the output base name
-          OUTPUT_BASE="clab-api-server"
-          # Define the package to build
-          PACKAGE="cmd/server/main.go"
-
-          # Build for linux/amd64
-          echo "Building for linux/amd64..."
-          GOOS=linux GOARCH=amd64 go build -o ${OUTPUT_BASE}-linux-amd64 ${PACKAGE}
-          chmod +x ${OUTPUT_BASE}-linux-amd64
-          echo "Built ${OUTPUT_BASE}-linux-amd64"
-
-          # Build for linux/arm64
-          # If using CGO, you might need to set CC, e.g., CC=aarch64-linux-gnu-gcc
-          echo "Building for linux/arm64..."
-          GOOS=linux GOARCH=arm64 go build -o ${OUTPUT_BASE}-linux-arm64 ${PACKAGE}
-          chmod +x ${OUTPUT_BASE}-linux-arm64
-          echo "Built ${OUTPUT_BASE}-linux-arm64"
-
-          # List generated files
-          ls -l ${OUTPUT_BASE}-linux-*
+      # Multi‑arch build (hooks/setup.sh installs PAM inside the container)
+      - name: Build multi‑arch binaries
+        uses: crazy-max/ghaction-xgo@v3
+        with:
+          xgo_version: latest
+          go_version: 1.21
+          dest: dist
+          prefix: clab-api-server
+          pkg: ./cmd/server
+          targets: linux/amd64,linux/arm64
+          v: true
+          ldflags: -s -w
 
       - name: Upload Release Assets
-        uses: softprops/action-gh-release@v1 # Consider updating to v2 if features needed
+        uses: softprops/action-gh-release@v1
         with:
-          # List both files to be uploaded as assets to the GitHub Release
           files: |
-            ./clab-api-server-linux-amd64
-            ./clab-api-server-linux-arm64
-
-      - name: Upload binaries as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          # Give the artifact a more general name
-          name: clab-api-server-binaries-linux
-          # Include both built binaries in the artifact
-          path: |
-            clab-api-server-linux-amd64
-            clab-api-server-linux-arm64
-          compression-level: 0 # Keep compression off as requested
+            dist/clab-api-server-linux-amd64
+            dist/clab-api-server-linux-arm64
