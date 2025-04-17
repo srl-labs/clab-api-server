@@ -2,47 +2,83 @@ name: Build and Release
 
 on:
   release:
-    types: [created]
+    types: [created] # Trigger workflow when a new release is published
 
+# Add permissions block to allow writing to releases
 permissions:
-  contents: write          # allow upload to the Release
+  contents: write # Needed to upload release assets
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-
+    runs-on: ubuntu-22.04 # We can cross-compile from amd64
     steps:
-      # 1. Checkout
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      # 2. Extract the tag (keeps your existing env usage)
-      - id: get_tag
-        run: echo "TAG=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+      # Removed 'Get release tag' step as it wasn't used,
+      # but GITHUB_REF is available if needed later.
 
-      # 3. Prime the module cache & Go build cache
       - name: Setup Go
-        uses: actions/setup-go@v5        # Go 1.21.x is the current default
+        uses: WillAbides/setup-go-faster@v1.14.0
         with:
-          go-version: '1.21'
-          cache: true                    # built‑in cache (no extra action)
+          go-version: '1.21'  # Adjust to your project's Go version
 
-      # 4. Cross‑compile for linux/amd64 + linux/arm64 with CGO enabled
-      - name: Build multi‑arch binaries
-        uses: crazy-max/ghaction-xgo@v3
+      - name: Install dependencies (if CGO is needed)
+        run: |
+          # These are needed if your Go code uses CGO (like for libpam)
+          # For cross-compiling CGO, you might need target-specific compilers
+          # e.g., sudo apt-get install -y gcc-aarch64-linux-gnu
+          sudo apt-get update
+          sudo apt-get install -y build-essential libpam-dev
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
         with:
-          xgo_version: latest            # pulls the latest xgo container
-          go_version: 1.21
-          dest: dist                     # output folder
-          prefix: clab-api-server        # binary base name
-          pkg: ./cmd/server              # entry‑point package
-          targets: linux/amd64,linux/arm64
-          v: true                        # verbose build output
-          ldflags: -s -w                 # strip debug info
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
 
-      # 5. Upload both binaries to the GitHub Release that triggered the job
+      - name: Build binaries for Linux (amd64 & arm64)
+        run: |
+          # Define the output base name
+          OUTPUT_BASE="clab-api-server"
+          # Define the package to build
+          PACKAGE="cmd/server/main.go"
+
+          # Build for linux/amd64
+          echo "Building for linux/amd64..."
+          GOOS=linux GOARCH=amd64 go build -o ${OUTPUT_BASE}-linux-amd64 ${PACKAGE}
+          chmod +x ${OUTPUT_BASE}-linux-amd64
+          echo "Built ${OUTPUT_BASE}-linux-amd64"
+
+          # Build for linux/arm64
+          # If using CGO, you might need to set CC, e.g., CC=aarch64-linux-gnu-gcc
+          echo "Building for linux/arm64..."
+          GOOS=linux GOARCH=arm64 go build -o ${OUTPUT_BASE}-linux-arm64 ${PACKAGE}
+          chmod +x ${OUTPUT_BASE}-linux-arm64
+          echo "Built ${OUTPUT_BASE}-linux-arm64"
+
+          # List generated files
+          ls -l ${OUTPUT_BASE}-linux-*
+
       - name: Upload Release Assets
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v1 # Consider updating to v2 if features needed
         with:
+          # List both files to be uploaded as assets to the GitHub Release
           files: |
-            dist/clab-api-server-linux-amd64
-            dist/clab-api-server-linux-arm64
+            ./clab-api-server-linux-amd64
+            ./clab-api-server-linux-arm64
+
+      - name: Upload binaries as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          # Give the artifact a more general name
+          name: clab-api-server-binaries-linux
+          # Include both built binaries in the artifact
+          path: |
+            clab-api-server-linux-amd64
+            clab-api-server-linux-arm64
+          compression-level: 0 # Keep compression off as requested
