@@ -2,57 +2,73 @@ name: Build and Release
 
 on:
   release:
-    types: [created]
+    types: [created] # Trigger workflow when a new release is published
 
+# Add permissions block to allow writing to releases
 permissions:
-  contents: write
+  contents: write # Needed to upload release assets
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04 # We can cross-compile from amd64
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Get release tag
-        id: get_tag
-        run: echo "TAG=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-
-      - name: Setup Go (fast)
+      - name: Setup Go
         uses: WillAbides/setup-go-faster@v1.14.0
         with:
-          go-version: '1.21.x'
+          go-version: '1.21'  # Adjust to your project's Go version
 
-      # Host headers for CGO‑using tools (optional but safe)
-      - name: Install PAM headers (host)
+      - name: Install dependencies (including cross-compilation tools)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libpam0g-dev
+          # Install build tools for the host (amd64)
+          sudo apt-get install -y build-essential libpam-dev
+          # Install the C cross-compiler for arm64
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          # Enable multi-arch and install arm64 pam dev libraries
+          # Note: This might pull in other arm64 dependencies
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo apt-get install -y libpam0g-dev:arm64 # Use libpam0g-dev for Ubuntu 22.04+
 
-      # Cache as before
-      - uses: actions/cache@v4
+      - name: Cache Go modules
+        uses: actions/cache@v4
         with:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-go-
+          restore-keys: |
+            ${{ runner.os }}-go-
 
-      # Multi‑arch build (hooks/setup.sh installs PAM inside the container)
-      - name: Build multi‑arch binaries
-        uses: crazy-max/ghaction-xgo@v3
-        with:
-          xgo_version: latest
-          go_version: 1.21
-          dest: dist
-          prefix: clab-api-server
-          pkg: ./cmd/server
-          targets: linux/amd64,linux/arm64
-          v: true
-          ldflags: -s -w
+      - name: Build binaries for Linux (amd64 & arm64)
+        run: |
+          # Define the output base name
+          OUTPUT_BASE="clab-api-server"
+          # Define the package to build
+          PACKAGE="cmd/server/main.go"
+
+          # Build for linux/amd64 (uses default host C compiler if CGO is needed)
+          echo "Building for linux/amd64..."
+          GOOS=linux GOARCH=amd64 go build -o ${OUTPUT_BASE}-linux-amd64 ${PACKAGE}
+          chmod +x ${OUTPUT_BASE}-linux-amd64
+          echo "Built ${OUTPUT_BASE}-linux-amd64"
+
+          # Build for linux/arm64 (explicitly set C cross-compiler for CGO)
+          echo "Building for linux/arm64..."
+          CC=aarch64-linux-gnu-gcc GOOS=linux GOARCH=arm64 go build -o ${OUTPUT_BASE}-linux-arm64 ${PACKAGE}
+          chmod +x ${OUTPUT_BASE}-linux-arm64
+          echo "Built ${OUTPUT_BASE}-linux-arm64"
+
+          # List generated files
+          ls -l ${OUTPUT_BASE}-linux-*
 
       - name: Upload Release Assets
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v1 # Consider updating to v2 if features needed
         with:
+          # List both files to be uploaded as assets to the GitHub Release
           files: |
-            dist/clab-api-server-linux-amd64
-            dist/clab-api-server-linux-arm64
+            ./clab-api-server-linux-amd64
+            ./clab-api-server-linux-arm64
