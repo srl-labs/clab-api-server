@@ -70,6 +70,7 @@ jobs:
             build-essential \
             gcc-aarch64-linux-gnu \
             linux-libc-dev:arm64 \
+            libpam0g-dev \
             libpam0g-dev:arm64 \
           && break || { sudo apt-get -y --fix-broken install || true; sleep 5; }; \
         done
