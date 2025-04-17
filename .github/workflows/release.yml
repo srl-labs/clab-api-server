@@ -30,13 +30,16 @@ jobs:
       # 4 Enable Arm64 multi‑arch & install build deps
       - name: Install cross‑tool‑chains & PAM headers
         run: |
-          sudo dpkg --add-architecture arm64                    # enable multi‑arch :contentReference[oaicite:1]{index=1}
+          sudo dpkg --add-architecture arm64
+          sudo apt-add-repository universe -y
+          # Update package lists for *all* configured architectures and components
           sudo apt-get update -qq
+          # Install dependencies, explicitly requesting arch for foreign libs
           sudo apt-get install -y --no-install-recommends \
             build-essential                                     \
-            gcc-aarch64-linux-gnu                               \ # cross C compiler :contentReference[oaicite:2]{index=2}
-            libpam0g-dev                                        \ # pam_appl.h for amd64 :contentReference[oaicite:3]{index=3}
-            libpam0g-dev:arm64                                    # pam_appl.h for arm64 :contentReference[oaicite:4]{index=4}
+            gcc-aarch64-linux-gnu                               \ # cross C compiler
+            libpam0g-dev                                        \ # pam_appl.h for amd64 (native)
+            libpam0g-dev:arm64                                    # pam_appl.h for arm64 (foreign)
 
       # 5 Cache Go modules & build cache
       - name: Cache Go modules
