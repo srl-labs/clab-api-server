@@ -2,46 +2,43 @@ name: Build and Release
 
 on:
   release:
-    types: [created] # Trigger workflow when a new release is published
+    types: [created]
 
-# Add permissions block to allow writing to releases
 permissions:
-  contents: write # Needed to upload release assets
+  contents: write        # allow uploading assets to the Release page
 
 jobs:
   build:
-    runs-on: ubuntu-22.04 # We can cross-compile from amd64
+    runs-on: ubuntu-22.04
+
     steps:
+      # 1 Checkout
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Go
+      # 2 Extract version tag
+      - name: Get release tag
+        id: get_tag
+        run: echo "TAG=${GITHUB_REF#refs/tags/}" >>"$GITHUB_OUTPUT"
+
+      # 3 Fast Go installer (≈3 s on Ubuntu)
+      - name: Setup Go (fast)
         uses: WillAbides/setup-go-faster@v1.14.0
         with:
-          go-version: '1.21'  # Adjust to your project's Go version
+          go-version: '1.21.x'
 
-      - name: Install dependencies (including cross-compilation tools)
+      # 4 Enable Arm64 multi‑arch & install build deps
+      - name: Install cross‑tool‑chains & PAM headers
         run: |
-          sudo apt-get update # Update native architecture first
-          # Install build tools for the host (amd64)
-          sudo apt-get install -y build-essential libpam-dev
-          # Install the C cross-compiler for arm64
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          sudo dpkg --add-architecture arm64                    # enable multi‑arch :contentReference[oaicite:1]{index=1}
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential                                     \
+            gcc-aarch64-linux-gnu                               \ # cross C compiler :contentReference[oaicite:2]{index=2}
+            libpam0g-dev                                        \ # pam_appl.h for amd64 :contentReference[oaicite:3]{index=3}
+            libpam0g-dev:arm64                                    # pam_appl.h for arm64 :contentReference[oaicite:4]{index=4}
 
-          # Enable multi-arch
-          sudo dpkg --add-architecture arm64
-
-          # Update package lists for *both* architectures
-          # This is the step that was failing
-          echo "Attempting multi-arch apt update..."
-          sudo apt-get update
-          echo "Multi-arch apt update finished."
-
-          # Install arm64 pam dev libraries
-          echo "Attempting to install libpam0g-dev:arm64..."
-          sudo apt-get install -y libpam0g-dev:arm64
-          echo "Finished installing libpam0g-dev:arm64."
-
+      # 5 Cache Go modules & build cache
       - name: Cache Go modules
         uses: actions/cache@v4
         with:
@@ -52,32 +49,39 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-
 
-      - name: Build binaries for Linux (amd64 & arm64)
+      # 6 Build linux/amd64 (native)
+      - name: Build linux/amd64
         run: |
-          # Define the output base name
-          OUTPUT_BASE="clab-api-server"
-          # Define the package to build
-          PACKAGE="cmd/server/main.go"
+          mkdir -p dist
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+          go build -ldflags="-s -w" \
+              -o dist/clab-api-server-linux-amd64 ./cmd/server
 
-          # Build for linux/amd64 (uses default host C compiler if CGO is needed)
-          echo "Building for linux/amd64..."
-          GOOS=linux GOARCH=amd64 go build -o ${OUTPUT_BASE}-linux-amd64 ${PACKAGE}
-          chmod +x ${OUTPUT_BASE}-linux-amd64
-          echo "Built ${OUTPUT_BASE}-linux-amd64"
+      # 7 Build linux/arm64 (cross‑compile)
+      - name: Build linux/arm64
+        env:
+          CC: aarch64-linux-gnu-gcc                               # tell CGO to use cross compiler :contentReference[oaicite:5]{index=5}
+        run: |
+          CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
+          go build -ldflags="-s -w" \
+              -o dist/clab-api-server-linux-arm64 ./cmd/server
 
-          # Build for linux/arm64 (explicitly set C cross-compiler for CGO)
-          echo "Building for linux/arm64..."
-          CC=aarch64-linux-gnu-gcc GOOS=linux GOARCH=arm64 go build -o ${OUTPUT_BASE}-linux-arm64 ${PACKAGE}
-          chmod +x ${OUTPUT_BASE}-linux-arm64
-          echo "Built ${OUTPUT_BASE}-linux-arm64"
+      # 8 Make binaries executable
+      - name: Set execute bits
+        run: chmod +x dist/clab-api-server-linux-*
 
-          # List generated files
-          ls -l ${OUTPUT_BASE}-linux-*
-
+      # 9 Upload binaries to the GitHub Release
       - name: Upload Release Assets
-        uses: softprops/action-gh-release@v1 # Consider updating to v2 if features needed
+        uses: softprops/action-gh-release@v1
         with:
-          # List both files to be uploaded as assets to the GitHub Release
           files: |
-            ./clab-api-server-linux-amd64
-            ./clab-api-server-linux-arm64
+            dist/clab-api-server-linux-amd64
+            dist/clab-api-server-linux-arm64
+
+      # 10 Save artefacts for CI debugging (optional)
+      - name: Upload binaries as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: clab-api-server-${{ steps.get_tag.outputs.TAG }}
+          path: dist/
+          retention-days: 7
