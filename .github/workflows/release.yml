@@ -21,7 +21,7 @@ jobs:
         fetch-depth: 0
 
     #---------------------------------------------------------------
-    # 2 — Export build‑time metadata
+    # 2 — Export build‑time metadata (VERSION, COMMIT, DATE)
     #---------------------------------------------------------------
     - name: Export build metadata
       run: |
@@ -30,7 +30,7 @@ jobs:
         echo "DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >>"$GITHUB_ENV"
 
     #---------------------------------------------------------------
-    # 3 — Install Go quickly
+    # 3 — Fast Go installer
     #---------------------------------------------------------------
     - name: Setup Go (fast)
       uses: WillAbides/setup-go-faster@v1.14.0
@@ -54,7 +54,7 @@ jobs:
         sudo sed -Ei 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list
 
         # d) add ports.ubuntu.com as the arm64 mirror
-        sudo tee /etc/apt/sources.list.d/arm64-ports.list <<'EOF'
+        sudo tee /etc/apt/sources.list.d/arm64-ports.list > /dev/null <<'EOF'
         deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse
         deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse
         deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse
@@ -91,4 +91,46 @@ jobs:
           ${{ runner.os }}-go-
 
     #---------------------------------------------------------------
-    # 6 — Build linux/amd
+    # 6 — Build linux/amd64
+    #---------------------------------------------------------------
+    - name: Build linux/amd64
+      run: |
+        mkdir -p dist
+        CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+        go build -trimpath -ldflags "-s -w \
+          -X main.version=${VERSION} \
+          -X main.commit=${COMMIT} \
+          -X main.date=${DATE}" \
+          -o dist/clab-api-server-linux-amd64 ./cmd/server
+
+    #---------------------------------------------------------------
+    # 7 — Build linux/arm64
+    #---------------------------------------------------------------
+    - name: Build linux/arm64
+      env:
+        CC: aarch64-linux-gnu-gcc
+        PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig
+      run: |
+        CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
+        go build -trimpath -ldflags "-s -w \
+          -X main.version=${VERSION} \
+          -X main.commit=${COMMIT} \
+          -X main.date=${DATE}" \
+          -o dist/clab-api-server-linux-arm64 ./cmd/server
+
+    #---------------------------------------------------------------
+    # 8 — Make binaries executable
+    #---------------------------------------------------------------
+    - name: Make binaries executable
+      run: |
+        chmod +x dist/clab-api-server-linux-*
+
+    #---------------------------------------------------------------
+    # 9 — Upload binaries to the GitHub Release page
+    #---------------------------------------------------------------
+    - name: Upload Release Assets
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          dist/clab-api-server-linux-amd64
+          dist/clab-api-server-linux-arm64
