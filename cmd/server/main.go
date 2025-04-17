@@ -2,6 +2,7 @@
 package main
 
 import (
+	"flag" // Import flag package
 	"fmt"
 	"net/http"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
+	"github.com/spf13/viper" // Import viper to check for file not found error type
 
 	// Adjust these import paths if your module path is different
 	_ "github.com/srl-labs/clab-api-server/docs" // swagger docs
@@ -17,8 +19,17 @@ import (
 	"github.com/srl-labs/clab-api-server/internal/config"
 )
 
+// --- Version Info (Set via LDFLAGS during build) ---
+// Example build command:
+// go build -ldflags="-X main.version=1.2.3 -X main.commit=$(git rev-parse --short HEAD) -X main.date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" ./cmd/server
+var (
+	version = "development" // Default value
+	commit  = "none"        // Default value
+	date    = "unknown"     // Default value
+)
+
 // @title Containerlab API
-// @version 1.0
+// @version 1.0 // This swagger version is separate from the application version
 // @description This is an API server to interact with Containerlab for authenticated Linux users. Runs clab commands as the API server's user. Requires PAM for authentication.
 // @termsOfService http://swagger.io/terms/
 
@@ -36,14 +47,48 @@ import (
 // @name Authorization
 // @description Type "Bearer" followed by a space and JWT token. Example: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
 func main() {
+	// --- Define and Parse Command Line Flags ---
+	var showVersion bool
+	var envFile string
+	defaultEnvFile := ".env"
+
+	flag.BoolVar(&showVersion, "version", false, "Print server version and exit")
+	flag.BoolVar(&showVersion, "v", false, "Print server version and exit (shorthand)")
+	flag.StringVar(&envFile, "env-file", defaultEnvFile, "Path to the .env configuration file")
+	flag.Parse()
+
+	// --- Handle -v/--version flag ---
+	if showVersion {
+		fmt.Printf("clab-api-server version: %s\n", version)
+		fmt.Printf("commit: %s\n", commit)
+		fmt.Printf("built: %s\n", date)
+		os.Exit(0)
+	}
+
 	// --- Load configuration First ---
-	if err := config.LoadConfig(); err != nil {
-		// Use a basic logger here as the configured one isn't ready yet
-		log.New(os.Stderr).Fatalf("Failed to load configuration: %v", err)
+	// Use a basic logger initially, as the configured one isn't ready yet.
+	basicLogger := log.New(os.Stderr)
+	basicLogger.Infof("Attempting to load configuration from '%s' and environment variables...", envFile)
+
+	err := config.LoadConfig(envFile)
+	if err != nil {
+		// Check if the error was specifically 'file not found' for the default path
+		if _, ok := err.(viper.ConfigFileNotFoundError); ok && envFile == defaultEnvFile {
+			basicLogger.Infof("Default config file '%s' not found. Using environment variables and defaults.", defaultEnvFile)
+			// Reload config forcing viper to ignore the file and use only env/defaults
+			// This might not be strictly necessary if viper already fell back correctly, but makes it explicit.
+			viper.Reset()         // Reset viper state
+			config.LoadConfig("") // Call again with empty path, forcing reliance on env/defaults
+		} else {
+			// A specific file was requested and not found, or another error occurred.
+			basicLogger.Fatalf("Failed to load configuration: %v", err)
+		}
+	} else {
+		basicLogger.Infof("Configuration file '%s' loaded successfully (or skipped if default and not found).", envFile)
 	}
 
 	// --- Initialize Logger Based on Config ---
-	log.SetOutput(os.Stderr) // Keep outputting to stderr for now
+	log.SetOutput(os.Stderr)
 	log.SetTimeFormat("2006-01-02 15:04:05")
 
 	// Set log level from config
@@ -63,9 +108,11 @@ func main() {
 		log.SetLevel(log.InfoLevel) // Default to info if invalid value
 	}
 
-	log.Infof("Configuration loaded successfully. Log level set to '%s'.", config.AppConfig.LogLevel) // Log this *after* setting the level
+	log.Infof("clab-api-server version %s starting...", version) // Log version on startup
+	log.Infof("Configuration processed. Log level set to '%s'.", config.AppConfig.LogLevel)
 
 	// --- Log Loaded Configuration Details (using the configured logger) ---
+	log.Debugf("Using configuration file: %s (or defaults/env if not found)", envFile)
 	log.Debugf("API Port: %s", config.AppConfig.APIPort)
 	log.Debugf("JWT Secret Loaded: %t", config.AppConfig.JWTSecret != "" && config.AppConfig.JWTSecret != "default_secret_change_me")
 	log.Debugf("JWT Expiration: %s", config.AppConfig.JWTExpirationMinutes)
@@ -76,7 +123,7 @@ func main() {
 		log.Debugf("TLS Key File: %s", config.AppConfig.TLSKeyFile)
 	}
 	if config.AppConfig.JWTSecret == "default_secret_change_me" {
-		log.Warn("Using default JWT secret. Change JWT_SECRET environment variable for production!")
+		log.Warn("Using default JWT secret. Change JWT_SECRET environment variable or .env file for production!")
 	}
 
 	// --- Check dependencies ---
@@ -91,9 +138,9 @@ func main() {
 	} else if strings.ToLower(config.AppConfig.GinMode) == "test" {
 		gin.SetMode(gin.TestMode)
 	} else {
-		gin.SetMode(gin.DebugMode)
+		gin.SetMode(gin.DebugMode) // Default to debug
 	}
-	log.Infof("Gin running in '%s' mode", config.AppConfig.GinMode)
+	log.Infof("Gin running in '%s' mode", gin.Mode()) // Use gin.Mode() to get actual mode
 
 	router := gin.Default()
 
@@ -101,7 +148,7 @@ func main() {
 	if config.AppConfig.TrustedProxies == "nil" {
 		// Explicitly disable proxy trust
 		log.Info("Proxy trust disabled (TRUSTED_PROXIES=nil)")
-		router.SetTrustedProxies(nil)
+		_ = router.SetTrustedProxies(nil) // Error ignored as per Gin docs for nil
 	} else if config.AppConfig.TrustedProxies != "" {
 		// Set specific trusted proxies
 		proxyList := strings.Split(config.AppConfig.TrustedProxies, ",")
@@ -110,7 +157,10 @@ func main() {
 			proxyList[i] = strings.TrimSpace(proxy)
 		}
 		log.Infof("Setting trusted proxies: %v", proxyList)
-		router.SetTrustedProxies(proxyList)
+		err := router.SetTrustedProxies(proxyList)
+		if err != nil {
+			log.Warnf("Error setting trusted proxies: %v. Using default.", err) // Log error if setting fails
+		}
 	} else {
 		// Default behavior (trust all) - just log a warning
 		log.Warn("All proxies are trusted (default). Set TRUSTED_PROXIES=nil to disable proxy trust or provide a comma-separated list of trusted proxy IPs.")
@@ -119,28 +169,23 @@ func main() {
 	// Setup API routes
 	api.SetupRoutes(router)
 
-	// Root handler - CORRECTED login_endpoint path
+	// Root handler
 	router.GET("/", func(c *gin.Context) {
-		// Determine protocol based on config OR request header if behind trusted proxy
 		protocol := "http"
 		if config.AppConfig.TLSEnable {
 			protocol = "https"
 		} else if c.Request.Header.Get("X-Forwarded-Proto") == "https" {
-			// If behind a trusted proxy that terminates TLS
 			protocol = "https"
 		}
 
-		// Use the Host from the request header
-		host := c.Request.Host // This includes hostname:port
-
-		// Construct baseURL dynamically
+		host := c.Request.Host
 		baseURL := fmt.Sprintf("%s://%s", protocol, host)
 
 		c.JSON(http.StatusOK, gin.H{
-			"message":        fmt.Sprintf("Containerlab API (Sudoless Mode) is running (%s).", protocol),
-			"documentation":  fmt.Sprintf("%s/swagger/index.html", baseURL), // Dynamic URL
+			"message":        fmt.Sprintf("Containerlab API Server (Version: %s) is running (%s).", version, protocol), // Include version
+			"documentation":  fmt.Sprintf("%s/swagger/index.html", baseURL),
 			"login_endpoint": fmt.Sprintf("POST %s/login", baseURL),
-			"api_base_path":  fmt.Sprintf("%s/api/v1", baseURL), // Dynamic URL - This describes the base for *other* API calls
+			"api_base_path":  fmt.Sprintf("%s/api/v1", baseURL),
 			"clab_runtime":   config.AppConfig.ClabRuntime,
 			"notes": []string{
 				"Runs clab commands as the API server's user.",
@@ -153,7 +198,7 @@ func main() {
 
 	// --- Start the server ---
 	listenAddr := fmt.Sprintf(":%s", config.AppConfig.APIPort)
-	serverBaseURL := fmt.Sprintf("http://localhost:%s", config.AppConfig.APIPort) // Base for logging start message
+	serverBaseURL := fmt.Sprintf("http://localhost:%s", config.AppConfig.APIPort)
 	if config.AppConfig.TLSEnable {
 		serverBaseURL = fmt.Sprintf("https://localhost:%s", config.AppConfig.APIPort)
 	}
@@ -164,7 +209,6 @@ func main() {
 		if config.AppConfig.TLSCertFile == "" || config.AppConfig.TLSKeyFile == "" {
 			log.Fatalf("TLS is enabled but TLS_CERT_FILE or TLS_KEY_FILE is not set in config.")
 		}
-		// Check if files exist (optional but good practice)
 		if _, err := os.Stat(config.AppConfig.TLSCertFile); os.IsNotExist(err) {
 			log.Fatalf("TLS cert file not found: %s", config.AppConfig.TLSCertFile)
 		}

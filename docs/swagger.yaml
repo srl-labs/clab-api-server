@@ -567,7 +567,7 @@ info:
     url: http://www.apache.org/licenses/LICENSE-2.0.html
   termsOfService: http://swagger.io/terms/
   title: Containerlab API
-  version: "1.0"
+  version: 1.0 // This swagger version is separate from the application version
 paths:
   /api/v1/generate:
     post:

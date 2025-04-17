@@ -36,9 +36,13 @@ tasks:
       - swag init -g cmd/server/main.go
 
   build:
-    desc: Build the clab-api-server binary
+    desc: Build the clab-api-server binary with version information
     cmds:
-      - go build -o clab-api-server ./cmd/server
+      - |
+        VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "development")
+        COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+        DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+        go build -ldflags="-X main.version=$VERSION -X main.commit=$COMMIT -X main.date=$DATE" -o clab-api-server ./cmd/server
 
   create-test-dir:
     desc: Create test reports directory
@@ -49,13 +53,15 @@ tasks:
     desc: Run tests with gotestsum and generate HTML report
     deps: [create-test-dir]
     cmds:
-      - gotestsum --format=standard-verbose --jsonfile=test-reports/test-output.json -- ./...
+      # Load .env specifically for tests if needed (adjust path if necessary)
+      # Use 'set -a' to export variables for the subsequent commands in the same shell instance
+      - set -a && [ -f tests/.env ] && . tests/.env ; set +a ; gotestsum --format=standard-verbose --jsonfile=test-reports/test-output.json -- ./...
       - cat test-reports/test-output.json | go-test-report -o test-reports/test-report.html
       - echo "Test report generated at test-reports/test-report.html"
 
   default:
     desc: Run all key steps (tidy, swag, build)
     cmds:
-      - task tidy
-      - task swag
-      - task build
+      - task: tidy
+      - task: swag
+      - task: build
