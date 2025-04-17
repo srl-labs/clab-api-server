@@ -18,6 +18,8 @@ This project provides a standalone RESTful API server written in Go to interact 
 Before running the `clab-api` server, ensure the following are set up on the server machine:
 
 1.  **Containerlab:** Requieres clab `v0.68.0+` The `clab` executable must be installed and available in the system's `PATH` for the user running the API server. See [Containerlab Installation Guide](https://containerlab.dev/install/).
+> [!NOTE]
+> Containerlab 0.68.0+ is not available yet, but the 0.1.0 release of the clab-api-server is compatible with the 0.67.0 version of Containerlab.
 2.  **Linux System:** The API server is designed for Linux environments.
 3.  **PAM Configuration:** Pluggable Authentication Modules (PAM) must be configured correctly ( Linux default is good ). The API uses the `login` service by default. PAM is available on most Linux distributions out of the box and doesn't require additional installation for using the pre-built binary.
 4.  **User Group:** Linux groups need to exist according to your .env settings to successfully authenticate via the `/login` endpoint.
