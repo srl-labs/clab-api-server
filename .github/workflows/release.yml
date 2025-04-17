@@ -1,89 +1,112 @@
-name: Build and Release (Debian container)
+name: Build and Release
 
 on:
   release:
     types: [created]
 
 permissions:
-  contents: write          # upload assets
+  contents: write # allow uploading assets to the Release page
 
 jobs:
   build:
-    runs-on: ubuntu-latest    # GitHub‑hosted VM
-    container:
-      image: debian:bookworm  # but every step runs in Debian 12
-      options: --platform linux/amd64
-
-    # --- use bash for every run step (fixes “Illegal option -o pipefail”) ---
-    defaults:
-      run:
-        shell: bash
+    runs-on: ubuntu-22.04
 
     steps:
-      # 1 Checkout
-      - uses: actions/checkout@v4
+      # 1 Checkout
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      # 2 Tag name for artefacts
-      - id: tag
+      # 2 Extract version tag
+      - name: Get release tag
+        id: get_tag
         run: echo "TAG=${GITHUB_REF#refs/tags/}" >>"$GITHUB_OUTPUT"
 
-      # 3 Install build dependencies
-      - name: Install cross‑tool‑chains & PAM headers
-        run: |
-          set -euo pipefail
-          # backports → Go 1.21
-          echo "deb http://deb.debian.org/debian bookworm-backports main" \
-            > /etc/apt/sources.list.d/backports.list            # 
-          dpkg --add-architecture arm64                         # multi‑arch :contentReference[oaicite:2]{index=2}
-          apt-get update -qq
-          apt-get install -y --no-install-recommends \
-            build-essential \
-            gcc-aarch64-linux-gnu \                             # cross compiler :contentReference[oaicite:3]{index=3}
-            libpam0g-dev libpam0g-dev:arm64 \                   # pam_appl.h (amd64+arm64) :contentReference[oaicite:4]{index=4}
-            -t bookworm-backports golang-1.21-go                # Go 1.21 
-          export PATH=$PATH:/usr/lib/go-1.21/bin                # expose go 
+      # 3 Fast Go installer
+      - name: Setup Go (fast)
+        uses: WillAbides/setup-go-faster@v1.14.0
+        with:
+          go-version: '1.21.x'
 
-      # 4 Cache Go modules/build cache (works inside container)
+      # 4 Enable Arm64 multi‑arch & install build deps using ports.ubuntu.com
+      - name: Configure apt for ARM64 and install cross-toolchains & PAM headers
+        run: |
+          # Add arm64 architecture
+          sudo dpkg --add-architecture arm64
+
+          # Add Ubuntu Ports repository for arm64 packages
+          # Create a new sources list file specifically for arm64 ports
+          # Using Jammy (22.04) sources
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-backports main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
+
+          # Update package lists *after* adding the architecture and new sources
+          # Add retries in case of transient network issues
+          for i in 1 2 3; do sudo apt-get update -qq && break || sleep 5; done
+
+          # Install dependencies, explicitly requesting arch for foreign libs
+          # Add retries for installation as well
+          for i in 1 2 3; do \
+            sudo apt-get install -y --no-install-recommends \
+              build-essential \
+              gcc-aarch64-linux-gnu \
+              libpam0g-dev \
+              libpam0g-dev:arm64 \
+            && break || sleep 5; \
+          done
+
+          # Verify installation (optional)
+          echo "Verifying installations:"
+          dpkg -l gcc-aarch64-linux-gnu libpam0g-dev:arm64
+
+      # 5 Cache Go modules & build cache
       - name: Cache Go modules
         uses: actions/cache@v4
         with:
           path: |
-            /root/go/pkg/mod
-            /root/.cache/go-build
+            ~/go/pkg/mod
+            ~/.cache/go-build
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-
 
-      # 5 Build linux/amd64 (native)
+      # 6 Build linux/amd64 (native)
       - name: Build linux/amd64
         run: |
-          set -euo pipefail
           mkdir -p dist
           CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
-            go build -ldflags "-s -w" \
-            -o dist/clab-api-server-linux-amd64 ./cmd/server
+          go build -ldflags="-s -w" \
+              -o dist/clab-api-server-linux-amd64 ./cmd/server
 
-      # 6 Build linux/arm64 (cross)
+      # 7 Build linux/arm64 (cross‑compile)
       - name: Build linux/arm64
         env:
-          CC: aarch64-linux-gnu-gcc
+          CC: aarch64-linux-gnu-gcc # tell CGO to use cross compiler
+          # Explicitly set PKG_CONFIG_PATH for cross-compilation if needed (PAM might use it)
+          # Find the correct path for arm64 pkgconfig files. Usually under /usr/lib/aarch64-linux-gnu/pkgconfig
+          PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig
         run: |
-          set -euo pipefail
           CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
-            go build -ldflags "-s -w" \
-            -o dist/clab-api-server-linux-arm64 ./cmd/server
-          chmod +x dist/clab-api-server-linux-*
+          go build -ldflags="-s -w" \
+              -o dist/clab-api-server-linux-arm64 ./cmd/server
 
-      # 7 Upload binaries to the Release
-      - uses: softprops/action-gh-release@v1
+      # 8 Make binaries executable
+      - name: Set execute bits
+        run: chmod +x dist/clab-api-server-linux-*
+
+      # 9 Upload binaries to the GitHub Release
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v1
         with:
           files: |
             dist/clab-api-server-linux-amd64
             dist/clab-api-server-linux-arm64
 
-      # 8 Store artefacts
-      - uses: actions/upload-artifact@v4
+      # 10 Save artefacts for CI debugging (optional)
+      - name: Upload binaries as artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: clab-api-server-${{ steps.tag.outputs.TAG }}
+          name: clab-api-server-${{ steps.get_tag.outputs.TAG }}
           path: dist/
           retention-days: 7
