@@ -2,7 +2,7 @@ version: '3'
 
 tasks:
   deps:
-    desc: Install system dependencies and swag
+    desc: Install system dependencies, swag, gotestsum, and go-test-report
     cmds:
       - |
         if command -v apt-get > /dev/null; then
@@ -22,6 +22,8 @@ tasks:
           exit 1
         fi
       - go install github.com/swaggo/swag/cmd/swag@latest
+      - go install gotest.tools/gotestsum@latest
+      - go install github.com/vakenbolt/go-test-report@latest
 
   tidy:
     desc: Run go mod tidy
@@ -37,6 +39,19 @@ tasks:
     desc: Build the clab-api-server binary
     cmds:
       - go build -o clab-api-server ./cmd/server
+
+  create-test-dir:
+    desc: Create test reports directory
+    cmds:
+      - mkdir -p test-reports
+
+  test-report:
+    desc: Run tests with gotestsum and generate HTML report
+    deps: [create-test-dir]
+    cmds:
+      - gotestsum --format=standard-verbose --jsonfile=test-reports/test-output.json -- ./...
+      - cat test-reports/test-output.json | go-test-report -o test-reports/test-report.html
+      - echo "Test report generated at test-reports/test-report.html"
 
   default:
     desc: Run all key steps (tidy, swag, build)

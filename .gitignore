@@ -1,20 +1,14 @@
 # Binaries
 /clab-api-server
+/clab-api-server-linux-amd64
+/clab-api-server-linux-arm64
 certs/
 # OS files
 .DS_Store
 Thumbs.db
 
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.pytest_cache/
-test_report.html
-.venv/
-tests/*.json
-tests/*.html
+test-reports/
+test-reports/*
 
 # IDE/editor configs
 .vscode/
