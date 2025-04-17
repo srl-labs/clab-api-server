@@ -9,50 +9,51 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    # Switch to a Debian runner
+    runs-on: debian-latest # Or debian-12, debian-11 etc.
 
     steps:
-      # 1 Checkout
+      # 1 Checkout
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2 Extract version tag
+      # 2 Extract version tag
       - name: Get release tag
         id: get_tag
         run: echo "TAG=${GITHUB_REF#refs/tags/}" >>"$GITHUB_OUTPUT"
 
-      # 3 Fast Go installer (≈3 s on Ubuntu)
+      # 3 Fast Go installer (≈3 s on Ubuntu) - Should work fine on Debian too
       - name: Setup Go (fast)
         uses: WillAbides/setup-go-faster@v1.14.0
         with:
           go-version: '1.21.x'
 
-      # 4 Enable Arm64 multi‑arch & install build deps
+      # 4 Enable Arm64 multi‑arch & install build deps (Debian syntax)
       - name: Install cross‑tool‑chains & PAM headers
         run: |
           sudo dpkg --add-architecture arm64
-          sudo apt-add-repository universe -y
-          # Update package lists for *all* configured architectures and components
+          # Update package lists after adding the new architecture
           sudo apt-get update -qq
-          # Install dependencies, explicitly requesting arch for foreign libs
+          # Install dependencies - package names are likely the same
           sudo apt-get install -y --no-install-recommends \
             build-essential                                     \
             gcc-aarch64-linux-gnu                               \ # cross C compiler
             libpam0g-dev                                        \ # pam_appl.h for amd64 (native)
             libpam0g-dev:arm64                                    # pam_appl.h for arm64 (foreign)
 
-      # 5 Cache Go modules & build cache
+      # 5 Cache Go modules & build cache
       - name: Cache Go modules
         uses: actions/cache@v4
         with:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
+          # Adjust cache key for the OS change
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-
 
-      # 6 Build linux/amd64 (native)
+      # 6 Build linux/amd64 (native)
       - name: Build linux/amd64
         run: |
           mkdir -p dist
@@ -60,31 +61,25 @@ jobs:
           go build -ldflags="-s -w" \
               -o dist/clab-api-server-linux-amd64 ./cmd/server
 
-      # 7 Build linux/arm64 (cross‑compile)
+      # 7 Build linux/arm64 (cross‑compile)
       - name: Build linux/arm64
         env:
-          CC: aarch64-linux-gnu-gcc                               # tell CGO to use cross compiler :contentReference[oaicite:5]{index=5}
+          # CC might need adjustment if the compiler name differs on Debian,
+          # but aarch64-linux-gnu-gcc is standard.
+          CC: aarch64-linux-gnu-gcc
         run: |
           CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
           go build -ldflags="-s -w" \
               -o dist/clab-api-server-linux-arm64 ./cmd/server
 
-      # 8 Make binaries executable
+      # 8 Make binaries executable
       - name: Set execute bits
         run: chmod +x dist/clab-api-server-linux-*
 
-      # 9 Upload binaries to the GitHub Release
+      # 9 Upload binaries to the GitHub Release
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
         with:
           files: |
             dist/clab-api-server-linux-amd64
             dist/clab-api-server-linux-arm64
-
-      # 10 Save artefacts for CI debugging (optional)
-      - name: Upload binaries as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: clab-api-server-${{ steps.get_tag.outputs.TAG }}
-          path: dist/
-          retention-days: 7
