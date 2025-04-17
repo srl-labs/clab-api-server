@@ -1,43 +1,49 @@
-name: Build and Release (Debian host container)
+name: Build and Release (Debian container)
 
 on:
   release:
     types: [created]
 
 permissions:
-  contents: write            # allow uploading assets
+  contents: write          # upload assets
 
 jobs:
   build:
-    runs-on: ubuntu-latest    # VM host; job itself runs in container
+    runs-on: ubuntu-latest    # GitHub‑hosted VM
     container:
-      image: debian:bookworm  # every step below runs in this Debian 12 image
+      image: debian:bookworm  # but every step runs in Debian 12
       options: --platform linux/amd64
 
+    # --- use bash for every run step (fixes “Illegal option -o pipefail”) ---
+    defaults:
+      run:
+        shell: bash
+
     steps:
-      # 1 Get the source
+      # 1 Checkout
       - uses: actions/checkout@v4
 
-      # 2 Save the tag for later
+      # 2 Tag name for artefacts
       - id: tag
         run: echo "TAG=${GITHUB_REF#refs/tags/}" >>"$GITHUB_OUTPUT"
 
-      # 3 Add backports + enable arm64, then install tool‑chains & headers
-      - name: Install build dependencies
+      # 3 Install build dependencies
+      - name: Install cross‑tool‑chains & PAM headers
         run: |
           set -euo pipefail
+          # backports → Go 1.21
           echo "deb http://deb.debian.org/debian bookworm-backports main" \
-            > /etc/apt/sources.list.d/backports.list          # Go 1.21 :contentReference[oaicite:7]{index=7}
-          dpkg --add-architecture arm64                       # multi-arch :contentReference[oaicite:8]{index=8}
+            > /etc/apt/sources.list.d/backports.list            # 
+          dpkg --add-architecture arm64                         # multi‑arch :contentReference[oaicite:2]{index=2}
           apt-get update -qq
           apt-get install -y --no-install-recommends \
             build-essential \
-            gcc-aarch64-linux-gnu \                           # cross compiler :contentReference[oaicite:9]{index=9}
-            libpam0g-dev libpam0g-dev:arm64 \                 # pam_appl.h :contentReference[oaicite:10]{index=10}
-            -t bookworm-backports golang-1.21-go              # Go 1.21 :contentReference[oaicite:11]{index=11}
-          export PATH=$PATH:/usr/lib/go-1.21/bin              # expose go :contentReference[oaicite:12]{index=12}
+            gcc-aarch64-linux-gnu \                             # cross compiler :contentReference[oaicite:3]{index=3}
+            libpam0g-dev libpam0g-dev:arm64 \                   # pam_appl.h (amd64+arm64) :contentReference[oaicite:4]{index=4}
+            -t bookworm-backports golang-1.21-go                # Go 1.21 
+          export PATH=$PATH:/usr/lib/go-1.21/bin                # expose go 
 
-      # 4 Cache Go modules & build cache (works inside container)
+      # 4 Cache Go modules/build cache (works inside container)
       - name: Cache Go modules
         uses: actions/cache@v4
         with:
@@ -48,33 +54,34 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-
 
-      # 5 Build linux/amd64 (native inside Debian container)
+      # 5 Build linux/amd64 (native)
       - name: Build linux/amd64
         run: |
+          set -euo pipefail
           mkdir -p dist
           CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
-            go build -ldflags="-s -w" \
+            go build -ldflags "-s -w" \
             -o dist/clab-api-server-linux-amd64 ./cmd/server
 
-      # 6 Build linux/arm64 (cross‑compile)
+      # 6 Build linux/arm64 (cross)
       - name: Build linux/arm64
         env:
           CC: aarch64-linux-gnu-gcc
         run: |
+          set -euo pipefail
           CGO_ENABLED=1 GOOS=linux GOARCH=arm64 \
-            go build -ldflags="-s -w" \
+            go build -ldflags "-s -w" \
             -o dist/clab-api-server-linux-arm64 ./cmd/server
           chmod +x dist/clab-api-server-linux-*
 
-      # 7 Upload to the GitHub Release
-      - name: Upload release assets
-        uses: softprops/action-gh-release@v1
+      # 7 Upload binaries to the Release
+      - uses: softprops/action-gh-release@v1
         with:
           files: |
             dist/clab-api-server-linux-amd64
             dist/clab-api-server-linux-arm64
 
-      # 8  Keep artefacts for seven days
+      # 8 Store artefacts
       - uses: actions/upload-artifact@v4
         with:
           name: clab-api-server-${{ steps.tag.outputs.TAG }}
