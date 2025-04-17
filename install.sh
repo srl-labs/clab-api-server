@@ -1,16 +1,35 @@
 #!/usr/bin/env bash
 #
 # Containerlab API Server installer / upgrader / uninstaller
-# Usage examples:
-#   curl -sL https://raw.githubusercontent.com/srl-labs/clab-api-server/refs/heads/main/install.sh | sudo -E bash           # install latest, create service – you enable it later
-#   curl -sL https://raw.githubusercontent.com/srl-labs/clab-api-server/refs/heads/main/install.sh | sudo -E bash install   # same as above
-#   curl -sL https://raw.githubusercontent.com/srl-labs/clab-api-server/refs/heads/main/install.sh | sudo -E bash pull-only --version v0.1.1
-#   sudo ./install.sh upgrade
-#   sudo ./install.sh uninstall
 #
-# Environment variables or CLI flags:
+# ── Quick examples ──────────────────────────────────────────────────────────────
+#   # Install the latest release (service is created but NOT enabled)
+#   curl -sL https://raw.githubusercontent.com/srl-labs/clab-api-server/refs/heads/main/install.sh \
+#     | sudo -E bash -s -- install
+#
+#   # Same as above (‑s -- lets you omit the action because it defaults to "install")
+#   curl -sL https://raw.githubusercontent.com/srl-labs/clab-api-server/refs/heads/main/install.sh \
+#     | sudo -E bash -s --            # action defaults to "install"
+#
+#   # Install a specific version
+#   curl -sL https://raw.githubusercontent.com/srl-labs/clab-api-server/refs/heads/main/install.sh \
+#     | sudo -E bash -s -- --version v0.1.1
+#
+#   # Just pull the binary (no env file / service)
+#   curl -sL https://raw.githubusercontent.com/srl-labs/clab-api-server/refs/heads/main/install.sh \
+#     | sudo -E bash -s -- pull-only --version v0.1.1
+#
+#   # Upgrade an existing installation (script is already on disk)
+#   sudo ./install.sh upgrade
+#
+#   # Uninstall everything, non‑interactive
+#   sudo ./install.sh uninstall --yes
+#
+# ── Environment variables / CLI flags ───────────────────────────────────────────
 #   --version vX.Y.Z   (or VERSION=vX.Y.Z)  ➜ install that version, otherwise latest
 #   --yes                              ➜ non‑interactive uninstall
+#
+
 
 set -euo pipefail
 
