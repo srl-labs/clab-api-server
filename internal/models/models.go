@@ -132,53 +132,22 @@ type GenerateNodeTier struct {
 
 // GenerateRequest represents the payload for generating a topology file.
 type GenerateRequest struct {
-	// Name for the generated lab topology.
-	Name string `json:"name" binding:"required" example:"3-tier-clos"`
+	Name  string             `json:"name"           binding:"required" example:"3-tier-clos"`
+	Tiers []GenerateNodeTier `json:"tiers"          binding:"required,min=1"`
 
-	// Definition of the CLOS tiers. Order matters (leaf -> spine -> superspine).
-	// Example: [ { "count": 8, "kind": "srl", "type": "ixrd3" }, { "count": 4, "kind": "nokia_srlinux" }, { "count": 2 } ]
-	Tiers []GenerateNodeTier `json:"tiers" binding:"required,min=1"`
+	DefaultKind string `json:"defaultKind,omitempty"       example:"nokia_srlinux"`
 
-	// Default kind to use if not specified in a tier definition. Defaults to 'srl'.
-	DefaultKind string `json:"defaultKind,omitempty" example:"nokia_srlinux"`
+	Images   map[string]string `json:"images"   example:"nokia_srlinux:ghcr.io/nokia/srlinux:latest"`
+	Licenses map[string]string `json:"licenses,omitempty" example:"nokia_srlinux:/opt/licenses/srl.lic"`
 
-	// Map of kind to container image. This field is MANDATORY.
-	// The key is the node 'kind' (e.g., "nokia_srlinux", "ceos") and the value is the container image path.
-	// @Example map[string]string{"nokia_srlinux":"ghcr.io/nokia/srlinux:latest", "linux":"ubuntu:latest"}
-	Images map[string]string `json:"images" binding:"required"` // Made mandatory
-
-	// Map of kind to license file path (accessible to the clab command).
-	// The key is the node 'kind' (e.g., "srl") and the value is the path to the license file on the server.
-	// @Example map[string]string{"srl":"/opt/licenses/srl.lic"}
-	Licenses map[string]string `json:"licenses,omitempty"`
-
-	// Prefix for node names (e.g., "node" -> "node-1-1", "node-2-1"). Defaults to "node".
-	NodePrefix string `json:"nodePrefix,omitempty" example:"clos-node"`
-
-	// Prefix for node groups (used in graphing). Defaults to "tier".
-	GroupPrefix string `json:"groupPrefix,omitempty" example:"clos-tier"`
-
-	// Name of the management network. Defaults to "clab".
+	NodePrefix        string `json:"nodePrefix,omitempty"        example:"clos-node"`
+	GroupPrefix       string `json:"groupPrefix,omitempty"       example:"clos-tier"`
 	ManagementNetwork string `json:"managementNetwork,omitempty" example:"clos-mgmt"`
-
-	// Management network IPv4 subnet (CIDR). Defaults based on clab default.
-	IPv4Subnet string `json:"ipv4Subnet,omitempty" example:"172.20.20.0/24"`
-
-	// Management network IPv6 subnet (CIDR). Defaults based on clab default.
-	IPv6Subnet string `json:"ipv6Subnet,omitempty" example:"2001:172:20:20::/64"`
-
-	// If true, immediately deploy the generated topology using 'clab deploy --reconfigure'.
-	// The topology file will be saved in the user's ~/.clab/<labName>/ directory.
-	Deploy bool `json:"deploy,omitempty"`
-
-	// Limit concurrent workers during deployment (only applies if Deploy=true). 0 means default.
-	MaxWorkers int `json:"maxWorkers,omitempty"`
-
-	// Optional: Path where the generated file should be saved *on the server*.
-	// If Deploy=true, this field is IGNORED.
-	// If Deploy=false and this field is empty, YAML is returned directly in the response.
-	// If Deploy=false and this field is set, the file is saved to this path on the server (API server user needs write permission).
-	OutputFile string `json:"outputFile,omitempty"` // Path on the server, ignored if Deploy=true
+	IPv4Subnet        string `json:"ipv4Subnet,omitempty"        example:"172.20.20.0/24"`
+	IPv6Subnet        string `json:"ipv6Subnet,omitempty"        example:"2001:172:20:20::/64"`
+	Deploy            bool   `json:"deploy,omitempty"            example:"true"`
+	MaxWorkers        int    `json:"maxWorkers,omitempty"        example:"4"`
+	OutputFile        string `json:"outputFile,omitempty"        example:"clos.yml"`
 }
 
 // GenerateResponse represents the result of the generate command.

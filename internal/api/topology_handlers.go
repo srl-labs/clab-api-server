@@ -29,7 +29,7 @@ import (
 // @Security BearerAuth
 // @Accept json
 // @Produce json
-// @Param generate_request body models.GenerateRequest true "Topology generation parameters. Note: 'images'/'licenses' format is { \"kind\": \"path\" }." example({ "defaultKind": "nokia_srlinux", "deploy": true, "groupPrefix": "clos-tier", "images": { "nokia_srlinux": "ghcr.io/nokia/srlinux:latest" }, "ipv4Subnet": "172.50.20.0/24", "licenses": {}, "ipv6Subnet": "2001:172:20:20::/64", "managementNetwork": "clos-mgmt", "maxWorkers": 0, "name": "3-tier-clos", "nodePrefix": "clos-node", "outputFile": "", "tiers": [ { "count": 4, "kind": "nokia_srlinux", "type": "ixrd3" } ] }) // Example structure
+// @Param generate_request body models.GenerateRequest true "Topology generation parameters. The 'images' field maps kind to image path." example(`{"name": "3-tier-clos", "tiers": [{"count": 4, "kind": "nokia_srlinux", "type": "ixrd3"}, {"count": 2, "kind": "arista_ceos"}], "defaultKind": "nokia_srlinux", "images": {"nokia_srlinux": "ghcr.io/nokia/srlinux:latest", "arista_ceos": "ceos:4.28.0F", "cisco_xr": "cisco/xrd:7.8.2"}, "licenses": {"nokia_srlinux": "/path/to/license.key"}, "nodePrefix": "clos-node", "groupPrefix": "clos-tier", "managementNetwork": "clos-mgmt", "ipv4Subnet": "172.50.20.0/24", "ipv6Subnet": "2001:172:20:20::/64", "deploy": true, "maxWorkers": 0, "outputFile": ""}`)
 // @Success 200 {object} models.GenerateResponse "Generation successful (YAML or deploy output)"
 // @Failure 400 {object} models.ErrorResponse "Invalid input parameters"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"

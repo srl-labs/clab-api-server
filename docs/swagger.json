@@ -40,7 +40,7 @@
                 "summary": "Generate Topology",
                 "parameters": [
                     {
-                        "description": "Topology generation parameters. Note: 'images'/'licenses' format is { \\",
+                        "description": "Topology generation parameters. The 'images' field maps kind to image path.",
                         "name": "generate_request",
                         "in": "body",
                         "required": true,
@@ -1977,74 +1977,69 @@
         "models.GenerateRequest": {
             "type": "object",
             "required": [
-                "images",
                 "name",
                 "tiers"
             ],
             "properties": {
                 "defaultKind": {
-                    "description": "Default kind to use if not specified in a tier definition. Defaults to 'srl'.",
                     "type": "string",
                     "example": "nokia_srlinux"
                 },
                 "deploy": {
-                    "description": "If true, immediately deploy the generated topology using 'clab deploy --reconfigure'.\nThe topology file will be saved in the user's ~/.clab/\u003clabName\u003e/ directory.",
-                    "type": "boolean"
+                    "type": "boolean",
+                    "example": true
                 },
                 "groupPrefix": {
-                    "description": "Prefix for node groups (used in graphing). Defaults to \"tier\".",
                     "type": "string",
                     "example": "clos-tier"
                 },
                 "images": {
-                    "description": "Map of kind to container image. This field is MANDATORY.\nThe key is the node 'kind' (e.g., \"nokia_srlinux\", \"ceos\") and the value is the container image path.\n@Example map[string]string{\"nokia_srlinux\":\"ghcr.io/nokia/srlinux:latest\", \"linux\":\"ubuntu:latest\"}",
                     "type": "object",
                     "additionalProperties": {
                         "type": "string"
+                    },
+                    "example": {
+                        "nokia_srlinux": "ghcr.io/nokia/srlinux:latest"
                     }
                 },
                 "ipv4Subnet": {
-                    "description": "Management network IPv4 subnet (CIDR). Defaults based on clab default.",
                     "type": "string",
                     "example": "172.20.20.0/24"
                 },
                 "ipv6Subnet": {
-                    "description": "Management network IPv6 subnet (CIDR). Defaults based on clab default.",
                     "type": "string",
                     "example": "2001:172:20:20::/64"
                 },
                 "licenses": {
-                    "description": "Map of kind to license file path (accessible to the clab command).\nThe key is the node 'kind' (e.g., \"srl\") and the value is the path to the license file on the server.\n@Example map[string]string{\"srl\":\"/opt/licenses/srl.lic\"}",
                     "type": "object",
                     "additionalProperties": {
                         "type": "string"
+                    },
+                    "example": {
+                        "nokia_srlinux": "/opt/licenses/srl.lic"
                     }
                 },
                 "managementNetwork": {
-                    "description": "Name of the management network. Defaults to \"clab\".",
                     "type": "string",
                     "example": "clos-mgmt"
                 },
                 "maxWorkers": {
-                    "description": "Limit concurrent workers during deployment (only applies if Deploy=true). 0 means default.",
-                    "type": "integer"
+                    "type": "integer",
+                    "example": 4
                 },
                 "name": {
-                    "description": "Name for the generated lab topology.",
                     "type": "string",
                     "example": "3-tier-clos"
                 },
                 "nodePrefix": {
-                    "description": "Prefix for node names (e.g., \"node\" -\u003e \"node-1-1\", \"node-2-1\"). Defaults to \"node\".",
                     "type": "string",
                     "example": "clos-node"
                 },
                 "outputFile": {
-                    "description": "Optional: Path where the generated file should be saved *on the server*.\nIf Deploy=true, this field is IGNORED.\nIf Deploy=false and this field is empty, YAML is returned directly in the response.\nIf Deploy=false and this field is set, the file is saved to this path on the server (API server user needs write permission).",
-                    "type": "string"
+                    "type": "string",
+                    "example": "clos.yml"
                 },
                 "tiers": {
-                    "description": "Definition of the CLOS tiers. Order matters (leaf -\u003e spine -\u003e superspine).\nExample: [ { \"count\": 8, \"kind\": \"srl\", \"type\": \"ixrd3\" }, { \"count\": 4, \"kind\": \"nokia_srlinux\" }, { \"count\": 2 } ]",
                     "type": "array",
                     "minItems": 1,
                     "items": {
