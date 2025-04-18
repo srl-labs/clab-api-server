@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/user" // Import os/user
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -61,7 +61,6 @@ func GenerateTopologyHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "'images' field is required."})
 		return
 	}
-	// Add more validation for tier contents, image/license formats if needed
 
 	log.Debugf("GenerateTopology user '%s': Generating topology '%s' (deploy=%t)", username, req.Name, req.Deploy)
 
@@ -98,7 +97,6 @@ func GenerateTopologyHandler(c *gin.Context) {
 				nodeStr += ":" + tier.Type
 			}
 		} else if tier.Type != "" {
-			// If kind is empty but type is not, clab might need kind explicitly. Assume default.
 			defaultKind := req.DefaultKind
 			if defaultKind == "" {
 				defaultKind = "srl" // clab's default
@@ -121,8 +119,6 @@ func GenerateTopologyHandler(c *gin.Context) {
 	if len(req.Licenses) > 0 {
 		var licArgs []string
 		for kind, lic := range req.Licenses {
-			// Security: Ensure license path is somewhat sane? Difficult without knowing server layout.
-			// Rely on clab's own handling for now. Basic sanitization might be good.
 			cleanLic, licErr := clab.SanitizePath(lic) // Apply basic sanitization
 			if licErr != nil {
 				log.Warnf("GenerateTopology failed for user '%s': Invalid license path '%s': %v", username, lic, licErr)
@@ -148,8 +144,6 @@ func GenerateTopologyHandler(c *gin.Context) {
 	if req.IPv6Subnet != "" {
 		args = append(args, "--ipv6-subnet", req.IPv6Subnet)
 	}
-	// MaxWorkers is handled during deploy step if needed
-	// Deploy and OutputFile flags are handled specially below
 
 	// --- Determine Output/Action and Target File Path ---
 	var targetFilePath string // Path used by clab generate --file and clab deploy -t
@@ -199,8 +193,6 @@ func GenerateTopologyHandler(c *gin.Context) {
 		if err != nil {
 			// Log error but continue, maybe file write will succeed anyway if API user has perms
 			log.Warnf("GenerateTopology user '%s': Failed to set ownership on lab directory '%s': %v. Continuing...", username, targetDir, err)
-			// c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to set ownership on lab directory: %s.", err.Error())})
-			// return
 		}
 		log.Infof("GenerateTopology user '%s': Ensured directory '%s' exists and attempted ownership set.", username, targetDir)
 

@@ -5,7 +5,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
-	"context" // Import context
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -136,7 +136,6 @@ func getUserCertBasePath(username string) (string, error) {
 		return "", fmt.Errorf("could not retrieve user details for '%s'", username)
 	}
 
-	// --- NEW PATH: Use user's home directory ---
 	// Store certs under ~/.clab/certs (consistent with potential user clab usage)
 	basePath := filepath.Join(usr.HomeDir, ".clab", "certs")
 
