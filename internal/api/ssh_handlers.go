@@ -260,7 +260,6 @@ func TerminateSSHSessionHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, models.GenericSuccessResponse{Message: "SSH session terminated successfully."})
 }
 
-// Helper function to get API server host, respecting proxies and headers
 // Helper function to get API server host, respecting config, proxies and headers
 func getAPIServerHost(r *http.Request) string {
 	// First check if API_SERVER_HOST is explicitly configured

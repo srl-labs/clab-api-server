@@ -8,7 +8,7 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/msteinert/pam"
 
-	"github.com/srl-labs/clab-api-server/internal/config" // Ensure config is imported
+	"github.com/srl-labs/clab-api-server/internal/config"
 )
 
 // Define the primary required group name as a constant
@@ -111,10 +111,6 @@ func ValidateCredentials(username, password string) (bool, error) {
 	err = t.AcctMgmt(0)
 	if err != nil {
 		log.Warnf("PAM account management check failed for user '%s' (but login allowed as Authenticate and Group Check passed): %v", username, err)
-		// Decide if this should prevent login. For now, treat it as a warning
-		// and allow login if Authenticate and Group Check succeeded.
-		// You might return false here for stricter checks:
-		// return false, fmt.Errorf("PAM account validation failed: %w", err)
 	}
 
 	// 5. Success: Authenticated AND in one of the required login groups

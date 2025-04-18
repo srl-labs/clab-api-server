@@ -2,8 +2,8 @@
 package main
 
 import (
-	"context" // Import context
-	"errors"  // Import errors
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -12,7 +12,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time" // Import time
+	"time"
 
 	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
@@ -89,14 +89,12 @@ func main() {
 		log.SetLevel(log.DebugLevel)
 	case "info":
 		log.SetLevel(log.InfoLevel)
-	// ... other levels ...
 	default:
 		log.Warnf("Invalid LOG_LEVEL '%s', defaulting to 'info'", config.AppConfig.LogLevel)
 		log.SetLevel(log.InfoLevel)
 	}
 	log.Infof("clab-api-server version %s starting...", version)
 	log.Infof("Configuration processed. Log level set to '%s'.", config.AppConfig.LogLevel)
-	// ... log other config details ...
 	if config.AppConfig.JWTSecret == "default_secret_change_me" {
 		log.Warn("Using default JWT secret. Change JWT_SECRET environment variable or .env file for production!")
 	}
@@ -122,7 +120,6 @@ func main() {
 	router := gin.Default() // Use Default for logging and recovery middleware
 
 	// Configure trusted proxies
-	// ... (proxy configuration logic remains the same) ...
 	if config.AppConfig.TrustedProxies == "nil" {
 		log.Info("Proxy trust disabled (TRUSTED_PROXIES=nil)")
 		_ = router.SetTrustedProxies(nil)
@@ -144,7 +141,6 @@ func main() {
 
 	// Root handler (remains the same)
 	router.GET("/", func(c *gin.Context) {
-		// ... root handler logic ...
 		protocol := "http"
 		if config.AppConfig.TLSEnable {
 			protocol = "https"
@@ -171,19 +167,15 @@ func main() {
 	})
 
 	// --- Prepare Server Configuration ---
-	listenAddr := fmt.Sprintf(":%s", config.AppConfig.APIPort)                    // Define ONCE here
-	serverBaseURL := fmt.Sprintf("http://localhost:%s", config.AppConfig.APIPort) // Define ONCE here
+	listenAddr := fmt.Sprintf(":%s", config.AppConfig.APIPort)
+	serverBaseURL := fmt.Sprintf("http://localhost:%s", config.AppConfig.APIPort)
 	if config.AppConfig.TLSEnable {
-		serverBaseURL = fmt.Sprintf("https://localhost:%s", config.AppConfig.APIPort) // Adjust if TLS
+		serverBaseURL = fmt.Sprintf("https://localhost:%s", config.AppConfig.APIPort)
 	}
 
 	srv := &http.Server{
 		Addr:    listenAddr,
-		Handler: router, // Use the Gin engine as the handler
-		// Consider adding timeouts for production hardening:
-		// ReadTimeout:  5 * time.Second,
-		// WriteTimeout: 10 * time.Second,
-		// IdleTimeout:  120 * time.Second,
+		Handler: router,
 	}
 
 	// --- Start Server Goroutine ---

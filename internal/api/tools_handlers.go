@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/user" // <-- Ensure os/user is imported
+	"os/user"
 	"path/filepath"
-	"strconv" // <-- Ensure strconv is imported
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/log"
@@ -16,8 +16,6 @@ import (
 
 	"github.com/srl-labs/clab-api-server/internal/clab"
 	"github.com/srl-labs/clab-api-server/internal/models"
-	// "github.com/srl-labs/clab-api-server/internal/auth" // Already imported via helpers
-	// "github.com/srl-labs/clab-api-server/internal/config" // Already imported via helpers
 )
 
 // --- TX Offload Handler ---
@@ -59,8 +57,6 @@ func DisableTxOffloadHandler(c *gin.Context) {
 		return
 	}
 
-	// Optional: Verify container exists (using the less efficient inspect --all method for now)
-	// If performance is critical, direct runtime calls might be better.
 	_, err := verifyContainerOwnership(c, username, req.ContainerName) // We check ownership even for superuser to ensure container exists
 	if err != nil {
 		// verifyContainerOwnership already sent the response (404 or 500)
@@ -140,8 +136,6 @@ func CreateCAHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid expiry duration format."})
 		return
 	}
-
-	// Other fields use clab defaults if empty
 
 	// --- Path Handling & Ownership Setup ---
 	basePath, err := getUserCertBasePath(username) // Get ~/.clab/certs path

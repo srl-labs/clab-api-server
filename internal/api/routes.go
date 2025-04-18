@@ -6,7 +6,6 @@ import (
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 
-	// Adjust import path if your module path is different
 	_ "github.com/srl-labs/clab-api-server/docs"
 )
 
@@ -77,7 +76,7 @@ func SetupRoutes(router *gin.Engine) {
 					}
 				}
 			}
-		} // End /labs group
+		}
 
 		// SSH Session Management Routes (Global)
 		ssh := apiV1.Group("/ssh")
@@ -87,7 +86,7 @@ func SetupRoutes(router *gin.Engine) {
 
 			// Terminate a specific SSH session by port
 			ssh.DELETE("/sessions/:port", TerminateSSHSessionHandler) // DELETE /api/v1/ssh/sessions/{port}
-		} // End /ssh group
+		}
 
 		// Topology Generation Route
 		apiV1.POST("/generate", GenerateTopologyHandler) // POST /api/v1/generate
@@ -113,16 +112,16 @@ func SetupRoutes(router *gin.Engine) {
 			{
 				vxlan.POST("", CreateVxlanHandler)   // POST /api/v1/tools/vxlan
 				vxlan.DELETE("", DeleteVxlanHandler) // DELETE /api/v1/tools/vxlan
-			} // End /vxlan group
+			}
 
-		} // End /tools group
+		}
 
 		// Version Info Routes
 		version := apiV1.Group("/version")
 		{
 			version.GET("", GetVersionHandler)         // GET /api/v1/version
 			version.GET("/check", CheckVersionHandler) // GET /api/v1/version/check
-		} // End /version group
+		}
 
-	} // End /api/v1 group
+	}
 }

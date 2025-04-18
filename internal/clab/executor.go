@@ -19,7 +19,6 @@ const defaultTimeout = 5 * time.Minute // Timeout for clab commands
 
 // RunClabCommand executes a clab command directly as the user running the API server.
 func RunClabCommand(ctx context.Context, username string, args ...string) (stdout string, stderr string, err error) {
-	// Add timeout to context if not already present
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, defaultTimeout)

@@ -120,19 +120,9 @@ func DeployLabHandler(c *gin.Context) {
 		topoPathForClab = req.TopologySourceUrl
 
 		// If URL is used, clab determines the name unless overridden.
-		// We need the override name *now* for the existence check.
 		if labNameOverride != "" {
 			effectiveLabName = labNameOverride
 		} else {
-			// We cannot reliably determine the name clab will use from the URL beforehand.
-			// This check might need refinement or we accept that URL deploys without override
-			// might bypass the pre-check slightly differently. For now, assume override is needed for pre-check with URL.
-			// OR: We could try a dry-run or inspect after a potential partial fetch? Complex.
-			// Let's proceed assuming if no override, we cannot pre-check name collision effectively for URL source.
-			// Clab itself might still fail if the lab exists.
-			// For the purpose of the requirement "Prevent deployment if lab already exists",
-			// this path (URL source without override) doesn't fully meet it without more complex logic.
-			// Let's log a warning and proceed, relying on clab's potential failure later.
 			log.Warnf("DeployLab user '%s': Deploying from URL without labNameOverride. Pre-deployment existence check skipped. Clab will handle potential conflicts.", username)
 			effectiveLabName = "<determined_by_clab_from_url>" // Placeholder
 		}
@@ -204,7 +194,7 @@ func DeployLabHandler(c *gin.Context) {
 			// Lab does not exist -> Proceed
 			log.Infof("DeployLab user '%s': Lab '%s' does not exist. Proceeding with deployment.", username, effectiveLabName)
 		}
-	} // End pre-deployment check
+	}
 
 	// --- Prepare Base Arguments ---
 	args := []string{"deploy", "--owner", username, "--format", "json"}
@@ -1140,7 +1130,6 @@ func ListLabsHandler(c *gin.Context) {
 		}
 		log.Infof("ListLabs user '%s': Found %d labs containing containers owned by the user.", username, len(finalResult))
 	}
-	// --- End Filtering ---
 
 	c.JSON(http.StatusOK, finalResult) // Return the potentially filtered map
 }
@@ -1217,7 +1206,6 @@ func SaveLabConfigHandler(c *gin.Context) {
 
 	log.Infof("SaveLabConfig user '%s': clab save for lab '%s' executed successfully.", username, labName)
 
-	// --- Use the new response model ---
 	c.JSON(http.StatusOK, models.SaveConfigResponse{
 		Message: fmt.Sprintf("Configuration save command executed successfully for lab '%s'.", labName),
 		Output:  stderr, // Include the captured stderr content
