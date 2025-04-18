@@ -23,8 +23,8 @@ var sshManager *ssh.SSHManager
 // InitSSHManager initializes the SSH manager
 func InitSSHManager() {
 	sshManager = ssh.NewSSHManager(
-		ssh.DefaultSSHBasePort,
-		ssh.DefaultSSHMaxPort,
+		config.AppConfig.SSHBasePort,
+		config.AppConfig.SSHMaxPort,
 		ssh.DefaultSSHCleanupTick,
 		ssh.DefaultSSHSessionTimeout,
 	)
@@ -56,7 +56,7 @@ func ShutdownSSHManager() {
 func RequestSSHAccessHandler(c *gin.Context) {
 	username := c.GetString("username")
 	labName := c.Param("labName")
-	containerName := c.Param("nodeName") // This is now expected to be the full container name
+	containerName := c.Param("nodeName")
 
 	// Validate inputs
 	if !isValidLabName(labName) {
@@ -293,14 +293,4 @@ func getAPIServerHost(r *http.Request) string {
 	}
 
 	return host
-}
-
-// Helper function for validating node names
-func isValidNodeName(name string) bool {
-	if name == "" || len(name) > 128 {
-		return false
-	}
-
-	// Similar to labNameRegex but might be different for your specific needs
-	return labNameRegex.MatchString(name)
 }

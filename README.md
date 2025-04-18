@@ -8,9 +8,10 @@ This project provides a standalone RESTful API server written in Go to interact 
 
 * **Lab Management:** Deploy, destroy, redeploy, inspect, and list labs
 * **Node Operations:** Execute commands and save configurations
+* **SSH Access:** Connect to lab nodes via SSH through the API server
 * **Topology Tools:** Generate and deploy CLOS topologies
 * **Network Tools:** Manage network emulation, virtual Ethernet pairs, VxLAN tunnels
-* **Certification Tools:** Certificate management, user authentication via Linux PAM and JWT
+* **Certification Tools:** Certificate management
 * **User Context:** Track ownership and manage files within user home directories
 * **Configuration:** Configurable via environment variables and `.env` files
 * **Documentation:** Embedded Swagger UI for API exploration
@@ -95,6 +96,7 @@ All options can be set via **environment variables**, the shipped **`/etc/clab-a
 ```dotenv
 # Containerlab API Server configuration (excerpt)
 API_PORT=8080
+API_SERVER_HOST=localhost
 LOG_LEVEL=info
 
 # --- Authentication ---
@@ -110,13 +112,19 @@ CLAB_RUNTIME=docker
 GIN_MODE=release
 TRUSTED_PROXIES=
 
+# --- SSH (otional) ---
+#SSH proxy port range (Default: 2222-2322)
+#SSH_BASE_PORT=2222
+#SSH_MAX_PORT=2322
+
 # --- TLS (optional) ---
 #TLS_ENABLE=true
 #TLS_CERT_FILE=/etc/clab-api-server/certs/server.pem
 #TLS_KEY_FILE=/etc/clab-api-server/certs/server-key.pem
 ```
 
-> **Note:** Settings defined as environment variables always take precedence over the file.
+> [!NOTE]
+> Settings defined as environment variables always take precedence over the file.
 
 ---
 
@@ -132,8 +140,10 @@ sudo /usr/local/bin/clab-api-server -env-file /etc/clab-api-server.env
 
 * **Server user** – defined in the systemd unit (default: the user that executed the install script). Needs rights to run **clab** and access the container runtime (e.g. be in the `docker` group).
 * **Authenticated Linux user** – validated via PAM, must be member of `API_USER_GROUP` (default `clab_api`) or `SUPERUSER_GROUP` (`clab_admins`).
-* **Command execution** – all **clab** commands run as the *server* user, *not* the authenticated user.
+* **Command execution** – all **clab** commands *and* SSH proxies run as the *server* user, *not* the authenticated user.
 * **Ownership** – Lab ownership is inferred from clab container labels; file operations attempt to store artifacts under the authenticated user’s home.
+* **SSH sessions** – The SSH manager allocates local ports (default **2222‑2322**) and forwards traffic to container port 22. Sessions expire automatically (default **1 h**, max **24 h**) and can be listed or terminated via the API.
+* **Security controls** – PAM for credential validation, JWT for session management, input validation & path sanitisation, optional TLS with client‑cert auth, execution timeouts.
 
 See the full *Privilege Model and Security* section further below for details.
 
@@ -222,6 +232,7 @@ A user must either
 * **Input validation & path sanitisation** against directory traversal
 * **TLS** support with optional client‑cert auth
 * **Execution timeouts** for clab commands
+* **SSH session limits** and automatic expiration
 
 > [!IMPORTANT]
 >  Granting the server user write access to other users’ home directories has security implications. Review your threat model carefully before production deployments.
