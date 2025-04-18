@@ -119,6 +119,9 @@ func main() {
 	log.Infof("Gin running in '%s' mode", gin.Mode())
 	router := gin.Default() // Use Default for logging and recovery middleware
 
+	// Load HTML templates
+	router.LoadHTMLGlob("templates/*.html")
+
 	// Configure trusted proxies
 	if config.AppConfig.TrustedProxies == "nil" {
 		log.Info("Proxy trust disabled (TRUSTED_PROXIES=nil)")

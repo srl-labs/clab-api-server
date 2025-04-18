@@ -2,6 +2,8 @@
 package api
 
 import (
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
@@ -19,6 +21,11 @@ func SetupRoutes(router *gin.Engine) {
 	// Swagger documentation route
 	// URL needs to match the basePath in your main swagger annotations
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, ginSwagger.URL("/swagger/doc.json")))
+
+	// ReDoc documentation route - serves a more user-friendly API documentation UI
+	router.GET("/redoc", func(c *gin.Context) {
+		c.HTML(http.StatusOK, "redoc.html", nil)
+	})
 
 	// --- Authenticated Routes (/api/v1) ---
 	apiV1 := router.Group("/api/v1")
