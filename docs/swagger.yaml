@@ -1170,7 +1170,7 @@ paths:
         name: labName
         required: true
         type: string
-      - description: Node name within the lab (not the full container name)
+      - description: Full container name of the node (e.g., clab-my-lab-srl1)
         in: path
         name: nodeName
         required: true
@@ -1337,7 +1337,14 @@ paths:
       - Labs
   /api/v1/ssh/sessions:
     get:
-      description: Lists all active SSH sessions for the authenticated user
+      description: Lists active SSH sessions. For regular users, shows only their
+        sessions. Superusers can see all sessions by using the 'all' query parameter.
+      parameters:
+      - description: 'If true and user is superuser, shows sessions for all users
+          (default: false)'
+        in: query
+        name: all
+        type: boolean
       produces:
       - application/json
       responses:
@@ -1349,6 +1356,10 @@ paths:
             type: array
         "401":
           description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Forbidden (non-superuser attempting to list all sessions)
           schema:
             $ref: '#/definitions/models.ErrorResponse'
       security:

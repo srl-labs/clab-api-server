@@ -21,6 +21,7 @@ type Config struct {
 	TLSKeyFile           string        `mapstructure:"TLS_KEY_FILE"`
 	GinMode              string        `mapstructure:"GIN_MODE"`
 	TrustedProxies       string        `mapstructure:"TRUSTED_PROXIES"`
+	APIServerHost        string        `mapstructure:"API_SERVER_HOST"` // Host/IP/FQDN used for SSH access commands
 }
 
 var AppConfig Config
@@ -44,6 +45,7 @@ func LoadConfig(envFilePath string) error {
 	viper.SetDefault("TLS_KEY_FILE", "")
 	viper.SetDefault("GIN_MODE", "debug")
 	viper.SetDefault("TRUSTED_PROXIES", "")
+	viper.SetDefault("API_SERVER_HOST", "")
 
 	err := viper.ReadInConfig()
 

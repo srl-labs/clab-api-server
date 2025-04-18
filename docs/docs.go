@@ -951,7 +951,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Node name within the lab (not the full container name)",
+                        "description": "Full container name of the node (e.g., clab-my-lab-srl1)",
                         "name": "nodeName",
                         "in": "path",
                         "required": true
@@ -1076,7 +1076,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Lists all active SSH sessions for the authenticated user",
+                "description": "Lists active SSH sessions. For regular users, shows only their sessions. Superusers can see all sessions by using the 'all' query parameter.",
                 "produces": [
                     "application/json"
                 ],
@@ -1084,6 +1084,14 @@ const docTemplate = `{
                     "SSH Access"
                 ],
                 "summary": "List SSH Sessions",
+                "parameters": [
+                    {
+                        "type": "boolean",
+                        "description": "If true and user is superuser, shows sessions for all users (default: false)",
+                        "name": "all",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "List of active SSH sessions",
@@ -1096,6 +1104,12 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden (non-superuser attempting to list all sessions)",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }

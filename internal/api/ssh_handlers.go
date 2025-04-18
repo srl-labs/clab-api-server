@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
 
+	"github.com/srl-labs/clab-api-server/internal/config"
 	"github.com/srl-labs/clab-api-server/internal/models"
 	"github.com/srl-labs/clab-api-server/internal/ssh"
 )
@@ -43,7 +44,7 @@ func ShutdownSSHManager() {
 // @Accept json
 // @Produce json
 // @Param labName path string true "Lab name" example="my-lab"
-// @Param nodeName path string true "Node name within the lab (not the full container name)" example="srl1"
+// @Param nodeName path string true "Full container name of the node (e.g., clab-my-lab-srl1)" example="clab-my-lab-srl1"
 // @Param sshRequest body models.SSHAccessRequest false "SSH access parameters"
 // @Success 200 {object} models.SSHAccessResponse "SSH connection details"
 // @Failure 400 {object} models.ErrorResponse "Invalid request parameters"
@@ -55,7 +56,7 @@ func ShutdownSSHManager() {
 func RequestSSHAccessHandler(c *gin.Context) {
 	username := c.GetString("username")
 	labName := c.Param("labName")
-	nodeName := c.Param("nodeName")
+	containerName := c.Param("nodeName") // This is now expected to be the full container name
 
 	// Validate inputs
 	if !isValidLabName(labName) {
@@ -64,9 +65,9 @@ func RequestSSHAccessHandler(c *gin.Context) {
 		return
 	}
 
-	if !isValidNodeName(nodeName) {
-		log.Warnf("SSH Access failed for user '%s': Invalid node name '%s'", username, nodeName)
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid node name format."})
+	if !isValidContainerName(containerName) { // Changed from isValidNodeName to isValidContainerName
+		log.Warnf("SSH Access failed for user '%s': Invalid container name '%s'", username, containerName)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid container name format."})
 		return
 	}
 
@@ -109,13 +110,19 @@ func RequestSSHAccessHandler(c *gin.Context) {
 		return
 	}
 
-	// Get container (node) details
-	// Construct the full container name as clab-<labName>-<nodeName>
-	containerName := fmt.Sprintf("clab-%s-%s", labName, nodeName)
+	// Get container details - now using the full container name directly
 	containerInfo, err := verifyContainerOwnership(c, username, containerName)
 	if err != nil {
 		// verifyContainerOwnership already sent response
 		return
+	}
+
+	// Extract the node name from the container name for session tracking
+	// Expected format: clab-<labName>-<nodeName>
+	nodeName := containerName
+	prefix := "clab-" + labName + "-"
+	if strings.HasPrefix(containerName, prefix) {
+		nodeName = strings.TrimPrefix(containerName, prefix)
 	}
 
 	// Extract container IP for SSH access
@@ -139,7 +146,7 @@ func RequestSSHAccessHandler(c *gin.Context) {
 	session, err := sshManager.CreateSession(
 		username,
 		labName,
-		nodeName,
+		nodeName, // Using the extracted nodeName for session data
 		sshUsername,
 		containerIP,
 		containerPort,
@@ -171,18 +178,33 @@ func RequestSSHAccessHandler(c *gin.Context) {
 }
 
 // @Summary List SSH Sessions
-// @Description Lists all active SSH sessions for the authenticated user
+// @Description Lists active SSH sessions. For regular users, shows only their sessions. Superusers can see all sessions by using the 'all' query parameter.
 // @Tags SSH Access
 // @Security BearerAuth
 // @Produce json
+// @Param all query boolean false "If true and user is superuser, shows sessions for all users (default: false)" example="true"
 // @Success 200 {array} models.SSHSessionInfo "List of active SSH sessions"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
+// @Failure 403 {object} models.ErrorResponse "Forbidden (non-superuser attempting to list all sessions)"
 // @Router /api/v1/ssh/sessions [get]
 func ListSSHSessionsHandler(c *gin.Context) {
 	username := c.GetString("username")
-	isSuperuser := isSuperuser(username)
+	userIsSuperuser := isSuperuser(username)
 
-	sessions := sshManager.ListSessions(username, isSuperuser)
+	// Parse the 'all' query parameter (defaults to false)
+	showAllSessions := c.Query("all") == "true"
+
+	// Only allow superusers to see all sessions
+	if showAllSessions && !userIsSuperuser {
+		log.Warnf("User '%s' attempted to list all SSH sessions without superuser privileges", username)
+		c.JSON(http.StatusForbidden, models.ErrorResponse{Error: "Superuser privileges required to list all SSH sessions"})
+		return
+	}
+
+	// When calling ListSessions:
+	// - For regular users: always false (see only their sessions)
+	// - For superusers: depends on 'all' parameter (true = all sessions, false = only their sessions)
+	sessions := sshManager.ListSessions(username, showAllSessions && userIsSuperuser)
 
 	c.JSON(http.StatusOK, sessions)
 }
@@ -239,7 +261,13 @@ func TerminateSSHSessionHandler(c *gin.Context) {
 }
 
 // Helper function to get API server host, respecting proxies and headers
+// Helper function to get API server host, respecting config, proxies and headers
 func getAPIServerHost(r *http.Request) string {
+	// First check if API_SERVER_HOST is explicitly configured
+	if config.AppConfig.APIServerHost != "" {
+		return config.AppConfig.APIServerHost
+	}
+
 	// Try X-Forwarded-Host header first (common with proxies)
 	forwardedHost := r.Header.Get("X-Forwarded-Host")
 	if forwardedHost != "" {
