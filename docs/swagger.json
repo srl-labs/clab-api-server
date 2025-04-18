@@ -17,7 +17,7 @@
             "name": "Apache 2.0",
             "url": "http://www.apache.org/licenses/LICENSE-2.0.html"
         },
-        "version": "1.0 // This swagger version is separate from the application version"
+        "version": "1.0"
     },
     "paths": {
         "/api/v1/generate": {
@@ -919,6 +919,88 @@
                 }
             }
         },
+        "/api/v1/labs/{labName}/nodes/{nodeName}/ssh": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Creates temporary SSH access to a specific lab node, returning connection details",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "SSH Access"
+                ],
+                "summary": "Request SSH Access to Lab Node",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Lab name",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Node name within the lab (not the full container name)",
+                        "name": "nodeName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "SSH access parameters",
+                        "name": "sshRequest",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/models.SSHAccessRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "SSH connection details",
+                        "schema": {
+                            "$ref": "#/definitions/models.SSHAccessResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request parameters",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden (not owner of the lab)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Lab or node not found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/labs/{labName}/save": {
             "post": {
                 "security": [
@@ -976,6 +1058,104 @@
                     },
                     "500": {
                         "description": "Internal server error or clab execution failed",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/ssh/sessions": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Lists all active SSH sessions for the authenticated user",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "SSH Access"
+                ],
+                "summary": "List SSH Sessions",
+                "responses": {
+                    "200": {
+                        "description": "List of active SSH sessions",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.SSHSessionInfo"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/ssh/sessions/{port}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Terminates a specific SSH session by port",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "SSH Access"
+                ],
+                "summary": "Terminate SSH Session",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "SSH session port to terminate",
+                        "name": "port",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Session terminated successfully",
+                        "schema": {
+                            "$ref": "#/definitions/models.GenericSuccessResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid port parameter",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden (not owner of the session)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Session not found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -2073,6 +2253,73 @@
                 "skipPostDeploy": {
                     "description": "Corresponds to --skip-post-deploy flag",
                     "type": "boolean"
+                }
+            }
+        },
+        "models.SSHAccessRequest": {
+            "type": "object",
+            "properties": {
+                "duration": {
+                    "description": "How long the access should be valid for (e.g., \"1h\", \"30m\")",
+                    "type": "string"
+                },
+                "sshUsername": {
+                    "description": "Optional override for container's SSH user",
+                    "type": "string"
+                }
+            }
+        },
+        "models.SSHAccessResponse": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "description": "Example SSH command",
+                    "type": "string"
+                },
+                "expiration": {
+                    "description": "When this access expires",
+                    "type": "string"
+                },
+                "host": {
+                    "description": "API server's hostname or IP",
+                    "type": "string"
+                },
+                "port": {
+                    "description": "Allocated port on API server",
+                    "type": "integer"
+                },
+                "username": {
+                    "description": "Username to use for SSH",
+                    "type": "string"
+                }
+            }
+        },
+        "models.SSHSessionInfo": {
+            "type": "object",
+            "properties": {
+                "created": {
+                    "description": "When this access was created",
+                    "type": "string"
+                },
+                "expiration": {
+                    "description": "When this access expires",
+                    "type": "string"
+                },
+                "labName": {
+                    "description": "Lab name",
+                    "type": "string"
+                },
+                "nodeName": {
+                    "description": "Node name",
+                    "type": "string"
+                },
+                "port": {
+                    "description": "Allocated port on API server",
+                    "type": "integer"
+                },
+                "username": {
+                    "description": "SSH username",
+                    "type": "string"
                 }
             }
         },

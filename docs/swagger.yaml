@@ -471,6 +471,54 @@ definitions:
         description: Corresponds to --skip-post-deploy flag
         type: boolean
     type: object
+  models.SSHAccessRequest:
+    properties:
+      duration:
+        description: How long the access should be valid for (e.g., "1h", "30m")
+        type: string
+      sshUsername:
+        description: Optional override for container's SSH user
+        type: string
+    type: object
+  models.SSHAccessResponse:
+    properties:
+      command:
+        description: Example SSH command
+        type: string
+      expiration:
+        description: When this access expires
+        type: string
+      host:
+        description: API server's hostname or IP
+        type: string
+      port:
+        description: Allocated port on API server
+        type: integer
+      username:
+        description: Username to use for SSH
+        type: string
+    type: object
+  models.SSHSessionInfo:
+    properties:
+      created:
+        description: When this access was created
+        type: string
+      expiration:
+        description: When this access expires
+        type: string
+      labName:
+        description: Lab name
+        type: string
+      nodeName:
+        description: Node name
+        type: string
+      port:
+        description: Allocated port on API server
+        type: integer
+      username:
+        description: SSH username
+        type: string
+    type: object
   models.SaveConfigResponse:
     properties:
       message:
@@ -567,7 +615,7 @@ info:
     url: http://www.apache.org/licenses/LICENSE-2.0.html
   termsOfService: http://swagger.io/terms/
   title: Containerlab API
-  version: 1.0 // This swagger version is separate from the application version
+  version: "1.0"
 paths:
   /api/v1/generate:
     post:
@@ -1110,6 +1158,60 @@ paths:
       summary: Show Network Emulation
       tags:
       - Tools - Netem
+  /api/v1/labs/{labName}/nodes/{nodeName}/ssh:
+    post:
+      consumes:
+      - application/json
+      description: Creates temporary SSH access to a specific lab node, returning
+        connection details
+      parameters:
+      - description: Lab name
+        in: path
+        name: labName
+        required: true
+        type: string
+      - description: Node name within the lab (not the full container name)
+        in: path
+        name: nodeName
+        required: true
+        type: string
+      - description: SSH access parameters
+        in: body
+        name: sshRequest
+        schema:
+          $ref: '#/definitions/models.SSHAccessRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: SSH connection details
+          schema:
+            $ref: '#/definitions/models.SSHAccessResponse'
+        "400":
+          description: Invalid request parameters
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Forbidden (not owner of the lab)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Lab or node not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Request SSH Access to Lab Node
+      tags:
+      - SSH Access
   /api/v1/labs/{labName}/save:
     post:
       description: Saves the running configuration for nodes in a specific lab. Checks
@@ -1233,6 +1335,68 @@ paths:
       summary: Deploy Lab from Archive
       tags:
       - Labs
+  /api/v1/ssh/sessions:
+    get:
+      description: Lists all active SSH sessions for the authenticated user
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: List of active SSH sessions
+          schema:
+            items:
+              $ref: '#/definitions/models.SSHSessionInfo'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: List SSH Sessions
+      tags:
+      - SSH Access
+  /api/v1/ssh/sessions/{port}:
+    delete:
+      description: Terminates a specific SSH session by port
+      parameters:
+      - description: SSH session port to terminate
+        in: path
+        name: port
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Session terminated successfully
+          schema:
+            $ref: '#/definitions/models.GenericSuccessResponse'
+        "400":
+          description: Invalid port parameter
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Forbidden (not owner of the session)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Session not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Terminate SSH Session
+      tags:
+      - SSH Access
   /api/v1/tools/certs/ca:
     post:
       consumes:
