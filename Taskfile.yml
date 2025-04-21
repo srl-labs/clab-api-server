@@ -23,7 +23,7 @@ tasks:
         fi
       - go install github.com/swaggo/swag/cmd/swag@latest
       - go install gotest.tools/gotestsum@latest
-      - go install github.com/vakenbolt/go-test-report@latest
+      - go install github.com/FloSch62/go-test2html@latest
 
   tidy:
     desc: Run go mod tidy
@@ -49,17 +49,39 @@ tasks:
     cmds:
       - mkdir -p test-reports
 
-  test-report:
+  run-tests:
+    desc: Run tests with gotestsum (may fail)
+    internal: true
+    cmds:
+      - |
+        echo "Running tests..."
+        export GOTEST_LOG_LEVEL=debug
+        set -a && [ -f tests/.env ] && . tests/.env ; set +a
+        gotestsum --format=standard-verbose --jsonfile=test-reports/test-output.json ./... || true
+
+  generate-report:
+    desc: Generate HTML test report
+    internal: true
+    cmds:
+      - |
+        echo "Generating HTML report..."
+        go-test2html --input test-reports/test-output.json --output test-reports/test-report.html
+
+  test:
     desc: Run tests with gotestsum and generate HTML report
     deps: [create-test-dir]
     cmds:
+      - task: run-tests
+      - task: generate-report
+      # Now determine the actual test result by examining the JSON file
       - |
-        echo "Running tests and generating report..."
-        export GOTEST_LOG_LEVEL=info
-        set -a && [ -f tests/.env ] && . tests/.env ; set +a
-        gotestsum --format=standard-verbose --jsonfile=test-reports/test-output.json --junitfile=test-reports/test-output.xml --format-hide-empty-pkg -- ./...
-      - cat test-reports/test-output.json | go-test-report -o test-reports/test-report.html
-      - echo "Test report generated at test-reports/test-report.html"
+        if grep -q '"Action":"fail"' test-reports/test-output.json; then
+          echo "Tests failed! See report at test-reports/test-report.html"
+          exit 1
+        else
+          echo "All tests passed! See report at test-reports/test-report.html"
+          exit 0
+        fi
 
   default:
     desc: Run all key steps (tidy, swag, build)
