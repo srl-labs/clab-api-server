@@ -31,64 +31,74 @@ type ClabInspectOutput map[string][]ClabContainerInfo
 func TestListLabsIncludesCreated(t *testing.T) {
 	labName, userHeaders := setupEphemeralLab(t) // Setup handles creation and cleanup
 
-	t.Logf("[TEST] Verifying lab '%s' is in the list for the owner (%s).", labName, cfg.APIUserUser)
+	logTest(t, "Verifying lab '%s' is in the list for the owner (%s)", labName, cfg.APIUserUser)
 
 	listURL := fmt.Sprintf("%s/api/v1/labs", cfg.APIURL)
 	bodyBytes, statusCode, err := doRequest(t, "GET", listURL, userHeaders, nil, cfg.RequestTimeout)
 	if err != nil {
+		logError(t, "Failed to execute list labs request: %v", err)
 		t.Fatalf("Failed to execute list labs request: %v", err)
 	}
 
 	if statusCode != http.StatusOK {
+		logError(t, "Expected status %d listing labs, got %d", http.StatusOK, statusCode)
 		t.Fatalf("Expected status %d listing labs, got %d. Body: %s", http.StatusOK, statusCode, string(bodyBytes))
 	}
 
 	var labsData ClabInspectOutput
 	if err := json.Unmarshal(bodyBytes, &labsData); err != nil {
+		logError(t, "Failed to unmarshal labs list response: %v", err)
 		t.Fatalf("Failed to unmarshal labs list response: %v. Body: %s", err, string(bodyBytes))
 	}
 
 	if _, exists := labsData[labName]; !exists {
+		logError(t, "Lab '%s' created by setup was not found in /api/v1/labs output for the user", labName)
 		t.Errorf("Lab '%s' created by setup was not found in /api/v1/labs output for the user", labName)
 	} else if len(labsData[labName]) == 0 {
+		logError(t, "Lab '%s' should have container entries in the list", labName)
 		t.Errorf("Lab '%s' should have container entries in the list", labName)
 	} else {
-		t.Logf("  `-> Lab '%s' found in list.", labName)
+		logSuccess(t, "Lab '%s' found in list", labName)
 	}
 }
 
 func TestInspectCreatedLab(t *testing.T) {
 	labName, userHeaders := setupEphemeralLab(t)
 
-	t.Logf("[TEST] Inspecting details for lab '%s'.", labName)
+	logTest(t, "Inspecting details for lab '%s'", labName)
 	inspectURL := fmt.Sprintf("%s/api/v1/labs/%s", cfg.APIURL, labName)
 	bodyBytes, statusCode, err := doRequest(t, "GET", inspectURL, userHeaders, nil, cfg.RequestTimeout)
 	if err != nil {
+		logError(t, "Failed to execute inspect lab request: %v", err)
 		t.Fatalf("Failed to execute inspect lab request: %v", err)
 	}
 
 	if statusCode != http.StatusOK {
+		logError(t, "Expected status %d inspecting lab '%s', got %d", http.StatusOK, labName, statusCode)
 		t.Fatalf("Expected status %d inspecting lab '%s', got %d. Body: %s", http.StatusOK, labName, statusCode, string(bodyBytes))
 	}
 
 	var labDetails []ClabContainerInfo
 	if err := json.Unmarshal(bodyBytes, &labDetails); err != nil {
+		logError(t, "Failed to unmarshal inspect response: %v", err)
 		t.Fatalf("Failed to unmarshal inspect response: %v. Body: %s", err, string(bodyBytes))
 	}
 
 	if len(labDetails) == 0 {
+		logError(t, "Inspect output for lab '%s' should contain container details, but was empty", labName)
 		t.Errorf("Inspect output for lab '%s' should contain container details, but was empty", labName)
 	} else if labDetails[0].LabName != labName {
+		logError(t, "Expected lab name '%s' in inspect details, got '%s'", labName, labDetails[0].LabName)
 		t.Errorf("Expected lab name '%s' in inspect details, got '%s'", labName, labDetails[0].LabName)
 	} else {
-		t.Logf("  `-> Inspection successful for '%s'.", labName)
+		logSuccess(t, "Inspection successful for '%s'", labName)
 	}
 }
 
 func TestCreateDuplicateLabFails(t *testing.T) {
 	labName, userHeaders := setupEphemeralLab(t) // Lab exists now
 
-	t.Logf("[TEST] Attempting to create duplicate lab '%s' (expecting 409).", labName)
+	logTest(t, "Attempting to create duplicate lab '%s' (expecting 409 Conflict)", labName)
 
 	topology := strings.ReplaceAll(cfg.SimpleTopologyContent, "{lab_name}", labName)
 	// Call createLab helper, but check status code directly
@@ -96,20 +106,22 @@ func TestCreateDuplicateLabFails(t *testing.T) {
 
 	if err != nil {
 		// This checks for transport errors, not status codes
+		logError(t, "Failed to execute create duplicate lab request: %v", err)
 		t.Fatalf("Failed to execute create duplicate lab request: %v", err)
 	}
 
 	// Assert the status code
 	if statusCode != http.StatusConflict {
+		logError(t, "Expected status %d (Conflict) when creating duplicate lab, but got %d", http.StatusConflict, statusCode)
 		t.Errorf("Expected status %d (Conflict) when creating duplicate lab, but got %d. Body: %s", http.StatusConflict, statusCode, string(bodyBytes))
 	} else {
-		t.Logf("  `-> Correctly received status %d (Conflict) when creating duplicate lab.", statusCode)
+		logSuccess(t, "Correctly received status %d (Conflict) when creating duplicate lab", statusCode)
 		// Optionally check error message in body
 		var errResp struct {
 			Error string `json:"error"`
 		}
 		if json.Unmarshal(bodyBytes, &errResp) == nil && !strings.Contains(errResp.Error, "already exists") {
-			t.Logf("  `-> Warning: Conflict response body did not contain expected 'already exists' message: %s", errResp.Error)
+			logWarning(t, "Conflict response body did not contain expected 'already exists' message: %s", errResp.Error)
 		}
 	}
 }
@@ -117,24 +129,26 @@ func TestCreateDuplicateLabFails(t *testing.T) {
 func TestReconfigureLabOwnerSucceeds(t *testing.T) {
 	labName, userHeaders := setupEphemeralLab(t) // Lab exists
 
-	t.Logf("[TEST] Attempting to reconfigure owned lab '%s' (expecting 200).", labName)
+	logTest(t, "Attempting to reconfigure owned lab '%s' (expecting 200 OK)", labName)
 
 	topology := strings.ReplaceAll(cfg.SimpleTopologyContent, "{lab_name}", labName)
 	// Call createLab helper with reconfigure=true
 	bodyBytes, statusCode, err := createLab(t, userHeaders, labName, topology, true, cfg.DeployTimeout)
 
 	if err != nil {
+		logError(t, "Failed to execute reconfigure owned lab request: %v", err)
 		t.Fatalf("Failed to execute reconfigure owned lab request: %v", err)
 	}
 
 	// Assert the status code
 	if statusCode != http.StatusOK {
+		logError(t, "Expected status %d (OK) when reconfiguring owned lab, but got %d", http.StatusOK, statusCode)
 		t.Errorf("Expected status %d (OK) when reconfiguring owned lab, but got %d. Body: %s", http.StatusOK, statusCode, string(bodyBytes))
 	} else {
-		t.Logf("  `-> Reconfigure successful.")
+		logSuccess(t, "Reconfigure successful")
 	}
 
-	t.Logf("  `-> Pausing for stabilization...")
+	logDebug(t, "Pausing for stabilization...")
 	time.Sleep(cfg.StabilizePause)
 }
 
@@ -147,27 +161,32 @@ func TestReconfigureLabNonOwnerFails(t *testing.T) {
 	apiUserHeaders := getAuthHeaders(apiUserToken)
 
 	// 3. Attempt to reconfigure the superuser's lab as apiuser
-	t.Logf("[TEST] Attempting non-owner reconfigure on lab '%s' by user '%s' (expecting 403).", suLabName, cfg.APIUserUser)
+	logTest(t, "Attempting non-owner reconfigure on lab '%s' by user '%s' (expecting 403 Forbidden)",
+		suLabName, cfg.APIUserUser)
 
 	topology := strings.ReplaceAll(cfg.SimpleTopologyContent, "{lab_name}", suLabName)
 	// Use the apiuser headers to attempt the reconfigure
 	bodyBytes, statusCode, err := createLab(t, apiUserHeaders, suLabName, topology, true, cfg.DeployTimeout) // reconfigure=true
 
 	if err != nil {
+		logError(t, "Failed to execute non-owner reconfigure request: %v", err)
 		t.Fatalf("Failed to execute non-owner reconfigure request: %v", err)
 	}
 
 	// Assert the status code
 	if statusCode != http.StatusForbidden {
-		t.Errorf("Expected status %d (Forbidden) when non-owner reconfiguring lab, but got %d. Body: %s", http.StatusForbidden, statusCode, string(bodyBytes))
+		logError(t, "Expected status %d (Forbidden) when non-owner reconfiguring lab, but got %d",
+			http.StatusForbidden, statusCode)
+		t.Errorf("Expected status %d (Forbidden) when non-owner reconfiguring lab, but got %d. Body: %s",
+			http.StatusForbidden, statusCode, string(bodyBytes))
 	} else {
-		t.Logf("  `-> Correctly received status %d (Forbidden) when non-owner reconfiguring lab.", statusCode)
+		logSuccess(t, "Correctly received status %d (Forbidden) when non-owner reconfiguring lab", statusCode)
 		// Optionally check error message in body
 		var errResp struct {
 			Error string `json:"error"`
 		}
 		if json.Unmarshal(bodyBytes, &errResp) == nil && !strings.Contains(errResp.Error, "permission denied") {
-			t.Logf("  `-> Warning: Forbidden response body did not contain expected 'permission denied' message: %s", errResp.Error)
+			logWarning(t, "Forbidden response body did not contain expected 'permission denied' message: %s", errResp.Error)
 		}
 	}
 }
@@ -181,24 +200,28 @@ func TestReconfigureLabSuperuserSucceeds(t *testing.T) {
 	superuserHeaders := getAuthHeaders(superuserToken)
 
 	// 3. Attempt to reconfigure the apiuser's lab as superuser
-	t.Logf("[TEST] Attempting superuser reconfigure on lab '%s' owned by '%s' (expecting 200).", apiLabName, cfg.APIUserUser)
+	logTest(t, "Attempting superuser reconfigure on lab '%s' owned by '%s' (expecting 200 OK)",
+		apiLabName, cfg.APIUserUser)
 
 	topology := strings.ReplaceAll(cfg.SimpleTopologyContent, "{lab_name}", apiLabName)
 	// Use the superuser headers to attempt the reconfigure
 	bodyBytes, statusCode, err := createLab(t, superuserHeaders, apiLabName, topology, true, cfg.DeployTimeout) // reconfigure=true
 
 	if err != nil {
+		logError(t, "Failed to execute superuser reconfigure request: %v", err)
 		t.Fatalf("Failed to execute superuser reconfigure request: %v", err)
 	}
 
 	// Assert the status code
 	if statusCode != http.StatusOK {
-		t.Errorf("Expected status %d (OK) when superuser reconfiguring lab, but got %d. Body: %s", http.StatusOK, statusCode, string(bodyBytes))
+		logError(t, "Expected status %d (OK) when superuser reconfiguring lab, but got %d", http.StatusOK, statusCode)
+		t.Errorf("Expected status %d (OK) when superuser reconfiguring lab, but got %d. Body: %s",
+			http.StatusOK, statusCode, string(bodyBytes))
 	} else {
-		t.Logf("  `-> Superuser reconfigure successful.")
+		logSuccess(t, "Superuser reconfigure successful")
 	}
 
-	t.Logf("  `-> Pausing for stabilization...")
+	logDebug(t, "Pausing for stabilization...")
 	time.Sleep(cfg.StabilizePause)
 }
 
@@ -207,23 +230,28 @@ func TestListLabsSuperuser(t *testing.T) {
 	apiLabName, _ := setupEphemeralLab(t)
 	suLabName, superuserHeaders := setupSuperuserLab(t) // Need headers for the request
 
-	t.Logf("[TEST] Verifying superuser sees labs '%s' (owned by %s) and '%s' (owned by %s).",
+	logTest(t, "Verifying superuser sees labs '%s' (owned by %s) and '%s' (owned by %s)",
 		apiLabName, cfg.APIUserUser, suLabName, cfg.SuperuserUser)
 
 	listURL := fmt.Sprintf("%s/api/v1/labs", cfg.APIURL)
 	// Use superuser headers for the request
 	bodyBytes, statusCode, err := doRequest(t, "GET", listURL, superuserHeaders, nil, cfg.RequestTimeout)
 	if err != nil {
+		logError(t, "Failed to execute list labs request as superuser: %v", err)
 		t.Fatalf("Failed to execute list labs request as superuser: %v", err)
 	}
 
 	if statusCode != http.StatusOK {
-		t.Fatalf("Expected status %d listing labs as superuser, got %d. Body: %s", http.StatusOK, statusCode, string(bodyBytes))
+		logError(t, "Expected status %d listing labs as superuser, got %d", http.StatusOK, statusCode)
+		t.Fatalf("Expected status %d listing labs as superuser, got %d. Body: %s",
+			http.StatusOK, statusCode, string(bodyBytes))
 	}
 
 	var labsData ClabInspectOutput
 	if err := json.Unmarshal(bodyBytes, &labsData); err != nil {
-		t.Fatalf("Failed to unmarshal labs list response (superuser): %v. Body: %s", err, string(bodyBytes))
+		logError(t, "Failed to unmarshal labs list response (superuser): %v", err)
+		t.Fatalf("Failed to unmarshal labs list response (superuser): %v. Body: %s",
+			err, string(bodyBytes))
 	}
 
 	foundAPILab := false
@@ -237,14 +265,16 @@ func TestListLabsSuperuser(t *testing.T) {
 	}
 
 	if !foundAPILab {
+		logError(t, "Superuser should see lab '%s' created by apiuser, but it was not found", apiLabName)
 		t.Errorf("Superuser should see lab '%s' created by apiuser, but it was not found", apiLabName)
 	}
 	if !foundSULab {
+		logError(t, "Superuser should see lab '%s' created by superuser, but it was not found", suLabName)
 		t.Errorf("Superuser should see lab '%s' created by superuser, but it was not found", suLabName)
 	}
 
 	if foundAPILab && foundSULab {
-		t.Log("  `-> Superuser list check successful: Both labs found.")
+		logSuccess(t, "Superuser list check successful: Both labs found")
 	}
 }
 
@@ -253,23 +283,28 @@ func TestListLabsAPIUserFilters(t *testing.T) {
 	apiLabName, apiUserHeaders := setupEphemeralLab(t) // Need headers for the request
 	suLabName, _ := setupSuperuserLab(t)
 
-	t.Logf("[TEST] Verifying apiuser '%s' sees '%s' but NOT '%s'.",
+	logTest(t, "Verifying apiuser '%s' sees '%s' but NOT '%s'",
 		cfg.APIUserUser, apiLabName, suLabName)
 
 	listURL := fmt.Sprintf("%s/api/v1/labs", cfg.APIURL)
 	// Use apiuser headers for the request
 	bodyBytes, statusCode, err := doRequest(t, "GET", listURL, apiUserHeaders, nil, cfg.RequestTimeout)
 	if err != nil {
+		logError(t, "Failed to execute list labs request as apiuser: %v", err)
 		t.Fatalf("Failed to execute list labs request as apiuser: %v", err)
 	}
 
 	if statusCode != http.StatusOK {
-		t.Fatalf("Expected status %d listing labs as apiuser, got %d. Body: %s", http.StatusOK, statusCode, string(bodyBytes))
+		logError(t, "Expected status %d listing labs as apiuser, got %d", http.StatusOK, statusCode)
+		t.Fatalf("Expected status %d listing labs as apiuser, got %d. Body: %s",
+			http.StatusOK, statusCode, string(bodyBytes))
 	}
 
 	var labsData ClabInspectOutput
 	if err := json.Unmarshal(bodyBytes, &labsData); err != nil {
-		t.Fatalf("Failed to unmarshal labs list response (apiuser): %v. Body: %s", err, string(bodyBytes))
+		logError(t, "Failed to unmarshal labs list response (apiuser): %v", err)
+		t.Fatalf("Failed to unmarshal labs list response (apiuser): %v. Body: %s",
+			err, string(bodyBytes))
 	}
 
 	foundAPILab := false
@@ -283,13 +318,15 @@ func TestListLabsAPIUserFilters(t *testing.T) {
 	}
 
 	if !foundAPILab {
+		logError(t, "Apiuser should see their own lab '%s', but it was not found", apiLabName)
 		t.Errorf("Apiuser should see their own lab '%s', but it was not found", apiLabName)
 	}
 	if foundSULab {
+		logError(t, "Apiuser should NOT see lab '%s' owned by superuser, but it was found", suLabName)
 		t.Errorf("Apiuser should NOT see lab '%s' owned by superuser, but it was found", suLabName)
 	}
 
 	if foundAPILab && !foundSULab {
-		t.Log("  `-> Apiuser list filtering check successful.")
+		logSuccess(t, "Apiuser list filtering check successful")
 	}
 }

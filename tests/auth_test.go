@@ -9,34 +9,38 @@ import (
 )
 
 func TestLoginSuperuser(t *testing.T) {
-	t.Logf("[TEST] Attempting valid login for superuser: %s", cfg.SuperuserUser)
+	logTest(t, "Attempting valid login for superuser: %s", cfg.SuperuserUser)
 	token := login(t, cfg.SuperuserUser, cfg.SuperuserPass) // login helper handles assertions and logging
 
 	if token == "" {
 		// login helper would have failed if status != 200, this is extra check
+		logError(t, "Expected a non-empty token for superuser login, but got empty")
 		t.Error("Expected a non-empty token for superuser login, but got empty")
 	}
 	if len(token) < 10 {
+		logError(t, "Token seems too short: length %d", len(token))
 		t.Errorf("Token seems too short: length %d", len(token))
 	}
-	t.Log("  `-> Superuser login successful, token received.")
+	logSuccess(t, "Superuser login successful, token received")
 }
 
 func TestLoginAPIUser(t *testing.T) {
-	t.Logf("[TEST] Attempting valid login for apiuser: %s", cfg.APIUserUser)
+	logTest(t, "Attempting valid login for apiuser: %s", cfg.APIUserUser)
 	token := login(t, cfg.APIUserUser, cfg.APIUserPass) // login helper handles assertions and logging
 
 	if token == "" {
+		logError(t, "Expected a non-empty token for apiuser login, but got empty")
 		t.Error("Expected a non-empty token for apiuser login, but got empty")
 	}
 	if len(token) < 10 {
+		logError(t, "Token seems too short: length %d", len(token))
 		t.Errorf("Token seems too short: length %d", len(token))
 	}
-	t.Log("  `-> Apiuser login successful, token received.")
+	logSuccess(t, "Apiuser login successful, token received")
 }
 
 func TestInvalidLogin(t *testing.T) {
-	t.Log("[TEST] Attempting invalid login (wrong user/pass).")
+	logTest(t, "Attempting invalid login (wrong user/pass - expecting 401 Unauthorized)")
 	loginURL := cfg.APIURL + "/login"
 	payload := map[string]string{
 		"username": "nonexistent_user_!@#$",
@@ -47,12 +51,14 @@ func TestInvalidLogin(t *testing.T) {
 		bytes.NewBuffer(mustMarshal(t, payload)), cfg.RequestTimeout)
 
 	if err != nil {
+		logError(t, "Request execution failed: %v", err)
 		t.Fatalf("Request execution failed: %v", err)
 	}
 
-	t.Logf("  `-> Received status %d. Asserting it's 401.", statusCode)
+	logInfo(t, "Received status %d for invalid login", statusCode)
 	if statusCode != http.StatusUnauthorized {
 		// Use t.Errorf for non-fatal assertion failure, include body
+		logError(t, "Expected status %d, but got %d", http.StatusUnauthorized, statusCode)
 		t.Errorf("Expected status %d, but got %d. Body: %s", http.StatusUnauthorized, statusCode, string(bodyBytes))
 	}
 
@@ -61,15 +67,19 @@ func TestInvalidLogin(t *testing.T) {
 		Error string `json:"error"`
 	}
 	if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
-		t.Logf("Warning: Could not unmarshal error response: %v. Body: %s", err, string(bodyBytes))
+		logWarning(t, "Could not unmarshal error response: %v", err)
 	} else if errResp.Error == "" {
+		logError(t, "Expected 'error' field in JSON response for invalid login")
 		t.Error("Expected 'error' field in JSON response for invalid login")
 	}
-	t.Log("  `-> Invalid login test completed.") // More neutral completion message
+
+	if statusCode == http.StatusUnauthorized && errResp.Error != "" {
+		logSuccess(t, "Invalid login correctly rejected with 401 Unauthorized")
+	}
 }
 
 func TestUnauthorizedUserLogin(t *testing.T) {
-	t.Logf("[TEST] Attempting login for unauthorized user: %s (expecting 401).", cfg.UnauthUser)
+	logTest(t, "Attempting login for unauthorized user: %s (expecting 401 Unauthorized)", cfg.UnauthUser)
 	loginURL := cfg.APIURL + "/login"
 	payload := map[string]string{
 		"username": cfg.UnauthUser,
@@ -80,23 +90,30 @@ func TestUnauthorizedUserLogin(t *testing.T) {
 		bytes.NewBuffer(mustMarshal(t, payload)), cfg.RequestTimeout)
 
 	if err != nil {
+		logError(t, "Request execution failed: %v", err)
 		t.Fatalf("Request execution failed: %v", err)
 	}
 
-	t.Logf("  `-> Received status %d. Asserting it's 401.", statusCode)
+	logInfo(t, "Received status %d for unauthorized user login", statusCode)
 	if statusCode != http.StatusUnauthorized {
-		t.Errorf("Expected status %d for user not in allowed groups, got %d. Body: %s", http.StatusUnauthorized, statusCode, string(bodyBytes))
+		logError(t, "Expected status %d for user not in allowed groups, got %d", http.StatusUnauthorized, statusCode)
+		t.Errorf("Expected status %d for user not in allowed groups, got %d. Body: %s",
+			http.StatusUnauthorized, statusCode, string(bodyBytes))
 	}
 
 	var errResp struct {
 		Error string `json:"error"`
 	}
 	if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
-		t.Logf("Warning: Could not unmarshal error response: %v. Body: %s", err, string(bodyBytes))
+		logWarning(t, "Could not unmarshal error response: %v", err)
 	} else if errResp.Error == "" {
+		logError(t, "Expected 'error' field in JSON response for unauthorized login")
 		t.Error("Expected 'error' field in JSON response for unauthorized login")
 	}
-	t.Log("  `-> Unauthorized user login test completed.")
+
+	if statusCode == http.StatusUnauthorized && errResp.Error != "" {
+		logSuccess(t, "Unauthorized user login correctly rejected with 401 Unauthorized")
+	}
 }
 
 // mustMarshal is a helper to simplify JSON marshaling in tests.
@@ -104,6 +121,7 @@ func mustMarshal(t *testing.T, v interface{}) []byte {
 	t.Helper()
 	data, err := json.Marshal(v)
 	if err != nil {
+		logError(t, "Failed to marshal JSON: %v", err)
 		t.Fatalf("Failed to marshal JSON: %v", err)
 	}
 	return data

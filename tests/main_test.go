@@ -36,8 +36,16 @@ type TestConfig struct {
 	CleanupPause          time.Duration
 	LabNamePrefix         string
 	SimpleTopologyContent string
+	LogLevel              string // Added log level configuration
 	rng                   *rand.Rand
 }
+
+// LogLevel constants
+const (
+	LogLevelDebug = "debug" // Full HTTP request/response details
+	LogLevelInfo  = "info"  // Standard test information
+	LogLevelError = "error" // Only errors
+)
 
 var cfg TestConfig
 
@@ -69,6 +77,7 @@ func TestMain(m *testing.M) {
 		CleanupPause:          getEnvDuration("GOTEST_CLEANUP_PAUSE", 3*time.Second),
 		LabNamePrefix:         getEnv("GOTEST_LAB_NAME_PREFIX", "gotest"),
 		SimpleTopologyContent: getEnvOrDie("GOTEST_SIMPLE_TOPOLOGY_CONTENT"),
+		LogLevel:              getEnv("GOTEST_LOG_LEVEL", LogLevelInfo),
 		rng:                   rng,
 	}
 
@@ -123,6 +132,56 @@ func randomSuffix(length int) string {
 	return string(b)
 }
 
+// --- Improved Logging Functions ---
+
+func logDebug(t *testing.T, format string, args ...interface{}) {
+	if cfg.LogLevel == LogLevelDebug {
+		t.Logf("🔍 DEBUG: "+format, args...)
+	}
+}
+
+func logInfo(t *testing.T, format string, args ...interface{}) {
+	if cfg.LogLevel == LogLevelDebug || cfg.LogLevel == LogLevelInfo {
+		t.Logf("ℹ️ "+format, args...)
+	}
+}
+
+func logSuccess(t *testing.T, format string, args ...interface{}) {
+	if cfg.LogLevel == LogLevelDebug || cfg.LogLevel == LogLevelInfo {
+		t.Logf("✅ "+format, args...)
+	}
+}
+
+func logWarning(t *testing.T, format string, args ...interface{}) {
+	if cfg.LogLevel == LogLevelDebug || cfg.LogLevel == LogLevelInfo || cfg.LogLevel == LogLevelError {
+		t.Logf("⚠️ "+format, args...)
+	}
+}
+
+func logError(t *testing.T, format string, args ...interface{}) {
+	if cfg.LogLevel == LogLevelDebug || cfg.LogLevel == LogLevelInfo || cfg.LogLevel == LogLevelError {
+		t.Logf("❌ ERROR: "+format, args...)
+	}
+}
+
+func logSetup(t *testing.T, format string, args ...interface{}) {
+	if cfg.LogLevel == LogLevelDebug || cfg.LogLevel == LogLevelInfo {
+		t.Logf("🔧 SETUP: "+format, args...)
+	}
+}
+
+func logTeardown(t *testing.T, format string, args ...interface{}) {
+	if cfg.LogLevel == LogLevelDebug || cfg.LogLevel == LogLevelInfo {
+		t.Logf("🧹 TEARDOWN: "+format, args...)
+	}
+}
+
+func logTest(t *testing.T, format string, args ...interface{}) {
+	if cfg.LogLevel == LogLevelDebug || cfg.LogLevel == LogLevelInfo {
+		t.Logf("🧪 TEST: "+format, args...)
+	}
+}
+
 func login(t *testing.T, username, password string) string {
 	t.Helper()
 	loginURL := fmt.Sprintf("%s/login", cfg.APIURL)
@@ -135,15 +194,19 @@ func login(t *testing.T, username, password string) string {
 		t.Fatalf("Failed to marshal login payload: %v", err)
 	}
 
+	logDebug(t, "Logging in as '%s'", username)
 	bodyBytes, statusCode, err := doRequest(t, "POST", loginURL, getAuthHeaders(""), bytes.NewBuffer(jsonPayload), cfg.RequestTimeout)
 	if err != nil {
+		logError(t, "Login request execution failed: %v", err)
 		t.Fatalf("Login request execution failed: %v", err)
 	}
 
 	if statusCode != http.StatusOK {
 		if statusCode == http.StatusUnauthorized && (strings.Contains(t.Name(), "InvalidLogin") || strings.Contains(t.Name(), "UnauthorizedUser")) {
+			logInfo(t, "Expected unauthorized status received (401) for '%s'", username)
 			return ""
 		}
+		logError(t, "Login failed for user '%s'. Status: %d", username, statusCode)
 		t.Fatalf("Login failed for user '%s'. Status: %d, Body: %s", username, statusCode, string(bodyBytes))
 	}
 
@@ -151,13 +214,16 @@ func login(t *testing.T, username, password string) string {
 		Token string `json:"token"`
 	}
 	if err := json.Unmarshal(bodyBytes, &loginResp); err != nil {
+		logError(t, "Failed to unmarshal login response: %v", err)
 		t.Fatalf("Failed to unmarshal login response: %v. Body: %s", err, string(bodyBytes))
 	}
 
 	if loginResp.Token == "" {
+		logError(t, "Login successful but token is empty for user '%s'", username)
 		t.Fatalf("Login successful but token is empty for user '%s'", username)
 	}
 
+	logSuccess(t, "User '%s' logged in successfully", username)
 	return loginResp.Token
 }
 
@@ -194,17 +260,25 @@ func createLab(t *testing.T, headers http.Header, labName, topologyContent strin
 	}
 	reqURL.RawQuery = query.Encode()
 
-	t.Logf("Attempting to create/reconfigure lab '%s'...", labName)
+	logInfo(t, "Creating%s lab '%s'...",
+		func() string {
+			if reconfigure {
+				return "/reconfiguring"
+			}
+			return ""
+		}(), labName)
+
 	bodyBytes, statusCode, err := doRequest(t, "POST", reqURL.String(), headers, bytes.NewBuffer(jsonPayload), timeout)
 
 	if err != nil {
+		logError(t, "Failed to execute lab creation request: %v", err)
 		return bodyBytes, statusCode, fmt.Errorf("deploy request execution failed: %w", err)
 	}
 
 	if statusCode == http.StatusOK {
-		t.Logf("Lab '%s' create/reconfigure request returned Status OK (200).", labName)
+		logSuccess(t, "Lab '%s' create/reconfigure returned Status OK (200)", labName)
 	} else {
-		t.Logf("Lab '%s' create/reconfigure request returned Status %d.", labName, statusCode)
+		logInfo(t, "Lab '%s' create/reconfigure returned Status %d", labName, statusCode)
 	}
 
 	return bodyBytes, statusCode, nil
@@ -220,20 +294,20 @@ func destroyLab(t *testing.T, headers http.Header, labName string, cleanup bool,
 	}
 	reqURL.RawQuery = query.Encode()
 
-	t.Logf("Attempting to destroy lab '%s' (cleanup=%t)...", labName, cleanup)
+	logInfo(t, "Destroying lab '%s' (cleanup=%t)...", labName, cleanup)
 	bodyBytes, statusCode, err := doRequest(t, "DELETE", reqURL.String(), headers, nil, timeout)
 
 	if err != nil {
-		t.Logf("Warning: Failed to execute destroy request for lab '%s': %v", labName, err)
+		logWarning(t, "Failed to execute destroy request for lab '%s': %v", labName, err)
 		return bodyBytes, statusCode, fmt.Errorf("destroy request execution failed: %w", err)
 	}
 
 	if statusCode == http.StatusNotFound {
-		t.Logf("Lab '%s' not found during cleanup (Status 404).", labName)
+		logWarning(t, "Lab '%s' not found during cleanup (Status 404)", labName)
 	} else if statusCode != http.StatusOK {
-		t.Logf("Warning: Non-OK status during cleanup for lab '%s'. Status: %d", labName, statusCode)
+		logWarning(t, "Non-OK status during cleanup for lab '%s'. Status: %d", labName, statusCode)
 	} else {
-		t.Logf("Lab '%s' destroy request returned Status OK (200).", labName)
+		logSuccess(t, "Lab '%s' destroyed successfully", labName)
 	}
 
 	return bodyBytes, statusCode, nil
@@ -249,29 +323,31 @@ func setupEphemeralLab(t *testing.T) (labName string, userHeaders http.Header) {
 	labName = fmt.Sprintf("%s-eph-%s", cfg.LabNamePrefix, randomSuffix(5))
 	topology := strings.ReplaceAll(cfg.SimpleTopologyContent, "{lab_name}", labName)
 
-	t.Logf("---> [SETUP] Creating ephemeral lab: %s (as %s)", labName, cfg.APIUserUser)
+	logSetup(t, "Creating ephemeral lab: %s (as %s)", labName, cfg.APIUserUser)
 	bodyBytes, statusCode, err := createLab(t, userHeaders, labName, topology, false, cfg.DeployTimeout)
 	if err != nil {
+		logError(t, "SETUP Failed: Could not execute create ephemeral lab request: %v", err)
 		t.Fatalf("SETUP Failed: Could not execute create ephemeral lab request for '%s': %v", labName, err)
 	}
 	if statusCode != http.StatusOK {
+		logError(t, "SETUP Failed: Could not create ephemeral lab. Status: %d", statusCode)
 		t.Fatalf("SETUP Failed: Could not create ephemeral lab '%s'. Status: %d, Body: %s", labName, statusCode, string(bodyBytes))
 	}
-	t.Logf("  `-> [SETUP] Lab '%s' created successfully.", labName)
+	logSuccess(t, "Lab '%s' created successfully", labName)
 
 	t.Cleanup(func() {
-		t.Logf("<--- [TEARDOWN] Cleaning up ephemeral lab: %s (as %s)", labName, cfg.SuperuserUser)
+		logTeardown(t, "Cleaning up ephemeral lab: %s (as %s)", labName, cfg.SuperuserUser)
 		_, _, err := destroyLab(t, superuserHeaders, labName, true, cfg.CleanupTimeout)
 		if err != nil {
-			t.Logf("  `-> [TEARDOWN] Note: Error occurred during destroy execution for lab '%s'.", labName)
+			logWarning(t, "Error occurred during destroy execution for lab '%s'", labName)
 		} else {
-			t.Logf("  `-> [TEARDOWN] Lab '%s' destroy request completed.", labName)
+			logSuccess(t, "Lab '%s' cleanup completed", labName)
 		}
-		t.Logf("  `-> [TEARDOWN] Pausing for %v after cleanup...", cfg.CleanupPause)
+		logDebug(t, "Pausing for %v after cleanup...", cfg.CleanupPause)
 		time.Sleep(cfg.CleanupPause)
 	})
 
-	t.Logf("  `-> [SETUP] Pausing for %v after lab creation...", cfg.StabilizePause)
+	logDebug(t, "Pausing for %v after lab creation...", cfg.StabilizePause)
 	time.Sleep(cfg.StabilizePause)
 
 	return labName, userHeaders
@@ -285,29 +361,31 @@ func setupSuperuserLab(t *testing.T) (labName string, superuserHeaders http.Head
 	labName = fmt.Sprintf("%s-su-eph-%s", cfg.LabNamePrefix, randomSuffix(5))
 	topology := strings.ReplaceAll(cfg.SimpleTopologyContent, "{lab_name}", labName)
 
-	t.Logf("---> [SETUP-SU] Creating superuser ephemeral lab: %s", labName)
+	logSetup(t, "Creating superuser ephemeral lab: %s", labName)
 	bodyBytes, statusCode, err := createLab(t, superuserHeaders, labName, topology, false, cfg.DeployTimeout)
 	if err != nil {
+		logError(t, "SETUP-SU Failed: Could not execute create superuser lab request: %v", err)
 		t.Fatalf("SETUP-SU Failed: Could not execute create superuser lab request for '%s': %v", labName, err)
 	}
 	if statusCode != http.StatusOK {
+		logError(t, "SETUP-SU Failed: Could not create superuser lab. Status: %d", statusCode)
 		t.Fatalf("SETUP-SU Failed: Could not create superuser lab '%s'. Status: %d, Body: %s", labName, statusCode, string(bodyBytes))
 	}
-	t.Logf("  `-> [SETUP-SU] Lab '%s' created successfully.", labName)
+	logSuccess(t, "Superuser lab '%s' created successfully", labName)
 
 	t.Cleanup(func() {
-		t.Logf("<--- [TEARDOWN-SU] Cleaning up superuser ephemeral lab: %s", labName)
+		logTeardown(t, "Cleaning up superuser ephemeral lab: %s", labName)
 		_, _, err := destroyLab(t, superuserHeaders, labName, true, cfg.CleanupTimeout)
 		if err != nil {
-			t.Logf("  `-> [TEARDOWN-SU] Note: Error occurred during destroy execution for lab '%s'.", labName)
+			logWarning(t, "Error occurred during destroy execution for lab '%s'", labName)
 		} else {
-			t.Logf("  `-> [TEARDOWN-SU] Lab '%s' destroy request completed.", labName)
+			logSuccess(t, "Superuser lab '%s' cleanup completed", labName)
 		}
-		t.Logf("  `-> [TEARDOWN-SU] Pausing for %v after cleanup...", cfg.CleanupPause)
+		logDebug(t, "Pausing for %v after cleanup...", cfg.CleanupPause)
 		time.Sleep(cfg.CleanupPause)
 	})
 
-	t.Logf("  `-> [SETUP-SU] Pausing for %v after lab creation...", cfg.StabilizePause)
+	logDebug(t, "Pausing for %v after lab creation...", cfg.StabilizePause)
 	time.Sleep(cfg.StabilizePause)
 
 	return labName, superuserHeaders
@@ -319,23 +397,32 @@ var authRegex = regexp.MustCompile(`(?i)(Authorization: Bearer) \S+`)
 
 func logHeaders(t *testing.T, prefix string, headers http.Header) {
 	t.Helper()
-	if headers == nil || len(headers) == 0 {
-		t.Logf("%s Headers: (none)", prefix)
+	if cfg.LogLevel != LogLevelDebug {
 		return
 	}
-	t.Logf("%s Headers:", prefix)
+
+	if headers == nil || len(headers) == 0 {
+		logDebug(t, "%s Headers: (none)", prefix)
+		return
+	}
+
+	logDebug(t, "%s Headers:", prefix)
 	for key, values := range headers {
 		headerLine := fmt.Sprintf("%s: %s", key, strings.Join(values, ", "))
 		maskedLine := authRegex.ReplaceAllString(headerLine, "$1 ********")
-		t.Logf("  %s", maskedLine)
+		logDebug(t, "  %s", maskedLine)
 	}
 }
 
 // logBody logs the body, masking password if JSON and truncating if necessary.
 func logBody(t *testing.T, prefix string, bodyBytes []byte) {
 	t.Helper()
+	if cfg.LogLevel != LogLevelDebug {
+		return
+	}
+
 	if len(bodyBytes) == 0 {
-		t.Logf("%s Body: (empty)", prefix)
+		logDebug(t, "%s Body: (empty)", prefix)
 		return
 	}
 
@@ -344,7 +431,7 @@ func logBody(t *testing.T, prefix string, bodyBytes []byte) {
 	// Attempt to mask password if content looks like JSON
 	if bytes.HasPrefix(bodyBytes, []byte("{")) && bytes.HasSuffix(bodyBytes, []byte("}")) { // Basic JSON check
 		var data map[string]interface{}
-		// Use a temporary reader for unmarshaling to avoid consuming original bytes if needed elsewhere (though not in current usage)
+		// Use a temporary reader for unmarshaling to avoid consuming original bytes if needed elsewhere
 		tempReader := bytes.NewReader(bodyBytes)
 		decoder := json.NewDecoder(tempReader)
 		if err := decoder.Decode(&data); err == nil {
@@ -362,7 +449,7 @@ func logBody(t *testing.T, prefix string, bodyBytes []byte) {
 			if marshalErr == nil {
 				maskedBody = maskedBytes // Use the masked version
 			} else {
-				t.Logf("%s Warning: Failed to re-marshal body after masking: %v", prefix, marshalErr)
+				logWarning(t, "%s Failed to re-marshal body after masking: %v", prefix, marshalErr)
 				// Fall back to logging original (truncated) body below
 				maskedBody = bodyBytes
 			}
@@ -375,9 +462,9 @@ func logBody(t *testing.T, prefix string, bodyBytes []byte) {
 	// Log the (potentially masked) body, truncated if necessary
 	const maxLogLen = 1024
 	if len(maskedBody) <= maxLogLen {
-		t.Logf("%s Body:\n---\n%s\n---", prefix, string(maskedBody))
+		logDebug(t, "%s Body:\n---\n%s\n---", prefix, string(maskedBody))
 	} else {
-		t.Logf("%s Body: (truncated to %d bytes)\n---\n%s\n...[truncated]...", prefix, maxLogLen, string(maskedBody[:maxLogLen]))
+		logDebug(t, "%s Body: (truncated to %d bytes)\n---\n%s\n...[truncated]...", prefix, maxLogLen, string(maskedBody[:maxLogLen]))
 	}
 }
 
@@ -386,8 +473,8 @@ func doRequest(t *testing.T, method, urlStr string, headers http.Header, reqBody
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	t.Logf(">>> Request Start: %s %s", method, urlStr)
-	logHeaders(t, ">>> Request", headers)
+	logDebug(t, "Request Start: %s %s", method, urlStr)
+	logHeaders(t, "Request", headers)
 
 	var reqBodyBytes []byte
 	var actualReqBodyReader io.Reader
@@ -395,21 +482,21 @@ func doRequest(t *testing.T, method, urlStr string, headers http.Header, reqBody
 		var err error
 		reqBodyBytes, err = io.ReadAll(reqBodyReader)
 		if err != nil {
-			t.Logf(">>> Warning: Failed to read request body for logging: %v", err)
+			logWarning(t, "Failed to read request body for logging: %v", err)
 			actualReqBodyReader = nil
 		} else {
 			actualReqBodyReader = bytes.NewReader(reqBodyBytes)
 		}
 		// Pass the original bytes read for logging (masking happens inside logBody)
-		logBody(t, ">>> Request", reqBodyBytes)
+		logBody(t, "Request", reqBodyBytes)
 	} else {
-		logBody(t, ">>> Request", nil)
+		logBody(t, "Request", nil)
 		actualReqBodyReader = nil
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, urlStr, actualReqBodyReader)
 	if err != nil {
-		t.Logf(">>> Request Error: Failed to create request object: %v", err)
+		logError(t, "Failed to create request object: %v", err)
 		return nil, 0, fmt.Errorf("failed to create request (%s %s): %w", method, urlStr, err)
 	}
 	req.Header = headers
@@ -419,21 +506,22 @@ func doRequest(t *testing.T, method, urlStr string, headers http.Header, reqBody
 	duration := time.Since(startTime)
 
 	if err != nil {
-		t.Logf("<<< Response Error: Failed to execute request (%s %s) after %v: %v", method, urlStr, duration, err)
+		logError(t, "Failed to execute request (%s %s) after %v: %v", method, urlStr, duration, err)
 		return nil, 0, fmt.Errorf("failed to execute request (%s %s): %w", method, urlStr, err)
 	}
 	defer resp.Body.Close()
 
-	t.Logf("<<< Response Received: Status %d (%s) from %s %s in %v", resp.StatusCode, http.StatusText(resp.StatusCode), method, urlStr, duration)
-	logHeaders(t, "<<< Response", resp.Header)
+	logDebug(t, "Response Received: Status %d (%s) from %s %s in %v",
+		resp.StatusCode, http.StatusText(resp.StatusCode), method, urlStr, duration)
+	logHeaders(t, "Response", resp.Header)
 
 	respBodyBytes, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
-		t.Logf("<<< Warning: Failed to read response body (%s %s): %v", method, urlStr, readErr)
+		logWarning(t, "Failed to read response body (%s %s): %v", method, urlStr, readErr)
 	}
 	// Pass response body bytes for logging (masking isn't typically needed for responses)
-	logBody(t, "<<< Response", respBodyBytes)
-	t.Logf("<<< Response End: %s %s", method, urlStr)
+	logBody(t, "Response", respBodyBytes)
+	logDebug(t, "Response End: %s %s", method, urlStr)
 
 	return respBodyBytes, resp.StatusCode, readErr
 }

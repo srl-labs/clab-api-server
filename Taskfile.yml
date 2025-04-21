@@ -53,9 +53,11 @@ tasks:
     desc: Run tests with gotestsum and generate HTML report
     deps: [create-test-dir]
     cmds:
-      # Load .env specifically for tests if needed (adjust path if necessary)
-      # Use 'set -a' to export variables for the subsequent commands in the same shell instance
-      - set -a && [ -f tests/.env ] && . tests/.env ; set +a ; gotestsum --format=standard-verbose --jsonfile=test-reports/test-output.json -- ./...
+      - |
+        echo "Running tests and generating report..."
+        export GOTEST_LOG_LEVEL=info
+        set -a && [ -f tests/.env ] && . tests/.env ; set +a
+        gotestsum --format=standard-verbose --jsonfile=test-reports/test-output.json -- ./...
       - cat test-reports/test-output.json | go-test-report -o test-reports/test-report.html
       - echo "Test report generated at test-reports/test-report.html"
 
