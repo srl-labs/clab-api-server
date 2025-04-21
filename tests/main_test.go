@@ -238,10 +238,6 @@ func getAuthHeaders(token string) http.Header {
 
 // --- Lab Lifecycle Helpers ---
 
-type labInfo struct {
-	Name string
-}
-
 func createLab(t *testing.T, headers http.Header, labName, topologyContent string, reconfigure bool, timeout time.Duration) ([]byte, int, error) {
 	t.Helper()
 	deployURL := fmt.Sprintf("%s/api/v1/labs", cfg.APIURL)
@@ -401,7 +397,7 @@ func logHeaders(t *testing.T, prefix string, headers http.Header) {
 		return
 	}
 
-	if headers == nil || len(headers) == 0 {
+	if len(headers) == 0 {
 		logDebug(t, "%s Headers: (none)", prefix)
 		return
 	}

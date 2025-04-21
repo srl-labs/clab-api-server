@@ -57,7 +57,7 @@ tasks:
         echo "Running tests and generating report..."
         export GOTEST_LOG_LEVEL=info
         set -a && [ -f tests/.env ] && . tests/.env ; set +a
-        gotestsum --format=standard-verbose --jsonfile=test-reports/test-output.json -- ./...
+        gotestsum --format=standard-verbose --jsonfile=test-reports/test-output.json --junitfile=test-reports/test-output.xml --format-hide-empty-pkg -- ./...
       - cat test-reports/test-output.json | go-test-report -o test-reports/test-report.html
       - echo "Test report generated at test-reports/test-report.html"
 

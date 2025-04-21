@@ -1,12 +1,10 @@
-// tests_go/labs_test.go
+// tests_go/lab_core_test.go
 package tests_go
 
 import (
-	// Import bytes
 	"encoding/json"
 	"fmt"
 	"net/http"
-
 	"strings"
 	"testing"
 	"time"
@@ -328,5 +326,34 @@ func TestListLabsAPIUserFilters(t *testing.T) {
 
 	if foundAPILab && !foundSULab {
 		logSuccess(t, "Apiuser list filtering check successful")
+	}
+}
+
+func TestNonOwnerAccessLab(t *testing.T) {
+	// Create a lab as the superuser
+	suLabName, _ := setupSuperuserLab(t) // Cleanup handled by setup
+
+	// Try to access it as the regular apiuser
+	apiUserToken := login(t, cfg.APIUserUser, cfg.APIUserPass)
+	apiUserHeaders := getAuthHeaders(apiUserToken)
+
+	logTest(t, "Attempting to access lab '%s' as non-owner user '%s' (expecting 404)",
+		suLabName, cfg.APIUserUser)
+
+	inspectURL := fmt.Sprintf("%s/api/v1/labs/%s", cfg.APIURL, suLabName)
+	bodyBytes, statusCode, err := doRequest(t, "GET", inspectURL, apiUserHeaders, nil, cfg.RequestTimeout)
+	if err != nil {
+		logError(t, "Failed to execute non-owner inspect request: %v", err)
+		t.Fatalf("Failed to execute non-owner inspect request: %v", err)
+	}
+
+	// Non-owners should get 404 Not Found for security (hide existence)
+	if statusCode != http.StatusNotFound {
+		logError(t, "Expected status %d (Not Found) when non-owner inspects lab, but got %d",
+			http.StatusNotFound, statusCode)
+		t.Errorf("Expected status %d (Not Found) when non-owner inspects lab, but got %d. Body: %s",
+			http.StatusNotFound, statusCode, string(bodyBytes))
+	} else {
+		logSuccess(t, "Correctly received status %d (Not Found) when non-owner tries to access a lab", statusCode)
 	}
 }

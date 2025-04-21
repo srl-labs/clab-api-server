@@ -2,6 +2,7 @@
 /clab-api-server
 /clab-api-server-linux-amd64
 /clab-api-server-linux-arm64
+/go-test-report
 certs/
 # OS files
 .DS_Store
