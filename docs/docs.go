@@ -87,6 +87,49 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/v1/health/metrics": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns detailed CPU, memory, and disk metrics for the API server. Requires SUPERUSER privileges.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Health"
+                ],
+                "summary": "Get Detailed System Metrics",
+                "responses": {
+                    "200": {
+                        "description": "System metrics",
+                        "schema": {
+                            "$ref": "#/definitions/models.MetricsResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden (User is not a superuser)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error gathering metrics",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/labs": {
             "get": {
                 "security": [
@@ -1638,6 +1681,26 @@ const docTemplate = `{
                 }
             }
         },
+        "/health": {
+            "get": {
+                "description": "Returns basic health status of the API server.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Health"
+                ],
+                "summary": "Get API Server Basic Health",
+                "responses": {
+                    "200": {
+                        "description": "Basic health information",
+                        "schema": {
+                            "$ref": "#/definitions/models.HealthResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/login": {
             "post": {
                 "description": "Authenticate user and return JWT token",
@@ -1729,6 +1792,35 @@ const docTemplate = `{
                     "description": "Defaults to \"Containerlab\"",
                     "type": "string",
                     "example": "MyOrg"
+                }
+            }
+        },
+        "models.CPUMetrics": {
+            "type": "object",
+            "properties": {
+                "loadAvg1": {
+                    "description": "1-minute load average",
+                    "type": "number"
+                },
+                "loadAvg15": {
+                    "description": "15-minute load average",
+                    "type": "number"
+                },
+                "loadAvg5": {
+                    "description": "5-minute load average",
+                    "type": "number"
+                },
+                "numCPU": {
+                    "description": "Number of CPUs/cores",
+                    "type": "integer"
+                },
+                "processPercent": {
+                    "description": "This process's CPU usage",
+                    "type": "number"
+                },
+                "usagePercent": {
+                    "description": "Overall CPU usage percentage",
+                    "type": "number"
                 }
             }
         },
@@ -1925,6 +2017,31 @@ const docTemplate = `{
                 }
             }
         },
+        "models.DiskMetrics": {
+            "type": "object",
+            "properties": {
+                "freeDisk": {
+                    "description": "Free disk space in bytes",
+                    "type": "integer"
+                },
+                "path": {
+                    "description": "Mount path (usually \"/\")",
+                    "type": "string"
+                },
+                "totalDisk": {
+                    "description": "Total disk space in bytes",
+                    "type": "integer"
+                },
+                "usagePercent": {
+                    "description": "Disk usage percentage",
+                    "type": "number"
+                },
+                "usedDisk": {
+                    "description": "Used disk space in bytes",
+                    "type": "integer"
+                }
+            }
+        },
         "models.ErrorResponse": {
             "type": "object",
             "properties": {
@@ -2081,6 +2198,27 @@ const docTemplate = `{
                 }
             }
         },
+        "models.HealthResponse": {
+            "type": "object",
+            "properties": {
+                "startTime": {
+                    "description": "When the server started",
+                    "type": "string"
+                },
+                "status": {
+                    "description": "\"healthy\" or other status indicators",
+                    "type": "string"
+                },
+                "uptime": {
+                    "description": "Human-readable uptime",
+                    "type": "string"
+                },
+                "version": {
+                    "description": "API server version",
+                    "type": "string"
+                }
+            }
+        },
         "models.InterfaceInfo": {
             "type": "object",
             "properties": {
@@ -2134,6 +2272,85 @@ const docTemplate = `{
             "properties": {
                 "token": {
                     "type": "string"
+                }
+            }
+        },
+        "models.MemMetrics": {
+            "type": "object",
+            "properties": {
+                "availableMem": {
+                    "description": "Available memory in bytes",
+                    "type": "integer"
+                },
+                "processMemMB": {
+                    "description": "This process's memory in MB",
+                    "type": "number"
+                },
+                "processMemPct": {
+                    "description": "This process's memory percentage",
+                    "type": "number"
+                },
+                "totalMem": {
+                    "description": "Total physical memory in bytes",
+                    "type": "integer"
+                },
+                "usagePercent": {
+                    "description": "Memory usage percentage",
+                    "type": "number"
+                },
+                "usedMem": {
+                    "description": "Used physical memory in bytes",
+                    "type": "integer"
+                }
+            }
+        },
+        "models.Metrics": {
+            "type": "object",
+            "properties": {
+                "cpu": {
+                    "description": "CPU usage metrics",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.CPUMetrics"
+                        }
+                    ]
+                },
+                "disk": {
+                    "description": "Disk usage metrics",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.DiskMetrics"
+                        }
+                    ]
+                },
+                "mem": {
+                    "description": "Memory usage metrics",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.MemMetrics"
+                        }
+                    ]
+                }
+            }
+        },
+        "models.MetricsResponse": {
+            "type": "object",
+            "properties": {
+                "metrics": {
+                    "description": "Detailed system metrics",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.Metrics"
+                        }
+                    ]
+                },
+                "serverInfo": {
+                    "description": "Basic server information",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.ServerInfo"
+                        }
+                    ]
                 }
             }
         },
@@ -2345,6 +2562,23 @@ const docTemplate = `{
                 },
                 "output": {
                     "description": "Detailed output from the 'clab save' command (often from stderr).",
+                    "type": "string"
+                }
+            }
+        },
+        "models.ServerInfo": {
+            "type": "object",
+            "properties": {
+                "startTime": {
+                    "description": "When the server started",
+                    "type": "string"
+                },
+                "uptime": {
+                    "description": "Human-readable uptime",
+                    "type": "string"
+                },
+                "version": {
+                    "description": "API server version",
                     "type": "string"
                 }
             }

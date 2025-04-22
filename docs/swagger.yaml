@@ -30,6 +30,27 @@ definitions:
         example: MyOrg
         type: string
     type: object
+  models.CPUMetrics:
+    properties:
+      loadAvg1:
+        description: 1-minute load average
+        type: number
+      loadAvg5:
+        description: 5-minute load average
+        type: number
+      loadAvg15:
+        description: 15-minute load average
+        type: number
+      numCPU:
+        description: Number of CPUs/cores
+        type: integer
+      processPercent:
+        description: This process's CPU usage
+        type: number
+      usagePercent:
+        description: Overall CPU usage percentage
+        type: number
+    type: object
   models.CertResponse:
     properties:
       certPath:
@@ -195,6 +216,24 @@ definitions:
     required:
     - containerName
     type: object
+  models.DiskMetrics:
+    properties:
+      freeDisk:
+        description: Free disk space in bytes
+        type: integer
+      path:
+        description: Mount path (usually "/")
+        type: string
+      totalDisk:
+        description: Total disk space in bytes
+        type: integer
+      usagePercent:
+        description: Disk usage percentage
+        type: number
+      usedDisk:
+        description: Used disk space in bytes
+        type: integer
+    type: object
   models.ErrorResponse:
     properties:
       error:
@@ -310,6 +349,21 @@ definitions:
       message:
         type: string
     type: object
+  models.HealthResponse:
+    properties:
+      startTime:
+        description: When the server started
+        type: string
+      status:
+        description: '"healthy" or other status indicators'
+        type: string
+      uptime:
+        description: Human-readable uptime
+        type: string
+      version:
+        description: API server version
+        type: string
+    type: object
   models.InterfaceInfo:
     properties:
       alias:
@@ -348,6 +402,53 @@ definitions:
     properties:
       token:
         type: string
+    type: object
+  models.MemMetrics:
+    properties:
+      availableMem:
+        description: Available memory in bytes
+        type: integer
+      processMemMB:
+        description: This process's memory in MB
+        type: number
+      processMemPct:
+        description: This process's memory percentage
+        type: number
+      totalMem:
+        description: Total physical memory in bytes
+        type: integer
+      usagePercent:
+        description: Memory usage percentage
+        type: number
+      usedMem:
+        description: Used physical memory in bytes
+        type: integer
+    type: object
+  models.Metrics:
+    properties:
+      cpu:
+        allOf:
+        - $ref: '#/definitions/models.CPUMetrics'
+        description: CPU usage metrics
+      disk:
+        allOf:
+        - $ref: '#/definitions/models.DiskMetrics'
+        description: Disk usage metrics
+      mem:
+        allOf:
+        - $ref: '#/definitions/models.MemMetrics'
+        description: Memory usage metrics
+    type: object
+  models.MetricsResponse:
+    properties:
+      metrics:
+        allOf:
+        - $ref: '#/definitions/models.Metrics'
+        description: Detailed system metrics
+      serverInfo:
+        allOf:
+        - $ref: '#/definitions/models.ServerInfo'
+        description: Basic server information
     type: object
   models.NetemInterfaceInfo:
     properties:
@@ -502,6 +603,18 @@ definitions:
         description: Detailed output from the 'clab save' command (often from stderr).
         type: string
     type: object
+  models.ServerInfo:
+    properties:
+      startTime:
+        description: When the server started
+        type: string
+      uptime:
+        description: Human-readable uptime
+        type: string
+      version:
+        description: API server version
+        type: string
+    type: object
   models.VersionCheckResponse:
     properties:
       checkResult:
@@ -638,6 +751,34 @@ paths:
       summary: Generate Topology
       tags:
       - Topology Generation
+  /api/v1/health/metrics:
+    get:
+      description: Returns detailed CPU, memory, and disk metrics for the API server.
+        Requires SUPERUSER privileges.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: System metrics
+          schema:
+            $ref: '#/definitions/models.MetricsResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Forbidden (User is not a superuser)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error gathering metrics
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get Detailed System Metrics
+      tags:
+      - Health
   /api/v1/labs:
     get:
       description: Get details about all running labs, filtered by the 'owner' field
@@ -1681,6 +1822,19 @@ paths:
       summary: Check for Containerlab Updates
       tags:
       - Version
+  /health:
+    get:
+      description: Returns basic health status of the API server.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Basic health information
+          schema:
+            $ref: '#/definitions/models.HealthResponse'
+      summary: Get API Server Basic Health
+      tags:
+      - Health
   /login:
     post:
       consumes:

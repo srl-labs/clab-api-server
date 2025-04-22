@@ -15,6 +15,9 @@ import (
 func SetupRoutes(router *gin.Engine) {
 	// --- Public Routes ---
 
+	// Health check endpoint - intentionally public, no auth required
+	router.GET("/health", HealthCheckHandler)
+
 	// Login endpoint - intentionally *not* under /api/v1 group
 	router.POST("/login", LoginHandler)
 
@@ -31,6 +34,9 @@ func SetupRoutes(router *gin.Engine) {
 	apiV1 := router.Group("/api/v1")
 	apiV1.Use(AuthMiddleware()) // Apply JWT authentication middleware to all /api/v1 routes
 	{
+		// Health metrics endpoint (superuser only)
+		apiV1.GET("/health/metrics", SystemMetricsHandler)
+
 		// Lab management routes
 		labs := apiV1.Group("/labs")
 		{

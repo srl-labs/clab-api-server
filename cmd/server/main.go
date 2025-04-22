@@ -110,6 +110,10 @@ func main() {
 	api.InitSSHManager() // Initialize before setting up routes
 	log.Infof("SSH port range configured: %d - %d", config.AppConfig.SSHBasePort, config.AppConfig.SSHMaxPort)
 
+	// --- Initialize Health Monitoring ---
+	log.Info("Initializing Health Monitoring...")
+	api.InitHealth(version)
+
 	// --- Initialize Gin router ---
 	if strings.ToLower(config.AppConfig.GinMode) == "release" {
 		gin.SetMode(gin.ReleaseMode)
