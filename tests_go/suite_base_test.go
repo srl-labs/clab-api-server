@@ -554,9 +554,9 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	// Attempt to parse assuming seconds first, then full duration string
-	valueIntSec, errSec := time.ParseDuration(valueStr + "s")
+	valueDuration, errSec := time.ParseDuration(valueStr + "s")
 	if errSec == nil {
-		return valueIntSec
+		return valueDuration
 	}
 	valueIntDur, errDur := time.ParseDuration(valueStr)
 	if errDur != nil {
