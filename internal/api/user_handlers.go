@@ -4,6 +4,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
@@ -67,8 +68,8 @@ func GetUserDetailsHandler(c *gin.Context) {
 
 	userDetails, err := auth.GetUserDetails(targetUser)
 	if err != nil {
-		// Check if user not found
-		if err.Error() == "user: unknown user "+targetUser {
+		// Check if user not found - using strings.Contains instead of exact match
+		if strings.Contains(err.Error(), "unknown user "+targetUser) {
 			log.Infof("User '%s' requested details for non-existent user '%s'", requestingUser, targetUser)
 			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("User '%s' not found", targetUser)})
 			return
@@ -147,6 +148,7 @@ func CreateUserHandler(c *gin.Context) {
 // @Failure 404 {object} models.ErrorResponse "User not found"
 // @Failure 500 {object} models.ErrorResponse "Internal server error"
 // @Router /api/v1/users/{username} [put]
+// internal/api/user_handlers.go - Fix for UpdateUserHandler
 func UpdateUserHandler(c *gin.Context) {
 	requestingUser := c.GetString("username")
 	targetUser := c.Param("username")
@@ -179,10 +181,10 @@ func UpdateUserHandler(c *gin.Context) {
 	// Update the user
 	err := auth.UpdateUser(targetUser, req)
 	if err != nil {
-		// Check if user not found
-		if err.Error() == fmt.Sprintf("user '%s' not found", targetUser) {
+		// Check if user not found - using strings.Contains instead of exact match
+		if strings.Contains(err.Error(), "unknown user "+targetUser) {
 			log.Infof("User '%s' attempted to update non-existent user '%s'", requestingUser, targetUser)
-			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
+			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("User '%s' not found", targetUser)})
 			return
 		}
 
@@ -228,10 +230,10 @@ func DeleteUserHandler(c *gin.Context) {
 	// Delete the user
 	err := auth.DeleteUser(targetUser)
 	if err != nil {
-		// Check if user not found
-		if err.Error() == fmt.Sprintf("user '%s' not found", targetUser) {
+		// Check if user not found - using strings.Contains instead of exact match
+		if strings.Contains(err.Error(), "unknown user "+targetUser) {
 			log.Infof("User '%s' attempted to delete non-existent user '%s'", requestingUser, targetUser)
-			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
+			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("User '%s' not found", targetUser)})
 			return
 		}
 
