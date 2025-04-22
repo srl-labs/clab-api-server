@@ -12,8 +12,10 @@ This project provides a standalone RESTful API server written in Go to interact 
 * **Topology Tools:** Generate and deploy CLOS topologies
 * **Network Tools:** Manage network emulation, virtual Ethernet pairs, VxLAN tunnels
 * **Certification Tools:** Certificate management
+* **User Management:** Create, update, delete users and manage their permissions
+* **Health Monitoring:** Check server health status and system metrics
 * **User Context:** Track ownership and manage files within user home directories
-* **Configuration:** Configurable via environment variables and `.env` files
+* **Configuration:** Configurable via environment variables and `.env` files
 * **Documentation:** Embedded Swagger UI for API exploration
 
 ---
@@ -22,22 +24,22 @@ This project provides a standalone RESTful API server written in Go to interact 
 
 | Requirement | Version / Notes |
 |-------------|-----------------|
-| **Containerlab** | **v0.68.0+**<br/>`clab` must be on the `PATH` of the user that runs the API server. |
+| **Containerlab** | **v0.68.0+**<br/>`clab` must be on the `PATH` of the user that runs the API server. |
 | **Linux** | Any modern distribution. The binaries we publish target **amd64** and **arm64**. |
 | **PAM** | Uses the default `login` PAM service. No extra configuration needed on most distros. |
-| **User / Group** | Linux groups must exist as defined in your `.env` (`API_USER_GROUP`, `SUPERUSER_GROUP`). |
+| **User / Group** | Linux groups must exist as defined in your `.env` (`API_USER_GROUP`, `SUPERUSER_GROUP`). |
 
 ---
 
 > [!NOTE]
 > Containerlab 0.68.0+ is not available yet, but the 0.1.0 release of the clab‑api‑server is compatible with Containerlab 0.67.0.
 
-## 🚀 Quick install / upgrade 
+## 🚀 Quick install / upgrade
 
-A single script handles **install**, **upgrade**, **pull‑only**, and **uninstall** workflows. It automatically 
+A single script handles **install**, **upgrade**, **pull‑only**, and **uninstall** workflows. It automatically
 
 * downloads the correct binary for **amd64**/**arm64**,
-* installs it to **`/usr/local/bin/clab-api-server`**,  
+* installs it to **`/usr/local/bin/clab-api-server`**,
 * writes a default **`/etc/clab-api-server.env`** configuration file, and
 * creates a **systemd unit** at **`/etc/systemd/system/clab-api-server.service`** (but does **not** enable it).
 
@@ -49,7 +51,7 @@ curl -sL https://raw.githubusercontent.com/srl-labs/clab-api-server/refs/heads/m
 
 | Action / flag | Purpose |
 |---------------|---------|
-| `install` *(default)* | Fresh install – creates env + service if they don’t exist. |
+| `install` *(default)* | Fresh install – creates env + service if they don't exist. |
 | `upgrade` | Replace an existing binary with the latest (or `--version`). The script stops the service, upgrades the binary, updates the unit/env if needed, and leaves the service **stopped**. |
 | `pull-only` | Just download the binary; do **not** write env/service files. |
 | `uninstall --yes` | Remove the binary, env file, and systemd unit **non‑interactively**. |
@@ -62,7 +64,7 @@ curl -sL https://raw.githubusercontent.com/srl-labs/clab-api-server/refs/heads/m
 
 ## 🔧 Post‑install steps
 
-1. **Edit the configuration** `/etc/clab-api-server.env`
+1. **Edit the configuration** `/etc/clab-api-server.env`
 
    At a minimum, change `JWT_SECRET` to a strong random string.
 
@@ -89,9 +91,9 @@ If you prefer not to use the script you can still download a release from the [R
 
 ---
 
-## 🗄️ Configuration reference
+## 🗄️ Configuration reference
 
-All options can be set via **environment variables**, the shipped **`/etc/clab-api-server.env`** file, or the legacy **`.env`** file next to the binary. The script creates the central `/etc/…env` file by default because it plays nicer with systemd.
+All options can be set via **environment variables**, the shipped **`/etc/clab-api-server.env`** file, or the **`.env`** file next to the binary. The script creates the central `/etc/…env` file by default because it plays nicer with systemd.
 
 ```dotenv
 # Containerlab API Server configuration (excerpt)
@@ -128,7 +130,7 @@ TRUSTED_PROXIES=
 
 ---
 
-## 🏃‍♂️ Running without systemd (for development / CI)
+## 🏃‍♂️ Running without systemd (for development / CI)
 
 ```bash
 sudo /usr/local/bin/clab-api-server -env-file /etc/clab-api-server.env
@@ -138,18 +140,18 @@ sudo /usr/local/bin/clab-api-server -env-file /etc/clab-api-server.env
 
 ## 🔒 Privilege model & security
 
-* **Server user** – defined in the systemd unit (default: the user that executed the install script). Needs rights to run **clab** and access the container runtime (e.g. be in the `docker` group).
+* **Server user** – defined in the systemd unit (default: the user that executed the install script). Needs rights to run **clab** and access the container runtime (e.g. be in the `docker` group).
 * **Authenticated Linux user** – validated via PAM, must be member of `API_USER_GROUP` (default `clab_api`) or `SUPERUSER_GROUP` (`clab_admins`).
 * **Command execution** – all **clab** commands *and* SSH proxies run as the *server* user, *not* the authenticated user.
-* **Ownership** – Lab ownership is inferred from clab container labels; file operations attempt to store artifacts under the authenticated user’s home.
-* **SSH sessions** – The SSH manager allocates local ports (default **2222‑2322**) and forwards traffic to container port 22. Sessions expire automatically (default **1 h**, max **24 h**) and can be listed or terminated via the API.
+* **Ownership** – Lab ownership is inferred from clab container labels; file operations attempt to store artifacts under the authenticated user's home.
+* **SSH sessions** – The SSH manager allocates local ports (default **2222‑2322**) and forwards traffic to container port 22. Sessions expire automatically (default **1 h**, max **24 h**) and can be listed or terminated via the API.
 * **Security controls** – PAM for credential validation, JWT for session management, input validation & path sanitisation, optional TLS with client‑cert auth, execution timeouts.
 
 See the full *Privilege Model and Security* section further below for details.
 
 ---
 
-## 📡 API Usage
+## 📡 API Usage
 
 ### 1. Authentication
 
@@ -185,21 +187,37 @@ curl -H "Authorization: Bearer $TOKEN" \
      http://${API_HOST}/api/v1/labs
 ```
 
----
+### 3. Check server health
 
-## 📝 API documentation (Swagger)
+Basic health check (no auth required):
 
-Open your browser at:
-
-```
-http://<server_ip>:<API_PORT>/swagger/index.html
+```bash
+curl http://${API_HOST}/health
 ```
 
-Use the **Authorize** button in the top‑right corner to paste your `Bearer <token>` and explore the API interactively.
+Detailed system metrics (requires superuser privileges):
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+     http://${API_HOST}/api/v1/health/metrics
+```
 
 ---
+## 📝 API documentation (Swagger & ReDoc)
 
-## 🛡️ Privilege model & security (in depth)
+Open your browser at one of these URLs:
+
+```
+http://<server_ip>:<API_PORT>/swagger/index.html  # Swagger UI
+http://<server_ip>:<API_PORT>/redoc               # ReDoc UI (more user-friendly alternative)
+```
+
+For Swagger UI, use the **Authorize** button in the top‑right corner to paste your `Bearer <token>` and explore the API interactively.
+
+ReDoc provides a more user-friendly, responsive documentation interface that's easier to navigate for complex APIs.
+---
+
+## 🛡️ Privilege model & security (in depth)
 
 <details>
 <summary>Click to expand</summary>
@@ -210,20 +228,20 @@ The API process runs as the user defined in the systemd unit (`User=`). This use
 
 * Permission to execute **clab**
 * Membership in the container runtime group (e.g. `docker`)
-* Write access to users’ `~/.clab/` if you intend to deploy topologies from archives or use certificate features
+* If the server is mused with mutliple users, than the server needs sudo privileges or Write access to users' `~/.clab/`
 
 ### Authenticated Linux user
 
 A user must either
 
-* belong to **`API_USER_GROUP`** (default `clab_api`) **or**
+* belong to **`API_USER_GROUP`** (default `clab_api`) **or**
 * belong to **`SUPERUSER_GROUP`** (`clab_admins`).
 
 ### Command execution & ownership
 
 * All clab commands are executed as the **server** user.
 * The API tracks lab ownership via container labels.
-* Generated files are stored in the authenticated user’s home whenever possible.
+* Generated files are stored in the authenticated user's home whenever possible.
 
 ### Security controls
 
@@ -235,7 +253,7 @@ A user must either
 * **SSH session limits** and automatic expiration
 
 > [!IMPORTANT]
->  Granting the server user write access to other users’ home directories has security implications. Review your threat model carefully before production deployments.
+>  Granting the server user write access to other users' home directories has security implications. Review your threat model carefully before production deployments.
 
 </details>
 
@@ -247,7 +265,7 @@ The developer workflow is unchanged – the install script is only for productio
 
 ### Requirements
 
-* **Go ≥ 1.21**
+* **Go ≥ 1.21**
 * **Task** – <https://taskfile.dev/installation/>
 * System deps: `build-essential`, `libpam-dev` *(Debian/Ubuntu)* or `pam-devel` *(RHEL/Fedora)*
 
@@ -277,7 +295,6 @@ Open <http://localhost:8080/swagger/index.html>
 
 ---
 
-## 📜 License
+## 📜 License
 
-Distributed under the **Apache 2.0** license. See `LICENSE` for details.
-
+Distributed under the **Apache 2.0** license. See `LICENSE` for details.
