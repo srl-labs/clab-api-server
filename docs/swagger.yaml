@@ -510,6 +510,16 @@ definitions:
         description: Name of the container node
         type: string
     type: object
+  models.PasswordChangeRequest:
+    properties:
+      currentPassword:
+        description: Required if not superuser
+        type: string
+      newPassword:
+        type: string
+    required:
+    - newPassword
+    type: object
   models.RedeployRequest:
     properties:
       cleanup:
@@ -613,6 +623,64 @@ definitions:
         type: string
       version:
         description: API server version
+        type: string
+    type: object
+  models.UserCreateRequest:
+    properties:
+      displayName:
+        type: string
+      groups:
+        items:
+          type: string
+        type: array
+      isSuperuser:
+        type: boolean
+      password:
+        type: string
+      shell:
+        description: Default to /bin/bash if empty
+        type: string
+      username:
+        type: string
+    required:
+    - password
+    - username
+    type: object
+  models.UserDetails:
+    properties:
+      displayName:
+        description: Full name from GECOS field
+        type: string
+      gid:
+        type: string
+      groups:
+        items:
+          type: string
+        type: array
+      homeDir:
+        type: string
+      isApiUser:
+        type: boolean
+      isSuperuser:
+        type: boolean
+      shell:
+        type: string
+      uid:
+        type: string
+      username:
+        type: string
+    type: object
+  models.UserUpdateRequest:
+    properties:
+      displayName:
+        type: string
+      groups:
+        items:
+          type: string
+        type: array
+      isSuperuser:
+        type: boolean
+      shell:
         type: string
     type: object
   models.VersionCheckResponse:
@@ -1774,6 +1842,251 @@ paths:
       summary: Create VxLAN Tunnel
       tags:
       - Tools - VxLAN
+  /api/v1/users:
+    get:
+      description: Get a list of all users in the system. Requires superuser privileges.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: List of user details
+          schema:
+            items:
+              $ref: '#/definitions/models.UserDetails'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Forbidden (User is not a superuser)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: List All Users
+      tags:
+      - Users
+    post:
+      consumes:
+      - application/json
+      description: Create a new system user. Requires superuser privileges.
+      parameters:
+      - description: User creation details
+        in: body
+        name: user
+        required: true
+        schema:
+          $ref: '#/definitions/models.UserCreateRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: User created successfully
+          schema:
+            $ref: '#/definitions/models.GenericSuccessResponse'
+        "400":
+          description: Invalid request body
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Forbidden (User is not a superuser)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "409":
+          description: User already exists
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Create User
+      tags:
+      - Users
+  /api/v1/users/{username}:
+    delete:
+      description: Delete a user from the system. Requires superuser privileges.
+      parameters:
+      - description: Username to delete
+        in: path
+        name: username
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: User deleted successfully
+          schema:
+            $ref: '#/definitions/models.GenericSuccessResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Forbidden (User is not a superuser)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: User not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete User
+      tags:
+      - Users
+    get:
+      description: Get detailed information about a specific user. Requires superuser
+        privileges or the user's own account.
+      parameters:
+      - description: Username to get details for
+        in: path
+        name: username
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: User details
+          schema:
+            $ref: '#/definitions/models.UserDetails'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Forbidden (Not superuser or not the user's own account)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: User not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get User Details
+      tags:
+      - Users
+    put:
+      consumes:
+      - application/json
+      description: Update information for an existing user. Requires superuser privileges
+        or the user's own account.
+      parameters:
+      - description: Username to update
+        in: path
+        name: username
+        required: true
+        type: string
+      - description: User details to update
+        in: body
+        name: user
+        required: true
+        schema:
+          $ref: '#/definitions/models.UserUpdateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: User updated successfully
+          schema:
+            $ref: '#/definitions/models.GenericSuccessResponse'
+        "400":
+          description: Invalid request body
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Forbidden (Not superuser or not the user's own account)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: User not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Update User
+      tags:
+      - Users
+  /api/v1/users/{username}/password:
+    put:
+      consumes:
+      - application/json
+      description: Change password for a user. Requires superuser privileges or the
+        user's own account.
+      parameters:
+      - description: Username to change password for
+        in: path
+        name: username
+        required: true
+        type: string
+      - description: Password change details
+        in: body
+        name: passwordChange
+        required: true
+        schema:
+          $ref: '#/definitions/models.PasswordChangeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Password changed successfully
+          schema:
+            $ref: '#/definitions/models.GenericSuccessResponse'
+        "400":
+          description: Invalid request body
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized or incorrect current password
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Forbidden (Not superuser or not the user's own account)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: User not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Change User Password
+      tags:
+      - Users
   /api/v1/version:
     get:
       description: Retrieves the installed containerlab version information by running

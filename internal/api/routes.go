@@ -136,5 +136,31 @@ func SetupRoutes(router *gin.Engine) {
 			version.GET("/check", CheckVersionHandler) // GET /api/v1/version/check
 		}
 
+		// --- Add User Management Routes ---
+		users := apiV1.Group("/users")
+		{
+			// List all users (superuser only)
+			users.GET("", ListUsersHandler)
+
+			// Create a new user (superuser only)
+			users.POST("", CreateUserHandler)
+
+			// User-specific operations
+			userSpecific := users.Group("/:username")
+			{
+				// Get user details (superuser or own account)
+				userSpecific.GET("", GetUserDetailsHandler)
+
+				// Update user (superuser or own account)
+				userSpecific.PUT("", UpdateUserHandler)
+
+				// Delete user (superuser only)
+				userSpecific.DELETE("", DeleteUserHandler)
+
+				// Change password (superuser or own account)
+				userSpecific.PUT("/password", ChangeUserPasswordHandler)
+			}
+		}
+
 	}
 }
