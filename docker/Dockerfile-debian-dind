@@ -1,4 +1,3 @@
-# Use a standard Debian base image
 FROM debian:bookworm-slim
 
 # Set noninteractive frontend for apt-get
@@ -24,7 +23,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iproute2 \
     sudo \
     procps \
-#    openssh-server \
     openssh-client \
  && rm -rf /var/lib/apt/lists/*
 
@@ -52,10 +50,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Verify Docker installation
 RUN docker --version
 
-# --- Install Go ---
+# --- Install Go (architecture-aware) ---
 ARG GO_VERSION=1.22.2
 ENV PATH="/usr/local/go/bin:${PATH}"
-RUN curl -fsSL "https://golang.org/dl/go${GO_VERSION}.linux-amd64.tar.gz" | tar -C /usr/local -xz
+
+# Detect architecture and download appropriate Go binary
+RUN ARCH=$(dpkg --print-architecture) && \
+    case ${ARCH} in \
+      amd64) GO_ARCH="amd64" ;; \
+      arm64) GO_ARCH="arm64" ;; \
+      *) echo "Unsupported architecture: ${ARCH}"; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://golang.org/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" | tar -C /usr/local -xz
+
 # Verify Go installation
 RUN go version
 
@@ -72,15 +79,6 @@ RUN if [ -z "$CLAB_VERSION" ]; then \
 # Verify Containerlab installation
 RUN containerlab version
 
-# # --- Configure SSH Server ---
-# RUN mkdir -p /var/run/sshd && \
-#     # Allow root login with password (if needed, remove if not)
-#     sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
-#     # Enable SSH password authentication
-#     sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config && \
-#     # Generate SSH host keys if not present
-#     ssh-keygen -A
-
 ARG API_USER=admin
 ARG API_PASS=admin
 RUN useradd -m -s /bin/bash ${API_USER} \
@@ -88,7 +86,6 @@ RUN useradd -m -s /bin/bash ${API_USER} \
  && echo "${API_USER}:${API_PASS}" | chpasswd \
  && echo "INFO: Created user '${API_USER}' with provided password."
 
-# --- Build clab-api-server ---
 WORKDIR /app
 
 # Copy Go module files first for caching
