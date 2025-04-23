@@ -88,7 +88,6 @@ RUN go mod download
 COPY . .
 
 # Build the clab-api-server binary with CGO enabled for PAM
-# Assumes your project root (build context) has the necessary files/dirs
 RUN CGO_ENABLED=1 GOOS=linux go build -v -ldflags="\
     -X main.version=debian-dind-$(cat VERSION 2>/dev/null || echo dev) \
     -X main.commit=$(git rev-parse --short HEAD 2>/dev/null || echo unknown) \
@@ -99,17 +98,14 @@ RUN CGO_ENABLED=1 GOOS=linux go build -v -ldflags="\
 # Copy templates
 RUN mkdir -p /templates && cp -r templates/redoc.html /templates/
 
-# Copy custom PAM configuration (relative to build context, which is project root)
-COPY docker/pam.d/login /etc/pam.d/login
-
 # --- DIND Setup ---
-# Copy the custom entrypoint script for starting dockerd + app
 COPY docker/dind-entrypoint.sh /usr/local/bin/dind-entrypoint.sh
 RUN chmod +x /usr/local/bin/dind-entrypoint.sh
 
 # Define volumes for persistence (inner docker data and user homes)
 VOLUME /var/lib/docker
 VOLUME /home
+VOLUME /persistent-config
 
 # Use ARGs for ports, falling back to defaults if not provided
 ARG API_PORT=8080
@@ -123,5 +119,3 @@ ENTRYPOINT ["/usr/local/bin/dind-entrypoint.sh"]
 
 # Default command passed to our entrypoint script
 CMD ["clab-api-server"]
-
-# Container runs as root, necessary for dockerd and user management tools

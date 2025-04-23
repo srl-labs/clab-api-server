@@ -1,15 +1,52 @@
 #!/bin/sh
 set -e
 
-# Optional: Explicitly disable ip6tables if needed, though less likely required
-# when installing docker-ce directly compared to some DIND base images.
-# Uncomment if you still see hangs related to IPv6.
-# export DOCKER_DEFAULT_IP6_TABLES=--ip6tables=false
-# if [ -n "$DOCKER_DEFAULT_IP6_TABLES" ]; then
-#   echo "INFO: Will attempt to start dockerd with ip6tables disabled."
-#   # Note: This env var isn't directly used by dockerd itself,
-#   # but we could modify the dockerd start command below if needed.
-# fi
+# --- BEGIN User Persistence Logic ---
+PERSISTENT_CONFIG_DIR="/persistent-config"
+ETC_FILES_TO_PERSIST="passwd shadow group gshadow subuid subgid" # Added subuid/subgid often needed with rootless/userns
+
+echo "Checking for persistent user/group configuration in ${PERSISTENT_CONFIG_DIR}..."
+
+# Create the target directory if it doesn't exist (should exist due to volume mount)
+mkdir -p "${PERSISTENT_CONFIG_DIR}"
+
+# Flag to check if any restoration happened
+restored_files=false
+
+for file in ${ETC_FILES_TO_PERSIST}; do
+  persistent_file="${PERSISTENT_CONFIG_DIR}/${file}"
+  target_file="/etc/${file}"
+
+  if [ -f "${persistent_file}" ]; then
+    echo "Restoring ${target_file} from ${persistent_file}..."
+    # Copy with permissions, overwrite if exists
+    if cp -p "${persistent_file}" "${target_file}"; then
+      echo "Successfully restored ${target_file}."
+      restored_files=true
+    else
+      echo "WARNING: Failed to restore ${target_file} from ${persistent_file}. Check permissions or file integrity." >&2
+      # exit 1
+    fi
+  else
+    echo "No persistent file found for ${file} at ${persistent_file}. Using container default."
+    if [ ! -f "${PERSISTENT_CONFIG_DIR}/passwd" ]; then
+       echo "First run detected (or persistent config missing). Backing up initial ${target_file} to ${persistent_file}..."
+       if [ -f "${target_file}" ]; then # Ensure the source file exists before copying
+           cp -p "${target_file}" "${persistent_file}"
+       else
+           echo "WARNING: Initial ${target_file} not found in image, cannot back up default." >&2
+       fi
+    fi
+  fi
+done
+
+if [ "$restored_files" = true ]; then
+  echo "User/group configuration restored from persistent volume."
+else
+  echo "Using default user/group configuration from image (or first run)."
+fi
+echo "User/group configuration check complete."
+# --- END User Persistence Logic ---
 
 # Start the Docker daemon in the background
 echo "Starting Docker daemon (dockerd)..."
@@ -65,16 +102,15 @@ while ! docker info > /dev/null 2>&1; do
 done
 echo "Docker daemon is ready."
 
-# Ensure required groups exist (best effort, useradd/groupadd might handle this too)
-# These should match your .env settings
 API_GROUP=${API_USER_GROUP:-clab_api} # Default if not set in env
 ADMIN_GROUP=${SUPERUSER_GROUP:-clab_admins} # Default if not set in env
 REQUIRED_LOGIN_GROUP="clab_admins" # Hardcoded in auth/credentials.go
 
 echo "Ensuring internal groups exist: $REQUIRED_LOGIN_GROUP, $API_GROUP, $ADMIN_GROUP"
-if ! getent group "$REQUIRED_LOGIN_GROUP" > /dev/null; then addgroup "$REQUIRED_LOGIN_GROUP"; echo "INFO: Created group $REQUIRED_LOGIN_GROUP"; fi
-if ! getent group "$API_GROUP" > /dev/null; then addgroup "$API_GROUP"; echo "INFO: Created group $API_GROUP"; fi
-if ! getent group "$ADMIN_GROUP" > /dev/null; then addgroup "$ADMIN_GROUP"; echo "INFO: Created group $ADMIN_GROUP"; fi
+# Use addgroup -g <gid> <groupname> if you need specific GIDs, otherwise just ensure they exist
+if ! getent group "$REQUIRED_LOGIN_GROUP" > /dev/null; then addgroup --system "$REQUIRED_LOGIN_GROUP" || addgroup "$REQUIRED_LOGIN_GROUP" ; echo "INFO: Ensured group $REQUIRED_LOGIN_GROUP exists"; fi
+if ! getent group "$API_GROUP" > /dev/null; then addgroup --system "$API_GROUP" || addgroup "$API_GROUP"; echo "INFO: Ensured group $API_GROUP exists"; fi
+if ! getent group "$ADMIN_GROUP" > /dev/null; then addgroup --system "$ADMIN_GROUP" || addgroup "$ADMIN_GROUP"; echo "INFO: Ensured group $ADMIN_GROUP exists"; fi
 
 # Now execute the command passed to the container (e.g., clab-api-server)
 echo "Executing command: $@"

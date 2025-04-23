@@ -12,6 +12,10 @@ test-reports/
 test-reports/*
 ./-
 
+# Backup files
+backup/
+backup/* 
+clab-*.tar.gz
 
 # IDE/editor configs
 .vscode/
@@ -41,6 +45,7 @@ vendor/
 
 # But keep .env.example
 !.env.example
+!docker/.env
 
 # Test results
 *.coverprofile
