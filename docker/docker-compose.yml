@@ -1,0 +1,49 @@
+# docker/docker-compose.yml
+
+version: '3.8'
+
+services:
+  clab-api:
+    build:
+      # Context is the project root directory (one level up from this file)
+      context: ..
+      # Dockerfile path relative to the context - USE THE NEW FILE
+      dockerfile: ./docker/Dockerfile-debian-dind
+      # Optional: Pass CLAB_VERSION during build if needed
+      # args:
+      #   CLAB_VERSION: "0.53.1"
+    container_name: clab-api-debian-dind # Changed container name
+    # --- SECURITY WARNING: Required for Docker-in-Docker ---
+    privileged: true
+    # Optional: Add security options if needed, but privileged usually covers it
+    # cap_add:
+    #   - ALL
+    # security_opt:
+    #   - seccomp=unconfined
+    #   - apparmor=unconfined
+    restart: unless-stopped
+    ports:
+      # Use .env file values, falling back to defaults
+      - "${API_PORT:-8080}:${API_PORT:-8080}"
+      - "${SSH_BASE_PORT:-2222}-${SSH_MAX_PORT:-2322}:${SSH_BASE_PORT:-2222}-${SSH_MAX_PORT:-2322}"
+    volumes:
+      # Named volumes for persistence
+      - clab-api-debian-dind-data:/var/lib/docker
+      - clab-api-debian-home-data:/home
+      # Optional: Mount TLS certificates if TLS_ENABLE=true in .env
+      # - ../path/on/host/certs:/certs:ro
+    # Load configuration from the .env file in THIS directory (docker/)
+    env_file:
+      - .env
+    # Optional: Healthcheck
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:${API_PORT:-8080}/health"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 60s # Increased start period for DIND
+
+volumes:
+  # Define named volumes
+  clab-api-debian-dind-data:
+  clab-api-debian-home-data:

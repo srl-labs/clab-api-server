@@ -1,0 +1,120 @@
+# Use a standard Debian base image
+FROM debian:bookworm-slim
+
+# Set noninteractive frontend for apt-get
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install base dependencies, docker prerequisites, Go, PAM dev files, user tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Docker prerequisites & tools
+    ca-certificates \
+    curl \
+    wget \
+    gnupg \
+    lsb-release \
+    iptables \
+    uidmap \
+    # API Server build/runtime deps
+    build-essential \
+    libpam0g-dev \
+    login \
+    git \
+    # Containerlab deps & general utils
+    bash \
+    iproute2 \
+    sudo \
+    procps \
+ && rm -rf /var/lib/apt/lists/*
+
+# --- Install Docker Engine (following official docs) ---
+# Add Docker's official GPG key
+RUN install -m 0755 -d /etc/apt/keyrings
+RUN curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+RUN chmod a+r /etc/apt/keyrings/docker.asc
+
+# Add the Docker repository
+RUN echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Install Docker Engine, CLI, Containerd, Buildx, Compose
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    docker-ce \
+    docker-ce-cli \
+    containerd.io \
+    docker-buildx-plugin \
+    docker-compose-plugin \
+ && rm -rf /var/lib/apt/lists/*
+
+# Verify Docker installation
+RUN docker --version
+
+# --- Install Go ---
+ARG GO_VERSION=1.22.2
+ENV PATH="/usr/local/go/bin:${PATH}"
+RUN curl -fsSL "https://golang.org/dl/go${GO_VERSION}.linux-amd64.tar.gz" | tar -C /usr/local -xz
+# Verify Go installation
+RUN go version
+
+# --- Install Containerlab ---
+# Use ARG for flexibility, default to latest if not provided during build
+ARG CLAB_VERSION=""
+RUN if [ -z "$CLAB_VERSION" ]; then \
+        echo "Installing latest Containerlab..."; \
+        bash -c "$(curl -sL https://get.containerlab.dev)"; \
+    else \
+        echo "Installing Containerlab version ${CLAB_VERSION}..."; \
+        bash -c "$(curl -sL https://get.containerlab.dev)" -- -v ${CLAB_VERSION}; \
+    fi
+# Verify Containerlab installation
+RUN containerlab version
+
+# --- Build clab-api-server ---
+WORKDIR /app
+
+# Copy Go module files first for caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy the rest of the application source
+COPY . .
+
+# Build the clab-api-server binary with CGO enabled for PAM
+# Assumes your project root (build context) has the necessary files/dirs
+RUN CGO_ENABLED=1 GOOS=linux go build -v -ldflags="\
+    -X main.version=debian-dind-$(cat VERSION 2>/dev/null || echo dev) \
+    -X main.commit=$(git rev-parse --short HEAD 2>/dev/null || echo unknown) \
+    -X main.date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+    -o /usr/local/bin/clab-api-server ./cmd/server
+
+# --- Configure API Server ---
+# Copy templates
+RUN mkdir -p /templates && cp -r templates/redoc.html /templates/
+
+# Copy custom PAM configuration (relative to build context, which is project root)
+COPY docker/pam.d/login /etc/pam.d/login
+
+# --- DIND Setup ---
+# Copy the custom entrypoint script for starting dockerd + app
+COPY docker/dind-entrypoint.sh /usr/local/bin/dind-entrypoint.sh
+RUN chmod +x /usr/local/bin/dind-entrypoint.sh
+
+# Define volumes for persistence (inner docker data and user homes)
+VOLUME /var/lib/docker
+VOLUME /home
+
+# Use ARGs for ports, falling back to defaults if not provided
+ARG API_PORT=8080
+ARG SSH_BASE_PORT=2222
+ARG SSH_MAX_PORT=2322
+EXPOSE ${API_PORT}
+EXPOSE ${SSH_BASE_PORT}-${SSH_MAX_PORT}
+
+# Set the ENTRYPOINT to our custom script
+ENTRYPOINT ["/usr/local/bin/dind-entrypoint.sh"]
+
+# Default command passed to our entrypoint script
+CMD ["clab-api-server"]
+
+# Container runs as root, necessary for dockerd and user management tools

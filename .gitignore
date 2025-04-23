@@ -52,4 +52,4 @@ logs/
 
 # Generated files
 all_go_files.txt
-
+all_docker_files.txt
