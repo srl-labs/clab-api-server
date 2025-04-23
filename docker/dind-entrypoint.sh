@@ -1,52 +1,63 @@
 #!/bin/sh
 set -e
 
-# --- BEGIN User Persistence Logic ---
+# --- BEGIN User Persistence with File Copy ---
 PERSISTENT_CONFIG_DIR="/persistent-config"
-ETC_FILES_TO_PERSIST="passwd shadow group gshadow subuid subgid" # Added subuid/subgid often needed with rootless/userns
+ETC_FILES_TO_PERSIST="passwd shadow group gshadow subuid subgid"
 
-echo "Checking for persistent user/group configuration in ${PERSISTENT_CONFIG_DIR}..."
+echo "Setting up persistent user/group configuration in ${PERSISTENT_CONFIG_DIR}..."
 
-# Create the target directory if it doesn't exist (should exist due to volume mount)
+# Create the target directory if it doesn't exist
 mkdir -p "${PERSISTENT_CONFIG_DIR}"
 
-# Flag to check if any restoration happened
-restored_files=false
-
+# For each file we want to persist
 for file in ${ETC_FILES_TO_PERSIST}; do
   persistent_file="${PERSISTENT_CONFIG_DIR}/${file}"
-  target_file="/etc/${file}"
+  etc_file="/etc/${file}"
 
+  # If persistent file exists, restore it to /etc
   if [ -f "${persistent_file}" ]; then
-    echo "Restoring ${target_file} from ${persistent_file}..."
-    # Copy with permissions, overwrite if exists
-    if cp -p "${persistent_file}" "${target_file}"; then
-      echo "Successfully restored ${target_file}."
-      restored_files=true
-    else
-      echo "WARNING: Failed to restore ${target_file} from ${persistent_file}. Check permissions or file integrity." >&2
-      # exit 1
-    fi
+    echo "Restoring ${etc_file} from ${persistent_file}..."
+    cp -p "${persistent_file}" "${etc_file}"
+    echo " -> Restored ${etc_file}"
   else
-    echo "No persistent file found for ${file} at ${persistent_file}. Using container default."
-    if [ ! -f "${PERSISTENT_CONFIG_DIR}/passwd" ]; then
-       echo "First run detected (or persistent config missing). Backing up initial ${target_file} to ${persistent_file}..."
-       if [ -f "${target_file}" ]; then # Ensure the source file exists before copying
-           cp -p "${target_file}" "${persistent_file}"
-       else
-           echo "WARNING: Initial ${target_file} not found in image, cannot back up default." >&2
-       fi
+    # First run - back up the original to persistent storage
+    echo "First run - backing up ${etc_file} to ${persistent_file}..."
+    if [ -f "${etc_file}" ]; then
+      cp -p "${etc_file}" "${persistent_file}"
+      echo " -> Created initial ${persistent_file}"
+    else
+      echo " -> Warning: ${etc_file} doesn't exist, creating empty ${persistent_file}"
+      touch "${persistent_file}"
     fi
+  fi
+
+  # Set correct permissions
+  if [ "${file}" = "shadow" ] || [ "${file}" = "gshadow" ]; then
+    chmod 600 "${persistent_file}"
+    chmod 600 "${etc_file}"
+  else
+    chmod 644 "${persistent_file}"
+    chmod 644 "${etc_file}"
   fi
 done
 
-if [ "$restored_files" = true ]; then
-  echo "User/group configuration restored from persistent volume."
-else
-  echo "Using default user/group configuration from image (or first run)."
-fi
-echo "User/group configuration check complete."
-# --- END User Persistence Logic ---
+# Set up background sync to periodically save changes
+echo "Setting up background sync for user/group files..."
+(
+  while true; do
+    sleep 5
+    for file in ${ETC_FILES_TO_PERSIST}; do
+      if [ -f "/etc/${file}" ]; then
+        cp -p "/etc/${file}" "${PERSISTENT_CONFIG_DIR}/${file}" 2>/dev/null
+      fi
+    done
+  done
+) &
+echo "Background sync started. Changes to /etc files will be saved to ${PERSISTENT_CONFIG_DIR}"
+
+echo "User/group persistence setup complete."
+# --- END User Persistence with File Copy ---
 
 # Start the Docker daemon in the background
 echo "Starting Docker daemon (dockerd)..."
@@ -111,6 +122,15 @@ echo "Ensuring internal groups exist: $REQUIRED_LOGIN_GROUP, $API_GROUP, $ADMIN_
 if ! getent group "$REQUIRED_LOGIN_GROUP" > /dev/null; then addgroup --system "$REQUIRED_LOGIN_GROUP" || addgroup "$REQUIRED_LOGIN_GROUP" ; echo "INFO: Ensured group $REQUIRED_LOGIN_GROUP exists"; fi
 if ! getent group "$API_GROUP" > /dev/null; then addgroup --system "$API_GROUP" || addgroup "$API_GROUP"; echo "INFO: Ensured group $API_GROUP exists"; fi
 if ! getent group "$ADMIN_GROUP" > /dev/null; then addgroup --system "$ADMIN_GROUP" || addgroup "$ADMIN_GROUP"; echo "INFO: Ensured group $ADMIN_GROUP exists"; fi
+
+# Save the files again after group creation to make sure all changes are saved
+echo "Backing up user/group files after group creation..."
+for file in ${ETC_FILES_TO_PERSIST}; do
+  if [ -f "/etc/${file}" ]; then
+    cp -p "/etc/${file}" "${PERSISTENT_CONFIG_DIR}/${file}"
+    echo " -> Backed up ${file}"
+  fi
+done
 
 # Now execute the command passed to the container (e.g., clab-api-server)
 echo "Executing command: $@"

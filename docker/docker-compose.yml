@@ -1,45 +1,30 @@
 # docker/docker-compose.yml
 
-version: '3.8'
-
 services:
   clab-api:
     build:
-      # Context is the project root directory (one level up from this file)
       context: ..
       dockerfile: ./docker/Dockerfile-debian-dind
       args:
         API_USER: ${API_USER_BUILDTIME:-admin}
         API_PASS: ${API_PASS_BUILDTIME:-admin}
-    container_name: clab-api-debian-dind # Changed container name
-    # --- SECURITY WARNING: Required for Docker-in-Docker ---
+    container_name: clab-api-debian-dind
     privileged: true
-
     restart: unless-stopped
     ports:
-      # Use .env file values, falling back to defaults
       - "${API_PORT:-8080}:${API_PORT:-8080}"
       - "${SSH_BASE_PORT:-2222}-${SSH_MAX_PORT:-2322}:${SSH_BASE_PORT:-2222}-${SSH_MAX_PORT:-2322}"
     volumes:
-      # Named volumes for persistence
+      # Standard volumes only - no bind mounts
       - clab-api-debian-dind-data:/var/lib/docker
       - clab-api-debian-home-data:/home
       - clab-api-debian-config-data:/persistent-config
       # Optional: Mount TLS certificates if TLS_ENABLE=true in .env
       # - ../path/on/host/certs:/certs:ro
-    # Load configuration from the .env file in THIS directory (docker/)
     env_file:
       - .env
-    # Optional: Healthcheck
-    # healthcheck:
-    #   test: ["CMD", "curl", "-f", "http://localhost:${API_PORT:-8080}/health"]
-    #   interval: 30s
-    #   timeout: 10s
-    #   retries: 3
-    #   start_period: 60s # Increased start period for DIND
 
 volumes:
-  # Define named volumes
   clab-api-debian-dind-data:
   clab-api-debian-home-data:
   clab-api-debian-config-data:
