@@ -24,6 +24,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iproute2 \
     sudo \
     procps \
+#    openssh-server \
+    openssh-client \
  && rm -rf /var/lib/apt/lists/*
 
 # --- Install Docker Engine (following official docs) ---
@@ -70,6 +72,15 @@ RUN if [ -z "$CLAB_VERSION" ]; then \
 # Verify Containerlab installation
 RUN containerlab version
 
+# # --- Configure SSH Server ---
+# RUN mkdir -p /var/run/sshd && \
+#     # Allow root login with password (if needed, remove if not)
+#     sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
+#     # Enable SSH password authentication
+#     sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config && \
+#     # Generate SSH host keys if not present
+#     ssh-keygen -A
+
 ARG API_USER=admin
 ARG API_PASS=admin
 RUN useradd -m -s /bin/bash ${API_USER} \
@@ -113,6 +124,7 @@ ARG SSH_BASE_PORT=2222
 ARG SSH_MAX_PORT=2322
 EXPOSE ${API_PORT}
 EXPOSE ${SSH_BASE_PORT}-${SSH_MAX_PORT}
+EXPOSE 22
 
 # Set the ENTRYPOINT to our custom script
 ENTRYPOINT ["/usr/local/bin/dind-entrypoint.sh"]
