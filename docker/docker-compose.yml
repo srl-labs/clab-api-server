@@ -10,8 +10,9 @@ services:
       # Dockerfile path relative to the context - USE THE NEW FILE
       dockerfile: ./docker/Dockerfile-debian-dind
       # Optional: Pass CLAB_VERSION during build if needed
-      # args:
-      #   CLAB_VERSION: "0.53.1"
+      args:
+        API_USER: ${API_USER_BUILDTIME:-admin}
+        API_PASS: ${API_PASS_BUILDTIME:-admin}
     container_name: clab-api-debian-dind # Changed container name
     # --- SECURITY WARNING: Required for Docker-in-Docker ---
     privileged: true

@@ -70,6 +70,13 @@ RUN if [ -z "$CLAB_VERSION" ]; then \
 # Verify Containerlab installation
 RUN containerlab version
 
+ARG API_USER=admin
+ARG API_PASS=admin
+RUN useradd -m -s /bin/bash ${API_USER} \
+ && usermod -aG clab_admins ${API_USER} \
+ && echo "${API_USER}:${API_PASS}" | chpasswd \
+ && echo "INFO: Created user '${API_USER}' with provided password."
+
 # --- Build clab-api-server ---
 WORKDIR /app
 
