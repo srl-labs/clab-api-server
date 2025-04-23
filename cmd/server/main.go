@@ -20,6 +20,7 @@ import (
 
 	_ "github.com/srl-labs/clab-api-server/docs"
 	"github.com/srl-labs/clab-api-server/internal/api"
+	"github.com/srl-labs/clab-api-server/internal/auth"
 	"github.com/srl-labs/clab-api-server/internal/config"
 )
 
@@ -107,8 +108,12 @@ func main() {
 
 	// --- Initialize SSH Manager ---
 	log.Info("Initializing SSH Session Manager...")
-	api.InitSSHManager() // Initialize before setting up routes
+	api.InitSSHManager()
 	log.Infof("SSH port range configured: %d - %d", config.AppConfig.SSHBasePort, config.AppConfig.SSHMaxPort)
+
+	// --- Initialize Authentication ---
+	log.Info("Initializing authentication...")
+	auth.InitAuth() // Initialize auth with server start time
 
 	// --- Initialize Health Monitoring ---
 	log.Info("Initializing Health Monitoring...")
