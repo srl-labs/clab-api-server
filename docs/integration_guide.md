@@ -191,8 +191,12 @@ sudo systemctl restart clab-api-server
    - `API_PORT`: Server listening port (default: 8080)
    - `SSH_BASE_PORT` & `SSH_MAX_PORT`: Range of ports for SSH tunnels
 
-3. **Start the service using the management script**:
+3. **Build and start the service**:
    ```bash
+   # Build the Docker image
+   docker compose -f docker/dind/docker-compose.yml build
+
+   # Start the service using the management script
    ./clab-api-manager.sh dind start
    ```
 
@@ -244,8 +248,12 @@ The entrypoint script performs several important functions:
    - `API_PORT`: Server listening port (default: 8080)
    - `SSH_BASE_PORT` & `SSH_MAX_PORT`: Range of ports for SSH tunnels
 
-3. **Start the service using the management script**:
+3. **Build and start the service**:
    ```bash
+   # Build the Docker image
+   docker compose -f docker/dood/docker-compose.yml build
+
+   # Start the service using the management script
    ./clab-api-manager.sh dood start
    ```
 
@@ -705,16 +713,18 @@ curl -sL https://raw.githubusercontent.com/srl-labs/clab-api-server/main/install
 
 ### Docker Installation
 
-Pull the latest images and restart:
+Pull the latest code, rebuild the images, and restart:
 
 ```bash
 cd clab-api-server
 git pull
 
 # For DinD
+docker compose -f docker/dind/docker-compose.yml build
 ./clab-api-manager.sh dind restart
 
 # For DooD
+docker compose -f docker/dood/docker-compose.yml build
 ./clab-api-manager.sh dood restart
 ```
 
@@ -725,9 +735,11 @@ cd clab-api-server
 git checkout v0.1.1
 
 # For DinD
+docker compose -f docker/dind/docker-compose.yml build
 ./clab-api-manager.sh dind restart
 
 # For DooD
+docker compose -f docker/dood/docker-compose.yml build
 ./clab-api-manager.sh dood restart
 ```
 

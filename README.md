@@ -69,6 +69,9 @@ cd clab-api-server
 cp docker/common/.env.example docker/common/.env
 nano docker/common/.env  # Edit configuration as needed
 
+# Build the Docker image
+docker compose -f docker/dind/docker-compose.yml build
+
 # Start the service
 ./clab-api-manager.sh dind start
 ```
@@ -95,6 +98,9 @@ cd clab-api-server
 # Configure environment variables
 cp docker/common/.env.example docker/common/.env
 nano docker/common/.env  # Edit configuration as needed
+
+# Build the Docker image
+docker compose -f docker/dood/docker-compose.yml build
 
 # Start the service
 ./clab-api-manager.sh dood start
