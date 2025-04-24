@@ -45,7 +45,7 @@ vendor/
 
 # But keep .env.example
 !.env.example
-!docker/.env
+!docker/common/.env.example
 
 # Test results
 *.coverprofile

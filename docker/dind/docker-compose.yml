@@ -1,0 +1,30 @@
+# docker/dind/docker-compose.yml
+
+services:
+  clab-api:
+    build:
+      context: ../..
+      dockerfile: ./docker/dind/Dockerfile
+      args:
+        API_USER: ${API_USER_BUILDTIME:-admin}
+        API_PASS: ${API_PASS_BUILDTIME:-admin}
+    container_name: clab-api-dind
+    privileged: true
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8080}:${API_PORT:-8080}"
+      - "${SSH_BASE_PORT:-2223}-${SSH_MAX_PORT:-2322}:${SSH_BASE_PORT:-2223}-${SSH_MAX_PORT:-2322}"
+    volumes:
+      # Standard volumes only - no bind mounts
+      - clab-api-dind-data:/var/lib/docker
+      - clab-api-home-data:/home
+      - clab-api-config-data:/persistent-config
+      # Optional: Mount TLS certificates if TLS_ENABLE=true in .env
+      # - ../../path/on/host/certs:/certs:ro
+    env_file:
+      - ../common/.env
+
+volumes:
+  clab-api-dind-data:
+  clab-api-home-data:
+  clab-api-config-data:

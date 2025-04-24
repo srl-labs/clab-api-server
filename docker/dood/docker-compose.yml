@@ -1,0 +1,33 @@
+# docker/dood/docker-compose.yml
+
+services:
+  clab-api:
+    build:
+      context: ../..
+      dockerfile: ./docker/dood/Dockerfile
+      args:
+        API_USER: ${API_USER_BUILDTIME:-admin}
+        API_PASS: ${API_PASS_BUILDTIME:-admin}
+    container_name: clab-api-dood
+    restart: unless-stopped
+    network_mode: "host"
+    pid: "host"
+    privileged: true
+    volumes:
+      # Mount Docker socket from host
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Mount network namespaces
+      - /var/run/netns:/var/run/netns
+      # Mount container data for visibility
+      - /var/lib/docker/containers:/var/lib/docker/containers
+      # Persistent volumes for user data
+      - clab-api-home-data:/home
+      - clab-api-config-data:/persistent-config
+      # Optional: Mount TLS certificates if TLS_ENABLE=true in .env
+      # - ../../path/on/host/certs:/certs:ro
+    env_file:
+      - ../common/.env
+
+volumes:
+  clab-api-home-data:
+  clab-api-config-data:
