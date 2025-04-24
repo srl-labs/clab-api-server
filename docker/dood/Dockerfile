@@ -64,15 +64,14 @@ RUN if [ -z "$CLAB_VERSION" ]; then \
 RUN containerlab version
 
 # User setup
-RUN groupadd docker 2>/dev/null || true
 ARG API_USER=admin
 ARG API_PASS=admin
 RUN useradd -m -s /bin/bash ${API_USER} \
  && (getent group clab_admins || groupadd clab_admins) \
  && usermod -aG clab_admins,docker ${API_USER} \
+ && usermod -aG clab_admins,docker root \
  && echo "${API_USER}:${API_PASS}" | chpasswd \
  && echo "INFO: Created user '${API_USER}' with provided password."
-
 WORKDIR /app
 
 # Copy Go module files first for caching

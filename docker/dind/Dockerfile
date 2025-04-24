@@ -83,7 +83,8 @@ ARG API_USER=admin
 ARG API_PASS=admin
 RUN useradd -m -s /bin/bash ${API_USER} \
  && (getent group clab_admins || groupadd clab_admins) \
- && usermod -aG clab_admins ${API_USER} \
+ && usermod -aG clab_admins,docker ${API_USER} \
+ && usermod -aG clab_admins,docker root \
  && echo "${API_USER}:${API_PASS}" | chpasswd \
  && echo "INFO: Created user '${API_USER}' with provided password."
 

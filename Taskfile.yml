@@ -57,7 +57,7 @@ tasks:
         echo "Running tests..."
         export GOTEST_LOG_LEVEL=debug
         set -a && [ -f tests_go/.env ] && . tests_go/.env ; set +a
-        gotestsum --format=standard-verbose --jsonfile=test-reports/test-output.json ./... || true
+        gotestsum --format=standard-verbose --jsonfile=test-reports/test-output.json -- -count=1 ./... || true
 
   generate-report:
     desc: Generate HTML test report
