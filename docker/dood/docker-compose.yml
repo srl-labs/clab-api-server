@@ -22,6 +22,7 @@ services:
       - /var/lib/docker/containers:/var/lib/docker/containers
       # Persistent volumes for user data
       - clab-api-home-data:/home
+      - ${CLAB_SHARED_LABS_DIR:-/opt/containerlab/labs}:${CLAB_SHARED_LABS_DIR:-/opt/containerlab/labs}
       - clab-api-config-data:/persistent-config
       # Optional: Mount TLS certificates if TLS_ENABLE=true in .env
       # - ../../path/on/host/certs:/certs:ro
