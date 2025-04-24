@@ -306,7 +306,7 @@ The entrypoint script:
 #### SSH Proxy Settings
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SSH_BASE_PORT` | `2222` | Starting port for SSH proxy allocation |
+| `SSH_BASE_PORT` | `2223` | Starting port for SSH proxy allocation |
 | `SSH_MAX_PORT` | `2322` | Maximum port for SSH proxy allocation |
 
 #### TLS Settings

@@ -214,7 +214,7 @@ func ListSSHSessionsHandler(c *gin.Context) {
 // @Tags SSH Access
 // @Security BearerAuth
 // @Produce json
-// @Param port path int true "SSH session port to terminate" example="2222"
+// @Param port path int true "SSH session port to terminate" example="2223"
 // @Success 200 {object} models.GenericSuccessResponse "Session terminated successfully"
 // @Failure 400 {object} models.ErrorResponse "Invalid port parameter"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"

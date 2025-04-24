@@ -148,7 +148,7 @@ nano docker/common/.env  # Edit configuration as needed
 | `CLAB_RUNTIME` | `docker` | Container runtime used by Containerlab |
 | `LOG_LEVEL` | `info` | Log verbosity (`debug`, `info`, `warn`, `error`) |
 | `GIN_MODE` | `release` | Web framework mode (`debug` or `release`) |
-| `SSH_BASE_PORT` | `2222` | Starting port for SSH proxy allocation |
+| `SSH_BASE_PORT` | `2223` | Starting port for SSH proxy allocation |
 | `SSH_MAX_PORT` | `2322` | Maximum port for SSH proxy allocation |
 | `TLS_ENABLE` | `false` | Enable TLS for HTTPS |
 | `TLS_CERT_FILE` | | Path to TLS certificate when enabled |

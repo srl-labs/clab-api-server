@@ -48,7 +48,7 @@ func LoadConfig(envFilePath string) error {
 	viper.SetDefault("GIN_MODE", "debug")
 	viper.SetDefault("TRUSTED_PROXIES", "")
 	viper.SetDefault("API_SERVER_HOST", "")
-	viper.SetDefault("SSH_BASE_PORT", 2222) // Default base port for SSH proxy
+	viper.SetDefault("SSH_BASE_PORT", 2223) // Default base port for SSH proxy
 	viper.SetDefault("SSH_MAX_PORT", 2322)  // Default max port for SSH proxy (allows 100 sessions)
 
 	err := viper.ReadInConfig()

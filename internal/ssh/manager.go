@@ -16,7 +16,7 @@ import (
 
 // Configuration constants for SSH proxy service
 const (
-	DefaultSSHBasePort       = 2222           // Starting port for SSH proxy allocation
+	DefaultSSHBasePort       = 2223           // Starting port for SSH proxy allocation
 	DefaultSSHMaxPort        = 2322           // Maximum port (allows 100 concurrent sessions)
 	DefaultSSHCleanupTick    = time.Minute    // Cleanup interval for expired sessions
 	DefaultSSHSessionTimeout = time.Hour      // Default session duration if not specified
