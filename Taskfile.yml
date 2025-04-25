@@ -11,11 +11,9 @@ tasks:
           sudo apt-get install -y build-essential libpam-dev
         elif command -v dnf > /dev/null; then
           echo "Using dnf..."
-          sudo dnf groupinstall -y "Development Tools"
           sudo dnf install -y pam-devel
         elif command -v yum > /dev/null; then
           echo "Using yum..."
-          sudo yum groupinstall -y "Development Tools"
           sudo yum install -y pam-devel
         else
           echo "Unsupported package manager. Please install the dependencies manually."
