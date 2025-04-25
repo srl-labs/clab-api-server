@@ -22,6 +22,7 @@ import (
 	"github.com/srl-labs/clab-api-server/internal/api"
 	"github.com/srl-labs/clab-api-server/internal/auth"
 	"github.com/srl-labs/clab-api-server/internal/config"
+	"github.com/srl-labs/clab-api-server/internal/templates"
 )
 
 // --- Version Info ---
@@ -101,8 +102,8 @@ func main() {
 	}
 
 	// --- Check dependencies ---
-	if _, err := exec.LookPath("clab"); err != nil {
-		log.Fatalf("'clab' command not found in PATH. Please install Containerlab (containerlab.dev).")
+	if _, err := exec.LookPath("containerlab"); err != nil {
+		log.Fatalf("'containerlab' command not found in PATH. Please install Containerlab (containerlab.dev).")
 	}
 	log.Info("'clab' command found in PATH.")
 
@@ -128,8 +129,10 @@ func main() {
 	log.Infof("Gin running in '%s' mode", gin.Mode())
 	router := gin.Default() // Use Default for logging and recovery middleware
 
-	// Load HTML templates
-	router.LoadHTMLGlob("templates/*.html")
+	// Then in the router setup section:
+	if err := templates.LoadTemplates(router); err != nil {
+		log.Fatalf("Failed to load embedded templates: %v", err)
+	}
 
 	// Configure trusted proxies
 	if config.AppConfig.TrustedProxies == "nil" {

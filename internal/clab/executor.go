@@ -14,7 +14,7 @@ import (
 	"github.com/srl-labs/clab-api-server/internal/config"
 )
 
-const clabExecutable = "clab"          // Assumes clab is in PATH
+const clabExecutable = "containerlab"  // Assumes clab is in PATH
 const defaultTimeout = 5 * time.Minute // Timeout for clab commands
 
 // RunClabCommand executes a clab command directly as the user running the API server.
