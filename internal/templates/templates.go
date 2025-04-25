@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+//go:embed *.html
 var TemplateFS embed.FS
 
 // LoadTemplates loads the embedded templates into the Gin engine
