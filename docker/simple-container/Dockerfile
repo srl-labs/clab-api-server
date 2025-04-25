@@ -3,7 +3,7 @@ FROM debian:bookworm-slim
 # Set noninteractive frontend for apt-get
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install base dependencies and required tools (reduced list)
+# Install base dependencies and required tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -45,8 +45,11 @@ RUN groupadd --system docker && \
 
 WORKDIR /app
 
-# Copy the pre-built clab-api-server binary instead of building it
-COPY ./clab-api-server /usr/local/bin/clab-api-server
+# ARG to specify the target architecture (automatically set by Buildx)
+ARG TARGETARCH=amd64
+
+# Copy the correct pre-built binary based on the target architecture
+COPY dist/clab-api-server-linux-${TARGETARCH} /usr/local/bin/clab-api-server
 RUN chmod +x /usr/local/bin/clab-api-server
 
 # Copy the example .env file to provide configuration

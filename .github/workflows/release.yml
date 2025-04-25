@@ -5,7 +5,8 @@ on:
     types: [created]
 
 permissions:
-  contents: write
+  contents: write # Needed for uploading release assets
+  packages: write # Needed for pushing packages (Docker images) to GHCR
 
 jobs:
   build:
@@ -13,7 +14,7 @@ jobs:
 
     steps:
     #---------------------------------------------------------------
-    # 1 — Checkout with full history (tags needed for git describe)
+    # 1 — Checkout with full history (tags needed for git describe)
     #---------------------------------------------------------------
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -21,50 +22,40 @@ jobs:
         fetch-depth: 0
 
     #---------------------------------------------------------------
-    # 2 — Export build‑time metadata (VERSION, COMMIT, DATE)
+    # 2 — Export build‑time metadata (VERSION, COMMIT, DATE)
     #---------------------------------------------------------------
     - name: Export build metadata
       run: |
-        echo "VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo development)" >>"$GITHUB_ENV"
+        # Use the release tag name directly for VERSION
+        echo "VERSION=${{ github.event.release.tag_name }}" >>"$GITHUB_ENV"
         echo "COMMIT=$(git rev-parse --short HEAD || echo unknown)" >>"$GITHUB_ENV"
         echo "DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >>"$GITHUB_ENV"
+        echo "REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
 
     #---------------------------------------------------------------
-    # 3 — Fast Go installer
+    # 3 — Fast Go installer
     #---------------------------------------------------------------
     - name: Setup Go (fast)
       uses: WillAbides/setup-go-faster@v1.14.0
       with:
-        go-version: '1.21.x'
+        go-version: '1.21.x' # Consider updating if needed
 
     #---------------------------------------------------------------
-    # 4 — Fix mirrors, add arm64 repos, install cross tool‑chain
+    # 4 — Fix mirrors, add arm64 repos, install cross tool‑chain
     #---------------------------------------------------------------
     - name: Configure apt and install cross tool‑chain
       run: |
         set -euxo pipefail
-
-        # a) enable the architecture
         sudo dpkg --add-architecture arm64
-
-        # b) swap flaky Azure mirror for canonical one
         sudo sed -Ei 's|http://azure\.archive\.ubuntu\.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
-
-        # c) restrict existing mirrors to amd64 only
         sudo sed -Ei 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list
-
-        # d) add ports.ubuntu.com as the arm64 mirror
         sudo tee /etc/apt/sources.list.d/arm64-ports.list > /dev/null <<'EOF'
         deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse
         deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse
         deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse
         deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-backports main restricted universe multiverse
         EOF
-
-        # e) refresh indices (retry on transient 404s)
         for i in {1..5}; do sudo apt-get update -qq && break || sleep 5; done
-
-        # f) install cross compiler + headers
         for i in {1..5}; do \
           sudo apt-get install -y --no-install-recommends \
             build-essential \
@@ -74,12 +65,10 @@ jobs:
             libpam0g-dev:arm64 \
           && break || { sudo apt-get -y --fix-broken install || true; sleep 5; }; \
         done
-
-        # g) sanity check
         dpkg -l gcc-aarch64-linux-gnu linux-libc-dev:arm64 libpam0g-dev:arm64
 
     #---------------------------------------------------------------
-    # 5 — Cache Go modules / build cache
+    # 5 — Cache Go modules / build cache
     #---------------------------------------------------------------
     - name: Cache Go modules
       uses: actions/cache@v4
@@ -92,9 +81,9 @@ jobs:
           ${{ runner.os }}-go-
 
     #---------------------------------------------------------------
-    # 6 — Build linux/amd64
+    # 6 — Build linux/amd64 binary
     #---------------------------------------------------------------
-    - name: Build linux/amd64
+    - name: Build linux/amd64 binary
       run: |
         mkdir -p dist
         CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
@@ -105,9 +94,9 @@ jobs:
           -o dist/clab-api-server-linux-amd64 ./cmd/server
 
     #---------------------------------------------------------------
-    # 7 — Build linux/arm64
+    # 7 — Build linux/arm64 binary
     #---------------------------------------------------------------
-    - name: Build linux/arm64
+    - name: Build linux/arm64 binary
       env:
         CC: aarch64-linux-gnu-gcc
         PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig
@@ -120,16 +109,63 @@ jobs:
           -o dist/clab-api-server-linux-arm64 ./cmd/server
 
     #---------------------------------------------------------------
-    # 8 — Make binaries executable
+    # 8 — Make binaries executable (Optional but good practice)
     #---------------------------------------------------------------
     - name: Make binaries executable
       run: |
         chmod +x dist/clab-api-server-linux-*
 
     #---------------------------------------------------------------
-    # 9 — Upload binaries to the GitHub Release page
+    # Docker Buildx Setup and Login
     #---------------------------------------------------------------
-    - name: Upload Release Assets
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    #---------------------------------------------------------------
+    # Extract Docker metadata (tags, labels)
+    #---------------------------------------------------------------
+    - name: Extract Docker metadata for simple-container
+      id: meta_simple
+      uses: docker/metadata-action@v5
+      with:
+        images: ghcr.io/${{ env.REPO_LOWER }}/clab-api-server # Use lowercase repo name
+        tags: |
+          type=schedule
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}} # e.g., v1.2.3
+          type=semver,pattern={{major}}.{{minor}} # e.g., v1.2
+          type=sha # Git SHA
+
+    #---------------------------------------------------------------
+    # Build and push simple-container multi-arch image
+    #---------------------------------------------------------------
+    - name: Build and push simple-container
+      uses: docker/build-push-action@v5
+      with:
+        context: . # Build context is the repo root
+        file: ./docker/simple-container/Dockerfile # Path to the Dockerfile
+        platforms: linux/amd64,linux/arm64 # Target platforms
+        push: true # Push the image to the registry
+        tags: ${{ steps.meta_simple.outputs.tags }} # Use tags generated by metadata-action
+        labels: ${{ steps.meta_simple.outputs.labels }} # Use labels generated by metadata-action
+        cache-from: type=gha # Enable GitHub Actions cache for build layers
+        cache-to: type=gha,mode=max
+
+    #---------------------------------------------------------------
+    # 9 — Upload binaries to the GitHub Release page
+    #---------------------------------------------------------------
+    - name: Upload Release Assets (Binaries)
       uses: softprops/action-gh-release@v1
       with:
         files: |
