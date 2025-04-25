@@ -39,6 +39,9 @@ vendor/
 *.tmp
 *.bak
 
+# Build
+dist/
+
 # Ignore all env files
 .env
 .env.*
