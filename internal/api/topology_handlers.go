@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -148,42 +147,25 @@ func GenerateTopologyHandler(c *gin.Context) {
 	// --- Determine Output/Action and Target File Path ---
 	var targetFilePath string // Path used by clab generate --file and clab deploy -t
 	var err error
-	var usr *user.User
 	var uid, gid int
 
 	if req.Deploy {
-		// --- Deploy=true: Save to user's ~/.clab/<labName>/ directory ---
+		// --- Deploy=true: Save to shared or user's .clab directory ---
 		if req.OutputFile != "" {
-			log.Warnf("GenerateTopology user '%s': 'outputFile' field provided but Deploy=true. Ignoring 'outputFile' and saving to user's ~/.clab directory.", username)
+			log.Warnf("GenerateTopology user '%s': 'outputFile' field provided but Deploy=true. Ignoring 'outputFile' and saving to appropriate lab directory.", username)
 		}
 
-		// Get User Home Directory, UID/GID
-		usr, err = user.Lookup(username)
+		// --- Get Lab Directory and User UID/GID ---
+		targetDir, uid, gid, err := getLabDirectoryInfo(username, req.Name)
 		if err != nil {
-			log.Errorf("GenerateTopology failed for user '%s': Could not determine user details: %v", username, err)
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Could not determine user details."})
-			return
-		}
-		homeDir := usr.HomeDir
-		uid, err = strconv.Atoi(usr.Uid)
-		if err != nil {
-			log.Errorf("GenerateTopology failed for user '%s': Could not process user UID: %v", username, err)
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Could not process user UID."})
-			return
-		}
-		gid, err = strconv.Atoi(usr.Gid)
-		if err != nil {
-			log.Errorf("GenerateTopology failed for user '%s': Could not process user GID: %v", username, err)
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Could not process user GID."})
+			log.Errorf("GenerateTopology failed for user '%s': %v", username, err)
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
 			return
 		}
 
-		// Construct Paths, Create Dir, Set Ownership
-		clabUserDir := filepath.Join(homeDir, ".clab")
-		targetDir := filepath.Join(clabUserDir, req.Name)               // Use req.Name for the directory
 		targetFilePath = filepath.Join(targetDir, req.Name+".clab.yml") // Use req.Name for the filename
 
-		err = os.MkdirAll(targetDir, 0750) // Create user's lab dir
+		err = os.MkdirAll(targetDir, 0750) // Create lab dir
 		if err != nil {
 			log.Errorf("GenerateTopology failed for user '%s': Failed to create lab directory '%s': %v", username, targetDir, err)
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to create lab directory: %s.", err.Error())})

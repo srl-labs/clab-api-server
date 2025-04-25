@@ -201,31 +201,15 @@ func DeployLabHandler(c *gin.Context) {
 
 	// --- Handle Topology Content Saving (if applicable) ---
 	if hasContent {
-		// --- Get User Home Directory, UID/GID ---
-		usr, err := user.Lookup(username)
+		// --- Get Lab Directory and User UID/GID ---
+		targetDir, uid, gid, err := getLabDirectoryInfo(username, originalLabName)
 		if err != nil {
-			log.Errorf("DeployLab failed for user '%s': Could not determine user details: %v", username, err)
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Could not determine user details."})
-			return
-		}
-		homeDir := usr.HomeDir
-		uid, err := strconv.Atoi(usr.Uid)
-		if err != nil {
-			log.Errorf("DeployLab failed for user '%s': Could not process user UID: %v", username, err)
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Could not process user UID."})
-			return
-		}
-		gid, err := strconv.Atoi(usr.Gid)
-		if err != nil {
-			log.Errorf("DeployLab failed for user '%s': Could not process user GID: %v", username, err)
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Could not process user GID."})
+			log.Errorf("DeployLab failed for user '%s': %v", username, err)
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
 			return
 		}
 
-		// --- Construct Paths, Create Dirs, Set Ownership, Write File ---
-		// Use originalLabName for directory structure to match clab's behavior
-		clabUserDir := filepath.Join(homeDir, ".clab")
-		targetDir := filepath.Join(clabUserDir, originalLabName)
+		// --- Create Directory, Set Ownership, Write File ---
 		targetFilePath := filepath.Join(targetDir, originalLabName+".clab.yml")
 		topoPathForClab = targetFilePath // Update path for clab command
 
@@ -347,22 +331,6 @@ func DeployLabArchiveHandler(c *gin.Context) {
 	username := c.GetString("username")
 	ctx := c.Request.Context()
 
-	// --- Get User Details (uid, gid, homeDir) ---
-	usr, err := user.Lookup(username)
-	if err != nil {
-		log.Errorf("DeployLab (Archive) failed for user '%s': Could not determine user details: %v", username, err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Could not determine user details."})
-		return
-	}
-	uid, uidErr := strconv.Atoi(usr.Uid)
-	gid, gidErr := strconv.Atoi(usr.Gid)
-	if uidErr != nil || gidErr != nil {
-		log.Errorf("DeployLab (Archive) failed for user '%s': Could not process user UID/GID: %v / %v", username, uidErr, gidErr)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Could not process user UID/GID."})
-		return
-	}
-	homeDir := usr.HomeDir
-
 	// --- Get Lab Name (Required Query Parameter) ---
 	labName := c.Query("labName")
 	if labName == "" {
@@ -411,7 +379,13 @@ func DeployLabArchiveHandler(c *gin.Context) {
 		return
 	}
 
-	targetDir := filepath.Join(homeDir, ".clab", labName)
+	// --- Get Lab Directory and User UID/GID ---
+	targetDir, uid, gid, err := getLabDirectoryInfo(username, labName)
+	if err != nil {
+		log.Errorf("DeployLab (Archive) failed for user '%s': %v", username, err)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
+		return
+	}
 
 	if exists {
 		if !reconfigure {
@@ -688,14 +662,25 @@ func DestroyLabHandler(c *gin.Context) {
 		// We need to derive the *directory* from the path.
 		if originalTopoPath != "" && !strings.HasPrefix(originalTopoPath, "http") && !strings.Contains(originalTopoPath, "://") { // Basic check it's a local path
 			targetDir := filepath.Dir(originalTopoPath)
-			// Sanity check: ensure the directory is within the expected ~/.clab structure
-			usr, lookupErr := user.Lookup(username)
+
+			// Sanity check the directory
+			// If CLAB_SHARED_LABS_DIR is set, ensure it's within that structure
+			// Otherwise, ensure it's within the user's ~/.clab structure
+			sharedDir := os.Getenv("CLAB_SHARED_LABS_DIR")
 			expectedBase := ""
-			if lookupErr == nil {
-				expectedBase = filepath.Join(usr.HomeDir, ".clab")
+
+			if sharedDir != "" {
+				// Using shared directory
+				expectedBase = filepath.Join(sharedDir, "users", username)
+			} else {
+				// Using user's home directory
+				usr, lookupErr := user.Lookup(username)
+				if lookupErr == nil {
+					expectedBase = filepath.Join(usr.HomeDir, ".clab")
+				}
 			}
 
-			if expectedBase != "" && strings.HasPrefix(targetDir, expectedBase) && targetDir != expectedBase { // Prevent deleting ~/.clab itself
+			if expectedBase != "" && strings.HasPrefix(targetDir, expectedBase) && targetDir != expectedBase {
 				log.Infof("DestroyLab user '%s': Cleanup requested. Removing directory: %s", username, targetDir)
 				cleanupErr := os.RemoveAll(targetDir)
 				if cleanupErr != nil {
@@ -705,7 +690,7 @@ func DestroyLabHandler(c *gin.Context) {
 					log.Infof("Successfully cleaned up topology directory '%s' for user '%s'", targetDir, username)
 				}
 			} else {
-				log.Warnf("DestroyLab user '%s': Cleanup requested but skipping directory removal for path '%s'. Reason: Path is not within expected ~/.clab structure or original path unknown/remote.", username, targetDir)
+				log.Warnf("DestroyLab user '%s': Cleanup requested but skipping directory removal for path '%s'. Reason: Path is not within expected structure or original path unknown/remote.", username, targetDir)
 			}
 		} else {
 			log.Infof("DestroyLab user '%s': Cleanup requested but skipping directory removal. Reason: Lab likely deployed from URL or original path unknown.", username)

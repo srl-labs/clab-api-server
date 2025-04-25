@@ -565,3 +565,34 @@ func extractTarGz(archiveReader io.Reader, targetDir string, uid, gid int) error
 	}
 	return nil
 }
+
+// getLabDirectoryInfo returns the appropriate directory path for a lab based on environment variables,
+// along with the user's UID/GID for ownership operations.
+// If CLAB_SHARED_LABS_DIR is set, it returns $CLAB_SHARED_LABS_DIR/users/$username/$labName
+// Otherwise, it returns $HOME/.clab/$labName
+func getLabDirectoryInfo(username, labName string) (targetDir string, uid, gid int, err error) {
+	// Get user details first (needed for UID/GID regardless of path)
+	usr, err := user.Lookup(username)
+	if err != nil {
+		return "", -1, -1, fmt.Errorf("could not determine user details: %w", err)
+	}
+
+	uid, uidErr := strconv.Atoi(usr.Uid)
+	if uidErr != nil {
+		return "", -1, -1, fmt.Errorf("could not process user UID: %w", uidErr)
+	}
+
+	gid, gidErr := strconv.Atoi(usr.Gid)
+	if gidErr != nil {
+		return "", -1, -1, fmt.Errorf("could not process user GID: %w", gidErr)
+	}
+
+	// Determine the target directory
+	sharedDir := os.Getenv("CLAB_SHARED_LABS_DIR")
+	if sharedDir != "" {
+		return filepath.Join(sharedDir, "users", username, labName), uid, gid, nil
+	}
+
+	// Fall back to user's home directory
+	return filepath.Join(usr.HomeDir, ".clab", labName), uid, gid, nil
+}
