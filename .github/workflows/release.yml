@@ -169,7 +169,7 @@ jobs:
       id: meta_builder
       uses: docker/metadata-action@v5
       with:
-        images: ghcr.io/srl-labs/clab-api-builder
+        images: ghcr.io/${{ env.REPO_LOWER }}/clab-api-builder # Use the same repo namespace
         tags: |
           type=schedule
           type=ref,event=branch

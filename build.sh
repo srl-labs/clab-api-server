@@ -21,12 +21,12 @@ DIST_DIR="dist"
 # -----------------------------------------------------------------------------
 function build-builder-image {
     echo "Building builder image..."
-    docker build -t ghcr.io/srl-labs/clab-api-builder:latest -f docker/build.dockerfile .
+    docker build -t ghcr.io/srl-labs/clab-api-server/clab-api-builder:latest -f docker/build.dockerfile .
 }
 
 function build-with-builder-image {
     echo "Building clab-api-server using the builder image..."
-    docker run --rm -i -t -v $(pwd):/app ghcr.io/srl-labs/clab-api-builder:latest
+    docker run --rm -i -t -v $(pwd):/app ghcr.io/srl-labs/clab-api-server/clab-api-builder:latest
 }
 
 function setup-env {
