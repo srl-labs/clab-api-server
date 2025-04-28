@@ -1,6 +1,6 @@
 module github.com/srl-labs/clab-api-server
 
-go 1.24.2
+go 1.24
 
 require (
 	github.com/charmbracelet/log v0.4.1
