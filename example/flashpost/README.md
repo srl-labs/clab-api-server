@@ -4,7 +4,7 @@ Flashpost is a free alternative to [Postman](https://www.postman.com/) that runs
 
 This folder contains a flashpost collection that demonstrates how to use Containerlab API.
 
-The collection assumes that the server is running on `localhost:8080`, but you can change the server URL in the available requests.
+The collection assumes that the server is running on `localhost:8080`, but you can change the server URL via a variable.
 
 To use the collection, import it from the json file.
 
@@ -14,3 +14,4 @@ The collection makes use of the following variables:
 
 * `USER_NAME` - linux user name that client will use for authentication with the clab api server
 * `USER_PASSWORD` - linux user password that client will use for authentication with the clab api server
+* `baseUrl` - for example: `localhost:8080`
