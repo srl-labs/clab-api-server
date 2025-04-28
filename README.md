@@ -14,7 +14,7 @@ A standalone RESTful API server for managing [Containerlab](https://containerlab
 * **Topology Tools:** Generate and deploy CLOS topologies
 * **Network Tools:** Manage network emulation, virtual Ethernet pairs, VxLAN tunnels
 * **Certification Tools:** Certificate management
-* **User Management:** Create, update, delete users and manage permissions
+* **User Management:** Create, update, delete users and manage permissions using Linux system accounts
 * **Health Monitoring:** Check server health status and system metrics
 * **User Context:** Track ownership and manage files within user home directories
 * **Multitenancy:** Support for multiple users with separate access to labs
@@ -39,7 +39,7 @@ A standalone RESTful API server for managing [Containerlab](https://containerlab
 
 ## 🚀 Deployment Options
 
-The Containerlab API Server can be deployed in three primary ways:
+The Containerlab API Server can be deployed in several ways:
 
 ### 1. Binary Installation (Recommended for Production)
 
@@ -56,65 +56,47 @@ This will:
 
 For post-installation steps, see the [Post-Install Configuration](#-post-install-configuration) section below.
 
-### 2. Docker-in-Docker (DinD) Deployment
+### 2. Docker Deployment
 
-A fully self-contained Docker solution with its own internal Docker engine:
-
-```bash
-# Clone the repository
-git clone https://github.com/srl-labs/clab-api-server.git
-cd clab-api-server
-
-# Configure environment variables
-cp docker/common/.env.example docker/common/.env
-nano docker/common/.env  # Edit configuration as needed
-
-# Build the Docker image
-docker compose -f docker/dind/docker-compose.yml build
-
-# Start the service
-./clab-api-manager.sh dind start
-```
-
-**Advantages:**
-- Completely isolated environment
-- No need to mount the host Docker socket
-- Clean separation between host and API container
-
-**Considerations:**
-- Additional performance overhead
-- Double-nested containers
-- Docker storage managed within a volume
-
-### 3. Docker-out-of-Docker (DooD) Deployment
-
-Uses the host's Docker daemon for better performance:
+Run the API server as a Docker container with access to the host resources:
 
 ```bash
-# Clone the repository
+docker run -d \
+  --name clab-api-server \
+  --privileged \
+  --network host \
+  --pid host \
+  -e LOG_LEVEL=debug \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /var/run/netns:/var/run/netns \
+  -v /var/lib/docker/containers:/var/lib/docker/containers \
+  -v /usr/bin/containerlab:/usr/bin/containerlab:ro \
+  -v /etc/passwd:/etc/passwd:ro \
+  -v /etc/shadow:/etc/shadow:ro \
+  -v /etc/group:/etc/group:ro \
+  -v /etc/gshadow:/etc/gshadow:ro \
+  -v /home:/home \
+  ghcr.io/srl-labs/clab-api-server/clab-api-server:latest
+```
+> [!NOTE]
+> Volume mounts enable Docker management, networking features, Linux PAM authentication, and user file storage.
+
+
+### 3. Other Docker Deployment Options
+
+The repository also includes support for Docker-in-Docker (DinD) and Docker-out-of-Docker (DooD) deployment models:
+
+- **Docker-in-Docker (DinD)**: A fully isolated environment with its own Docker engine
+- **Docker-out-of-Docker (DooD)**: Uses the host's Docker daemon for better performance
+
+For these options, clone the repository and use the provided `clab-api-manager.sh` script:
+
+```bash
 git clone https://github.com/srl-labs/clab-api-server.git
 cd clab-api-server
-
-# Configure environment variables
-cp docker/common/.env.example docker/common/.env
-nano docker/common/.env  # Edit configuration as needed
-
-# Build the Docker image
-docker compose -f docker/dood/docker-compose.yml build
-
-# Start the service
-./clab-api-manager.sh dood start
+cp docker/common/.env.example docker/common/.env  # Edit as needed
+./clab-api-manager.sh [dind|dood] start
 ```
-
-**Advantages:**
-- Better performance compared to DinD
-- Access to host's existing images
-- Single Docker layer
-
-**Considerations:**
-- Requires privileged access to host Docker socket
-- Shared resource space with the host
-- Potential security implications
 
 ## 🔧 Post-Install Configuration
 
@@ -160,21 +142,39 @@ docker compose -f docker/dood/docker-compose.yml build
 | `TLS_CERT_FILE` | | Path to TLS certificate when enabled |
 | `TLS_KEY_FILE` | | Path to TLS private key when enabled |
 
-## 📡 Managing Containerized Deployments
+## 🔐 Authentication
 
-The `clab-api-manager.sh` script simplifies managing Docker deployments:
+The Containerlab API Server uses Linux system users and passwords for authentication. Users must:
+
+* Exist as valid Linux users on the system where the API server runs
+* Belong to the configured `API_USER_GROUP` (`clab_api` by default) or `SUPERUSER_GROUP` (`clab_admins` by default)
+
+When authenticating via the API, provide the Linux username and password to receive a JWT token for subsequent requests.
+
+## 📡 Managing Docker Deployments
+
+For the simple Docker deployment, use standard Docker commands:
 
 ```bash
-# Basic commands (replace [dind|dood] with your preferred implementation)
+# Basic commands
+docker start clab-api-server    # Start the service
+docker stop clab-api-server     # Stop the service
+docker restart clab-api-server  # Restart the service
+docker ps -f name=clab-api-server  # Check service status
+docker logs clab-api-server     # View logs
+docker logs -f clab-api-server  # Follow logs
+```
+
+For DinD/DooD deployments, use the provided management script:
+
+```bash
+# Basic commands
 ./clab-api-manager.sh [dind|dood] start    # Start the service
 ./clab-api-manager.sh [dind|dood] stop     # Stop the service
-./clab-api-manager.sh [dind|dood] restart  # Restart the service
-./clab-api-manager.sh [dind|dood] status   # Check service status
 ./clab-api-manager.sh [dind|dood] logs     # View logs
-./clab-api-manager.sh [dind|dood] logs -f  # Follow logs
 
 # Data persistence commands
-./clab-api-manager.sh [dind|dood] backup                 # Create a backup
+./clab-api-manager.sh [dind|dood] backup   # Create a backup
 ./clab-api-manager.sh [dind|dood] restore <backup-file>  # Restore from backup
 ```
 
@@ -199,10 +199,10 @@ http://<server_ip>:<API_PORT>/redoc               # ReDoc UI
 ## 🚀 API Usage Example
 
 ```bash
-# Authenticate and get token
+# Authenticate with your Linux username and password
 TOKEN=$(curl -s -X POST http://localhost:8080/login \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"your_password"}' \
+  -d '{"username":"your_linux_username","password":"your_linux_password"}' \
   | jq -r '.token')
 
 # List labs
@@ -216,6 +216,27 @@ curl -X POST http://localhost:8080/api/v1/labs \
     "topologyContent": "name: simple-lab\ntopology:\n  nodes:\n    router1:\n      kind: linux\n    router2:\n      kind: linux\n  links:\n    - endpoints: [\"router1:eth1\", \"router2:eth1\"]"
   }'
 ```
+
+## 🔌 Flashpost Collection
+
+[Flashpost](https://marketplace.visualstudio.com/items?itemName=VASubasRaj.flashpost) is a free alternative to [Postman](https://www.postman.com/) that runs entirely in VS Code as an extension.
+
+The examples folder contains a Flashpost collection that demonstrates how to use the Containerlab API. The collection provides ready-to-use requests for all API endpoints.
+
+The collection assumes that the server is running on `localhost:8080`, but you can change the server URL via a variable.
+
+To use the collection:
+
+1. Install the [Flashpost VS Code extension](https://marketplace.visualstudio.com/items?itemName=VASubasRaj.flashpost)
+2. Import the collection from the json file in the examples folder
+
+### Variables
+
+The collection makes use of the following variables:
+
+* `USER_NAME` - Linux user name that client will use for authentication with the clab api server
+* `USER_PASSWORD` - Linux user password that client will use for authentication with the clab api server
+* `baseUrl` - for example: `localhost:8080`
 
 ## 👩‍💻 Development
 
