@@ -21,15 +21,15 @@ import (
 )
 
 // @Summary Get Node Logs
-// @Description Get logs from a specific lab node (container)
+// @Description Get logs from a specific lab node (container). When follow=true, logs will stream until client disconnects or 30-minute timeout.
 // @Tags Logs
 // @Security BearerAuth
 // @Produce plain,json,octet-stream
 // @Param labName path string true "Name of the lab" example="my-lab"
 // @Param nodeName path string true "Full name of the container (node)" example="clab-my-lab-srl1"
 // @Param tail query int false "Number of lines to show from the end of logs (default all)" example="100"
-// @Param follow query boolean false "Follow log output (stream logs)" example="false"
-// @Param format query string false "Output format ('plain' or 'json'). Default is 'plain'." example="plain"
+// @Param follow query boolean false "Follow log output (stream logs). Note: In Swagger UI, streaming may not display correctly." example="false"
+// @Param format query string false "Output format ('plain' or 'json'). Default is 'plain'. When follow=true, only 'plain' format is supported." example="plain"
 // @Success 200 {string} string "Container logs (when format=plain)"
 // @Success 200 {object} models.LogsResponse "Container logs (when format=json)"
 // @Failure 400 {object} models.ErrorResponse "Invalid input (lab name, node filter, etc.)"
@@ -44,8 +44,6 @@ func GetNodeLogsHandler(c *gin.Context) {
 	containerName := c.Param("nodeName")
 	outputFormat := c.DefaultQuery("format", "plain")
 	tailQuery := c.DefaultQuery("tail", "all")
-	sinceQuery := c.Query("since")
-	untilQuery := c.Query("until")
 	follow := c.Query("follow") == "true"
 
 	// --- Validate Inputs ---
@@ -77,37 +75,6 @@ func GetNodeLogsHandler(c *gin.Context) {
 			return
 		}
 		tailLines = tailQuery
-	}
-
-	// Process since and until parameters (validate time formats or durations)
-	parsedSince := ""
-	if sinceQuery != "" {
-		// Try to parse as duration first (e.g., "10m", "1h")
-		if duration, err := time.ParseDuration(sinceQuery); err == nil {
-			parsedSince = time.Now().Add(-duration).Format(time.RFC3339)
-		} else if _, err := time.Parse(time.RFC3339, sinceQuery); err == nil {
-			// Valid RFC3339 timestamp
-			parsedSince = sinceQuery
-		} else {
-			log.Warnf("GetNodeLogs failed for user '%s': Invalid since parameter '%s'", username, sinceQuery)
-			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid 'since' parameter. Use RFC3339 timestamp or duration (e.g., '30m')."})
-			return
-		}
-	}
-
-	parsedUntil := ""
-	if untilQuery != "" {
-		// Try to parse as duration first (e.g., "10m", "1h")
-		if duration, err := time.ParseDuration(untilQuery); err == nil {
-			parsedUntil = time.Now().Add(-duration).Format(time.RFC3339)
-		} else if _, err := time.Parse(time.RFC3339, untilQuery); err == nil {
-			// Valid RFC3339 timestamp
-			parsedUntil = untilQuery
-		} else {
-			log.Warnf("GetNodeLogs failed for user '%s': Invalid until parameter '%s'", username, untilQuery)
-			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid 'until' parameter. Use RFC3339 timestamp or duration (e.g., '30m')."})
-			return
-		}
 	}
 
 	log.Debugf("GetNodeLogs user '%s': Fetching logs for lab '%s', container '%s'", username, labName, containerName)
@@ -150,14 +117,6 @@ func GetNodeLogsHandler(c *gin.Context) {
 		args = append(args, "--tail", tailLines)
 	}
 
-	if parsedSince != "" {
-		args = append(args, "--since", parsedSince)
-	}
-
-	if parsedUntil != "" {
-		args = append(args, "--until", parsedUntil)
-	}
-
 	// Add timestamps for better context
 	args = append(args, "--timestamps")
 
@@ -172,9 +131,18 @@ func GetNodeLogsHandler(c *gin.Context) {
 		c.Writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		c.Writer.Header().Set("X-Content-Type-Options", "nosniff")
 
-		// Set up a context that will be canceled when the client disconnects
-		ctx, cancel := context.WithCancel(c.Request.Context())
+		// Set up a context with timeout for streaming logs (30 minutes)
+		// This context will also be canceled when the client disconnects
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Minute)
 		defer cancel()
+
+		// Setup a notification channel to detect client disconnection
+		notifyChan := c.Writer.CloseNotify()
+		go func() {
+			<-notifyChan
+			log.Infof("Client disconnected from streaming logs for user '%s', container '%s'", username, containerName)
+			cancel() // Cancel the context to stop the command
+		}()
 
 		// Add --follow flag for streaming
 		streamCmd := append(args, "--follow")
@@ -233,15 +201,26 @@ func GetNodeLogsHandler(c *gin.Context) {
 		// Wait for stderr goroutine to finish
 		wg.Wait()
 
-		// Check for command errors
+		// Check for command errors, but handle client disconnection gracefully
 		if err := cmd.Wait(); err != nil {
-			log.Errorf("GetNodeLogs command error for user '%s', container '%s': %v. Stderr: %s",
-				username, containerName, err, stderrOutput.String())
+			// Check if the error is due to context cancellation (client disconnect or timeout)
+			if ctx.Err() != nil {
+				if ctx.Err() == context.DeadlineExceeded {
+					log.Infof("Streaming logs timed out for user '%s', container '%s' after 30 minutes", username, containerName)
+				} else {
+					// This is likely due to client disconnection which we already logged
+				}
+			} else {
+				// Only log as error if it's not due to context cancellation
+				log.Warnf("GetNodeLogs command ended for user '%s', container '%s': %v. Stderr: %s",
+					username, containerName, err, stderrOutput.String())
+			}
 			// Don't send an error response here since we've already started streaming
 		}
 
 		// Check for scanner errors
-		if err := scanner.Err(); err != nil {
+		if err := scanner.Err(); err != nil && ctx.Err() == nil {
+			// Only log as error if it's not due to context cancellation
 			log.Errorf("GetNodeLogs scanner error for user '%s', container '%s': %v",
 				username, containerName, err)
 		}
