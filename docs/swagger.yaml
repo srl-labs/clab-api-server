@@ -403,6 +403,13 @@ definitions:
       token:
         type: string
     type: object
+  models.LogsResponse:
+    properties:
+      containerName:
+        type: string
+      logs:
+        type: string
+    type: object
   models.MemMetrics:
     properties:
       availableMem:
@@ -1299,6 +1306,69 @@ paths:
       summary: Set Network Emulation
       tags:
       - Tools - Netem
+  /api/v1/labs/{labName}/nodes/{nodeName}/logs:
+    get:
+      description: Get logs from a specific lab node (container). When follow=true,
+        logs will stream until client disconnects or 30-minute timeout.
+      parameters:
+      - description: Name of the lab
+        in: path
+        name: labName
+        required: true
+        type: string
+      - description: Full name of the container (node)
+        in: path
+        name: nodeName
+        required: true
+        type: string
+      - description: Number of lines to show from the end of logs (default all)
+        in: query
+        name: tail
+        type: integer
+      - description: 'Follow log output (stream logs). Note: In Swagger UI, streaming
+          may not display correctly.'
+        in: query
+        name: follow
+        type: boolean
+      - description: Output format ('plain' or 'json'). Default is 'plain'. When follow=true,
+          only 'plain' format is supported.
+        in: query
+        name: format
+        type: string
+      produces:
+      - text/plain
+      - application/json
+      - application/octet-stream
+      responses:
+        "200":
+          description: Container logs (when format=json)
+          schema:
+            $ref: '#/definitions/models.LogsResponse'
+        "400":
+          description: Invalid input (lab name, node filter, etc.)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Forbidden (not owner of the lab)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Lab or node not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get Node Logs
+      tags:
+      - Logs
   /api/v1/labs/{labName}/nodes/{nodeName}/netem:
     get:
       description: Shows network impairments for all interfaces on a specific node

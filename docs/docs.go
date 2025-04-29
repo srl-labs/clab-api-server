@@ -955,6 +955,97 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/v1/labs/{labName}/nodes/{nodeName}/logs": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Get logs from a specific lab node (container). When follow=true, logs will stream until client disconnects or 30-minute timeout.",
+                "produces": [
+                    "text/plain",
+                    "application/json",
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "Logs"
+                ],
+                "summary": "Get Node Logs",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Name of the lab",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Full name of the container (node)",
+                        "name": "nodeName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of lines to show from the end of logs (default all)",
+                        "name": "tail",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Follow log output (stream logs). Note: In Swagger UI, streaming may not display correctly.",
+                        "name": "follow",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Output format ('plain' or 'json'). Default is 'plain'. When follow=true, only 'plain' format is supported.",
+                        "name": "format",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Container logs (when format=json)",
+                        "schema": {
+                            "$ref": "#/definitions/models.LogsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid input (lab name, node filter, etc.)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden (not owner of the lab)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Lab or node not found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/labs/{labName}/nodes/{nodeName}/netem": {
             "get": {
                 "security": [
@@ -2702,6 +2793,17 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "token": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.LogsResponse": {
+            "type": "object",
+            "properties": {
+                "containerName": {
+                    "type": "string"
+                },
+                "logs": {
                     "type": "string"
                 }
             }

@@ -16,6 +16,7 @@ A standalone RESTful API server for managing [Containerlab](https://containerlab
 * **Certification Tools:** Certificate management
 * **User Management:** Create, update, delete users and manage permissions using Linux system accounts
 * **Health Monitoring:** Check server health status and system metrics
+* **Logs:** Check logs of the nodes, static or streaming
 * **User Context:** Track ownership and manage files within user home directories
 * **Multitenancy:** Support for multiple users with separate access to labs
 * **Documentation:** Embedded Swagger UI and ReDoc for API exploration

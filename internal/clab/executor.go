@@ -5,9 +5,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/log"
@@ -120,4 +122,51 @@ func SanitizePath(relativePath string) (string, error) {
 	// Use log.Debug (key-value) instead of log.Debugf
 	log.Debug("Sanitized path", "original", relativePath, "cleaned", cleanedPath)
 	return cleanedPath, nil
+}
+
+func RunCommandWithWriters(ctx context.Context, stdout io.Writer, stderr io.Writer, command string, args ...string) (string, string, error) {
+	// Create command with context for cancellation
+	cmd := exec.CommandContext(ctx, command, args...)
+
+	// Create pipes for stdout and stderr
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", "", err
+	}
+
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return "", "", err
+	}
+
+	// Start the command
+	if err := cmd.Start(); err != nil {
+		return "", "", err
+	}
+
+	// Use WaitGroup to ensure both goroutines complete
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Copy stdout to writer and buffer simultaneously if needed
+	go func() {
+		defer wg.Done()
+		io.Copy(stdout, stdoutPipe)
+	}()
+
+	// Copy stderr to writer and buffer simultaneously if needed
+	go func() {
+		defer wg.Done()
+		io.Copy(stderr, stderrPipe)
+	}()
+
+	// Wait for both pipes to be closed
+	wg.Wait()
+
+	// Wait for the command to complete
+	err = cmd.Wait()
+
+	// For consistency with RunCommand, we return empty strings for stdout and stderr
+	// since we've already streamed them to the provided writers
+	return "", "", err
 }
