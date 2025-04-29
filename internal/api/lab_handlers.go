@@ -704,15 +704,24 @@ func DestroyLabHandler(c *gin.Context) {
 
 // @Summary Redeploy Lab
 // @Description Redeploys a lab by name, effectively running destroy and then deploy. Checks ownership.
-// @Description Uses the original topology file path found during inspection.
+// @Description Uses the original topology file path found during inspection. Optional flags are provided via query parameters.
 // @Tags Labs
 // @Security BearerAuth
-// @Accept json
 // @Produce json
-// @Param labName path string true "Name of the lab to redeploy" example="my-test-lab"
-// @Param redeploy_request body models.RedeployRequest true "Redeployment options"
+// @Param labName path string true "Name of the lab to redeploy" example:"my-test-lab"
+// @Param cleanup query boolean false "Remove containerlab artifacts before deploy (default: false)" example:"false"
+// @Param graceful query boolean false "Attempt graceful shutdown of containers (default: false)" example:"true"
+// @Param graph query boolean false "Generate graph during redeploy (default: false)" example:"false"
+// @Param network query string false "Override management network name" example:"my-custom-mgmt-net"
+// @Param ipv4Subnet query string false "Override management network IPv4 subnet (CIDR)" example:"172.30.30.0/24"
+// @Param ipv6Subnet query string false "Override management network IPv6 subnet (CIDR)" example:"2001:172:30:30::/64"
+// @Param maxWorkers query int false "Limit concurrent workers (0 or omit for default)." example:"4"
+// @Param keepMgmtNet query boolean false "Keep the management network during destroy phase (default: false)" example:"true"
+// @Param skipPostDeploy query boolean false "Skip post-deploy actions defined for nodes (default: false)" example:"false"
+// @Param exportTemplate query string false "Custom Go template file for topology data export ('__full' for full export)." example:"__full"
+// @Param skipLabdirAcl query boolean false "Skip setting extended ACLs on lab directory (default: false)" example:"true"
 // @Success 200 {object} object "Raw JSON output from 'clab redeploy' (or plain text on error)"
-// @Failure 400 {object} models.ErrorResponse "Invalid lab name or options"
+// @Failure 400 {object} models.ErrorResponse "Invalid lab name or query parameter options"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
 // @Failure 404 {object} models.ErrorResponse "Lab not found or not owned by user"
 // @Failure 500 {object} models.ErrorResponse "Internal server error or clab execution failed"
@@ -728,23 +737,33 @@ func RedeployLabHandler(c *gin.Context) {
 		return
 	}
 
-	// --- Bind Request Body ---
-	var req models.RedeployRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		log.Warnf("RedeployLab failed for user '%s', lab '%s': Invalid request body: %v", username, labName, err)
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid request body: " + err.Error()})
+	// --- Get & Validate Optional Query Parameters ---
+	cleanup := c.Query("cleanup") == "true"
+	graceful := c.Query("graceful") == "true"
+	graph := c.Query("graph") == "true" // Added from model
+	network := c.Query("network")
+	ipv4Subnet := c.Query("ipv4Subnet")
+	ipv6Subnet := c.Query("ipv6Subnet")
+	maxWorkersStr := c.DefaultQuery("maxWorkers", "0")
+	keepMgmtNet := c.Query("keepMgmtNet") == "true"
+	skipPostDeploy := c.Query("skipPostDeploy") == "true"
+	exportTemplate := c.Query("exportTemplate")
+	skipLabdirAcl := c.Query("skipLabdirAcl") == "true"
+
+	// Validate query param values
+	if !isValidExportTemplate(exportTemplate) {
+		log.Warnf("RedeployLab failed for user '%s', lab '%s': Invalid exportTemplate query param '%s'", username, labName, exportTemplate)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid 'exportTemplate' query parameter."})
+		return
+	}
+	maxWorkers, err := strconv.Atoi(maxWorkersStr)
+	if err != nil || maxWorkers < 0 {
+		log.Warnf("RedeployLab failed for user '%s', lab '%s': Invalid maxWorkers query param '%s'", username, labName, maxWorkersStr)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid 'maxWorkers' query parameter: must be a non-negative integer."})
 		return
 	}
 
-	// --- Validate Optional Flags (from request body) ---
-	if !isValidExportTemplate(req.ExportTemplate) {
-		log.Warnf("RedeployLab failed for user '%s', lab '%s': Invalid exportTemplate '%s'", username, labName, req.ExportTemplate)
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid exportTemplate."})
-		return
-	}
-	// Add validation for network, ipv4Subnet, ipv6Subnet if needed (e.g., CIDR format)
-
-	log.Debugf("RedeployLab user '%s': Attempting to redeploy lab '%s'", username, labName)
+	log.Debugf("RedeployLab user '%s': Attempting to redeploy lab '%s' with query params...", username, labName)
 
 	// --- Verify lab exists, belongs to the user, and get original topology path ---
 	originalTopoPath, ownerCheckErr := verifyLabOwnership(c, username, labName)
@@ -762,38 +781,38 @@ func RedeployLabHandler(c *gin.Context) {
 	// --- Execute clab redeploy ---
 	args := []string{"redeploy", "--topo", originalTopoPath, "--format", "json"} // Use original path
 
-	// Add flags from request body
-	if req.Cleanup {
+	// Add flags based on query parameters
+	if cleanup {
 		args = append(args, "--cleanup")
 	}
-	if req.Graceful {
+	if graceful {
 		args = append(args, "--graceful")
 	}
-	if req.Graph {
+	if graph {
 		args = append(args, "--graph")
 	}
-	if req.Network != "" {
-		args = append(args, "--network", req.Network)
+	if network != "" {
+		args = append(args, "--network", network)
 	}
-	if req.Ipv4Subnet != "" {
-		args = append(args, "--ipv4-subnet", req.Ipv4Subnet)
+	if ipv4Subnet != "" {
+		args = append(args, "--ipv4-subnet", ipv4Subnet)
 	}
-	if req.Ipv6Subnet != "" {
-		args = append(args, "--ipv6-subnet", req.Ipv6Subnet)
+	if ipv6Subnet != "" {
+		args = append(args, "--ipv6-subnet", ipv6Subnet)
 	}
-	if req.MaxWorkers > 0 {
-		args = append(args, "--max-workers", strconv.Itoa(req.MaxWorkers))
+	if maxWorkers > 0 { // Only add if explicitly set > 0
+		args = append(args, "--max-workers", strconv.Itoa(maxWorkers))
 	}
-	if req.KeepMgmtNet {
+	if keepMgmtNet {
 		args = append(args, "--keep-mgmt-net")
 	}
-	if req.SkipPostDeploy {
+	if skipPostDeploy {
 		args = append(args, "--skip-post-deploy")
 	}
-	if req.ExportTemplate != "" {
-		args = append(args, "--export-template", req.ExportTemplate)
+	if exportTemplate != "" {
+		args = append(args, "--export-template", exportTemplate)
 	}
-	if req.SkipLabdirAcl {
+	if skipLabdirAcl {
 		args = append(args, "--skip-labdir-acl")
 	}
 
@@ -807,6 +826,7 @@ func RedeployLabHandler(c *gin.Context) {
 	if err != nil {
 		log.Errorf("RedeployLab failed for user '%s', lab '%s': clab redeploy command execution error: %v", username, labName, err)
 		errMsg := fmt.Sprintf("Failed to redeploy lab '%s': %s", labName, err.Error())
+		// Only append stderr to the response if it looks like a significant error message
 		if stderr != "" && (strings.Contains(stderr, "level=error") || strings.Contains(stderr, "failed") || strings.Contains(stderr, "panic")) {
 			errMsg += "\nstderr: " + stderr
 		}
@@ -817,9 +837,10 @@ func RedeployLabHandler(c *gin.Context) {
 	log.Infof("RedeployLab user '%s': clab redeploy for lab '%s' executed successfully.", username, labName)
 
 	// Attempt to parse stdout as JSON and return it
-	var result interface{}
+	var result interface{} // Use interface{} to handle potentially varied JSON structures
 	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
 		log.Warnf("RedeployLab user '%s', lab '%s': Output from clab was not valid JSON: %v. Returning as plain text.", username, labName, err)
+		// Check if the non-JSON output indicates an error
 		if strings.Contains(stdout, "level=error") || strings.Contains(stdout, "failed") {
 			c.JSON(http.StatusInternalServerError, gin.H{"output": stdout, "warning": "Redeployment finished but output indicates errors and was not valid JSON"})
 		} else {
