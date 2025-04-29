@@ -520,42 +520,6 @@ definitions:
     required:
     - newPassword
     type: object
-  models.RedeployRequest:
-    properties:
-      cleanup:
-        description: Corresponds to --cleanup flag
-        type: boolean
-      exportTemplate:
-        description: Corresponds to --export-template flag (__full is special)
-        type: string
-      graceful:
-        description: Corresponds to --graceful flag
-        type: boolean
-      graph:
-        description: Corresponds to --graph flag
-        type: boolean
-      ipv4Subnet:
-        description: Corresponds to --ipv4-subnet flag
-        type: string
-      ipv6Subnet:
-        description: Corresponds to --ipv6-subnet flag
-        type: string
-      keepMgmtNet:
-        description: Corresponds to --keep-mgmt-net flag
-        type: boolean
-      maxWorkers:
-        description: Corresponds to --max-workers flag (0 means default)
-        type: integer
-      network:
-        description: Corresponds to --network flag
-        type: string
-      skipLabdirAcl:
-        description: Corresponds to --skip-labdir-acl flag
-        type: boolean
-      skipPostDeploy:
-        description: Corresponds to --skip-post-deploy flag
-        type: boolean
-    type: object
   models.SSHAccessRequest:
     properties:
       duration:
@@ -1050,32 +1014,69 @@ paths:
       tags:
       - Labs
     put:
-      consumes:
-      - application/json
       description: |-
         Redeploys a lab by name, effectively running destroy and then deploy. Checks ownership.
-        Uses the original topology file path found during inspection.
+        Uses the original topology file path found during inspection. Optional flags are provided via query parameters.
       parameters:
       - description: Name of the lab to redeploy
         in: path
         name: labName
         required: true
         type: string
-      - description: Redeployment options
-        in: body
-        name: redeploy_request
-        required: true
-        schema:
-          $ref: '#/definitions/models.RedeployRequest'
+      - description: 'Remove containerlab artifacts before deploy (default: false)'
+        in: query
+        name: cleanup
+        type: boolean
+      - description: 'Attempt graceful shutdown of containers (default: false)'
+        in: query
+        name: graceful
+        type: boolean
+      - description: 'Generate graph during redeploy (default: false)'
+        in: query
+        name: graph
+        type: boolean
+      - description: Override management network name
+        in: query
+        name: network
+        type: string
+      - description: Override management network IPv4 subnet (CIDR)
+        in: query
+        name: ipv4Subnet
+        type: string
+      - description: Override management network IPv6 subnet (CIDR)
+        in: query
+        name: ipv6Subnet
+        type: string
+      - description: Limit concurrent workers (0 or omit for default).
+        in: query
+        name: maxWorkers
+        type: integer
+      - description: 'Keep the management network during destroy phase (default: false)'
+        in: query
+        name: keepMgmtNet
+        type: boolean
+      - description: 'Skip post-deploy actions defined for nodes (default: false)'
+        in: query
+        name: skipPostDeploy
+        type: boolean
+      - description: Custom Go template file for topology data export ('__full' for
+          full export).
+        in: query
+        name: exportTemplate
+        type: string
+      - description: 'Skip setting extended ACLs on lab directory (default: false)'
+        in: query
+        name: skipLabdirAcl
+        type: boolean
       produces:
       - application/json
       responses:
         "200":
-          description: Raw JSON output from 'clab redeploy' (or plain text on error)
+          description: Raw output from 'clab redeploy'
           schema:
             type: object
         "400":
-          description: Invalid lab name or options
+          description: Invalid lab name or query parameter options
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "401":

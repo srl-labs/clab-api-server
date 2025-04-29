@@ -451,10 +451,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Redeploys a lab by name, effectively running destroy and then deploy. Checks ownership.\nUses the original topology file path found during inspection.",
-                "consumes": [
-                    "application/json"
-                ],
+                "description": "Redeploys a lab by name, effectively running destroy and then deploy. Checks ownership.\nUses the original topology file path found during inspection. Optional flags are provided via query parameters.",
                 "produces": [
                     "application/json"
                 ],
@@ -471,24 +468,81 @@
                         "required": true
                     },
                     {
-                        "description": "Redeployment options",
-                        "name": "redeploy_request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/models.RedeployRequest"
-                        }
+                        "type": "boolean",
+                        "description": "Remove containerlab artifacts before deploy (default: false)",
+                        "name": "cleanup",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Attempt graceful shutdown of containers (default: false)",
+                        "name": "graceful",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Generate graph during redeploy (default: false)",
+                        "name": "graph",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Override management network name",
+                        "name": "network",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Override management network IPv4 subnet (CIDR)",
+                        "name": "ipv4Subnet",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Override management network IPv6 subnet (CIDR)",
+                        "name": "ipv6Subnet",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Limit concurrent workers (0 or omit for default).",
+                        "name": "maxWorkers",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Keep the management network during destroy phase (default: false)",
+                        "name": "keepMgmtNet",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Skip post-deploy actions defined for nodes (default: false)",
+                        "name": "skipPostDeploy",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Custom Go template file for topology data export ('__full' for full export).",
+                        "name": "exportTemplate",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Skip setting extended ACLs on lab directory (default: false)",
+                        "name": "skipLabdirAcl",
+                        "in": "query"
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "Raw JSON output from 'clab redeploy' (or plain text on error)",
+                        "description": "Raw output from 'clab redeploy'",
                         "schema": {
                             "type": "object"
                         }
                     },
                     "400": {
-                        "description": "Invalid lab name or options",
+                        "description": "Invalid lab name or query parameter options",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -2822,55 +2876,6 @@
                 },
                 "newPassword": {
                     "type": "string"
-                }
-            }
-        },
-        "models.RedeployRequest": {
-            "type": "object",
-            "properties": {
-                "cleanup": {
-                    "description": "Corresponds to --cleanup flag",
-                    "type": "boolean"
-                },
-                "exportTemplate": {
-                    "description": "Corresponds to --export-template flag (__full is special)",
-                    "type": "string"
-                },
-                "graceful": {
-                    "description": "Corresponds to --graceful flag",
-                    "type": "boolean"
-                },
-                "graph": {
-                    "description": "Corresponds to --graph flag",
-                    "type": "boolean"
-                },
-                "ipv4Subnet": {
-                    "description": "Corresponds to --ipv4-subnet flag",
-                    "type": "string"
-                },
-                "ipv6Subnet": {
-                    "description": "Corresponds to --ipv6-subnet flag",
-                    "type": "string"
-                },
-                "keepMgmtNet": {
-                    "description": "Corresponds to --keep-mgmt-net flag",
-                    "type": "boolean"
-                },
-                "maxWorkers": {
-                    "description": "Corresponds to --max-workers flag (0 means default)",
-                    "type": "integer"
-                },
-                "network": {
-                    "description": "Corresponds to --network flag",
-                    "type": "string"
-                },
-                "skipLabdirAcl": {
-                    "description": "Corresponds to --skip-labdir-acl flag",
-                    "type": "boolean"
-                },
-                "skipPostDeploy": {
-                    "description": "Corresponds to --skip-post-deploy flag",
-                    "type": "boolean"
                 }
             }
         },

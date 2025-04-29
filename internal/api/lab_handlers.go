@@ -197,7 +197,7 @@ func DeployLabHandler(c *gin.Context) {
 	}
 
 	// --- Prepare Base Arguments ---
-	args := []string{"deploy", "--owner", username, "--format", "json"}
+	args := []string{"deploy", "--owner", username}
 
 	// --- Handle Topology Content Saving (if applicable) ---
 	if hasContent {
@@ -288,15 +288,16 @@ func DeployLabHandler(c *gin.Context) {
 
 	log.Infof("DeployLab user '%s': clab deploy for lab '%s' executed successfully.", username, effectiveLabName)
 
-	// --- Parse and return result ---
+	// --- Return result ---
+	// Try to parse as JSON first, but handle plain text output gracefully
 	var result interface{}
 	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
-		log.Warnf("DeployLab user '%s', lab '%s': Output from clab was not valid JSON: %v. Returning as plain text.", username, effectiveLabName, err)
+		log.Infof("DeployLab user '%s', lab '%s': Output from clab deploy is not valid JSON. Returning as plain text.", username, effectiveLabName)
 		// Check if the non-JSON output indicates an error
 		if strings.Contains(stdout, "level=error") || strings.Contains(stdout, "failed") {
 			c.JSON(http.StatusInternalServerError, gin.H{"output": stdout, "warning": "Deployment finished but output indicates errors and was not valid JSON"})
 		} else {
-			c.JSON(http.StatusOK, gin.H{"output": stdout, "warning": "Output was not valid JSON"})
+			c.JSON(http.StatusOK, gin.H{"output": stdout})
 		}
 		return
 	}
@@ -513,7 +514,7 @@ func DeployLabArchiveHandler(c *gin.Context) {
 	}
 
 	// --- Construct clab deploy args ---
-	args := []string{"deploy", "--owner", username, "--topo", topoPathForClab, "--format", "json"}
+	args := []string{"deploy", "--owner", username, "--topo", topoPathForClab}
 
 	// Add optional flags
 	if reconfigure {
@@ -557,15 +558,16 @@ func DeployLabArchiveHandler(c *gin.Context) {
 
 	log.Infof("DeployLab (Archive) user '%s': clab deploy for lab '%s' executed successfully.", username, labName)
 
-	// --- Parse and return result ---
+	// --- Process and return result ---
+	// Try to parse as JSON first, but handle plain text output gracefully
 	var result interface{}
 	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
-		log.Warnf("DeployLab (Archive) user '%s', lab '%s': Output from clab was not valid JSON: %v. Returning as plain text.", username, labName, err)
+		log.Infof("DeployLab (Archive) user '%s', lab '%s': Output from clab deploy is not valid JSON. Returning as plain text.", username, labName)
 		// Check if the non-JSON output indicates an error
 		if strings.Contains(stdout, "level=error") || strings.Contains(stdout, "failed") {
 			c.JSON(http.StatusInternalServerError, gin.H{"output": stdout, "warning": "Deployment finished but output indicates errors and was not valid JSON"})
 		} else {
-			c.JSON(http.StatusOK, gin.H{"output": stdout, "warning": "Output was not valid JSON"})
+			c.JSON(http.StatusOK, gin.H{"output": stdout})
 		}
 		return
 	}
@@ -720,7 +722,7 @@ func DestroyLabHandler(c *gin.Context) {
 // @Param skipPostDeploy query boolean false "Skip post-deploy actions defined for nodes (default: false)" example:"false"
 // @Param exportTemplate query string false "Custom Go template file for topology data export ('__full' for full export)." example:"__full"
 // @Param skipLabdirAcl query boolean false "Skip setting extended ACLs on lab directory (default: false)" example:"true"
-// @Success 200 {object} object "Raw JSON output from 'clab redeploy' (or plain text on error)"
+// @Success 200 {object} object "Raw output from 'clab redeploy'"
 // @Failure 400 {object} models.ErrorResponse "Invalid lab name or query parameter options"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
 // @Failure 404 {object} models.ErrorResponse "Lab not found or not owned by user"
@@ -779,7 +781,7 @@ func RedeployLabHandler(c *gin.Context) {
 	log.Debugf("RedeployLab user '%s', lab '%s': Using original topology path '%s'", username, labName, originalTopoPath)
 
 	// --- Execute clab redeploy ---
-	args := []string{"redeploy", "--topo", originalTopoPath, "--format", "json"} // Use original path
+	args := []string{"redeploy", "--topo", originalTopoPath}
 
 	// Add flags based on query parameters
 	if cleanup {
@@ -819,7 +821,7 @@ func RedeployLabHandler(c *gin.Context) {
 	log.Infof("RedeployLab user '%s': Executing clab redeploy for lab '%s'...", username, labName)
 	stdout, stderr, err := clab.RunClabCommand(c.Request.Context(), username, args...)
 
-	// Handle command execution results (similar to deploy)
+	// Handle command execution results
 	if stderr != "" {
 		log.Warnf("RedeployLab user '%s', lab '%s': clab redeploy stderr: %s", username, labName, stderr)
 	}
@@ -836,20 +838,8 @@ func RedeployLabHandler(c *gin.Context) {
 
 	log.Infof("RedeployLab user '%s': clab redeploy for lab '%s' executed successfully.", username, labName)
 
-	// Attempt to parse stdout as JSON and return it
-	var result interface{} // Use interface{} to handle potentially varied JSON structures
-	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
-		log.Warnf("RedeployLab user '%s', lab '%s': Output from clab was not valid JSON: %v. Returning as plain text.", username, labName, err)
-		// Check if the non-JSON output indicates an error
-		if strings.Contains(stdout, "level=error") || strings.Contains(stdout, "failed") {
-			c.JSON(http.StatusInternalServerError, gin.H{"output": stdout, "warning": "Redeployment finished but output indicates errors and was not valid JSON"})
-		} else {
-			c.JSON(http.StatusOK, gin.H{"output": stdout, "warning": "Output was not valid JSON"})
-		}
-		return
-	}
-
-	c.JSON(http.StatusOK, result)
+	// Return plain text output for redeploy (no JSON format support)
+	c.JSON(http.StatusOK, gin.H{"output": stdout})
 }
 
 // @Summary Inspect Lab

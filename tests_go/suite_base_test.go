@@ -309,6 +309,37 @@ func (s *BaseSuite) destroyLab(headers http.Header, labName string, cleanup bool
 	return bodyBytes, statusCode, err
 }
 
+// redeployLab sends the request to redeploy a lab.
+// It returns the raw response body, status code, and any transport error.
+// Assertions on the status code should be done by the caller.
+func (s *BaseSuite) redeployLab(headers http.Header, labName string, options map[string]string, timeout time.Duration) ([]byte, int, error) {
+	s.T().Helper()
+	redeployURL := fmt.Sprintf("%s/api/v1/labs/%s", s.cfg.APIURL, labName)
+	reqURL, _ := url.Parse(redeployURL)
+	query := reqURL.Query()
+
+	// Add any options as query parameters
+	for key, value := range options {
+		query.Set(key, value)
+	}
+	reqURL.RawQuery = query.Encode()
+
+	s.logInfo("Redeploying lab '%s' with options: %v...", labName, options)
+
+	bodyBytes, statusCode, err := s.doRequest("PUT", reqURL.String(), headers, nil, timeout)
+
+	// Log outcome but return results for caller to assert
+	if err != nil {
+		s.logError("Failed to execute lab redeploy request: %v", err)
+	} else if statusCode == http.StatusOK {
+		s.logSuccess("Lab '%s' redeploy returned Status OK (200)", labName)
+	} else {
+		s.logInfo("Lab '%s' redeploy returned Status %d", labName, statusCode)
+	}
+
+	return bodyBytes, statusCode, err // Return results for caller
+}
+
 // setupEphemeralLab creates a lab as the standard API user.
 // It returns the lab name and auth headers for that user.
 // IMPORTANT: It registers cleanup using defer within the *calling test method's scope*.
