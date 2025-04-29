@@ -22,9 +22,9 @@ type LoginResponse struct {
 // Provide EITHER 'topologyContent' OR 'topologySourceUrl', but not both.
 type DeployRequest struct {
 	// Option 1: Direct Topology Content.
-	// Provide the full containerlab topology YAML as a single string.
+	// Provide the full containerlab topology YAML as a json string.
 	// If this is provided, 'topologySourceUrl' MUST be empty.
-	TopologyContent string `json:"topologyContent,omitempty" example:"# topology documentation: http://containerlab.dev/lab-examples/single-srl/\nname: srl01\ntopology:\n kinds:\n nokia_srlinux:\n type: ixrd3\n image: ghcr.io/nokia/srlinux\n\n nodes:\n srl1:\n kind: nokia_srlinux\n srl2:\n kind: nokia_srlinux\n\n links:\n - endpoints: [\"srl1:e1-1\",\"srl2:e1-1\"]"`
+	TopologyContent string `json:"topologyContent"`
 
 	// Option 2: Remote Topology Source URL.
 	// Provide a URL to a Git repository, a specific .clab.yml file in Git (github/gitlab), or a raw HTTP(S) URL.

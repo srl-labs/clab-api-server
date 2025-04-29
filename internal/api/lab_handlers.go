@@ -23,6 +23,7 @@ import (
 
 // @Summary Deploy Lab
 // @Description Deploys a containerlab topology. Requires EITHER 'topologyContent' OR 'topologySourceUrl' in the request body, but not both. The lab will be owned by the authenticated user.
+// @Description The 'topologyContent' field now accepts a JSON object for the topology structure instead of YAML.
 // @Description Deployment is DENIED if a lab with the target name already exists, UNLESS 'reconfigure=true' is specified AND the authenticated user owns the existing lab.
 // @Description Optional deployment flags are provided as query parameters.
 // @Tags Labs
@@ -48,7 +49,7 @@ func DeployLabHandler(c *gin.Context) {
 	username := c.GetString("username") // Authenticated user
 	ctx := c.Request.Context()
 
-	// --- Bind Request Body (Only contains topology source now) ---
+	// --- Bind Request Body ---
 	var req models.DeployRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		log.Warnf("DeployLab failed for user '%s': Invalid request body: %v", username, err)
@@ -107,6 +108,7 @@ func DeployLabHandler(c *gin.Context) {
 	var effectiveLabName string
 	var originalLabName string // Name from topology content, needed for directory structure
 	var topoPathForClab string
+	var topoContent string
 
 	if hasUrl {
 		log.Infof("DeployLab user '%s': Deploying from URL: %s", username, req.TopologySourceUrl)
@@ -128,25 +130,27 @@ func DeployLabHandler(c *gin.Context) {
 		}
 	} else { // hasContent
 		log.Infof("DeployLab user '%s': Deploying from provided topology content.", username)
-		trimmedContent := strings.TrimSpace(req.TopologyContent)
+		jsonContent := strings.TrimSpace(req.TopologyContent)
 
-		// Parse YAML to find the name
+		// Parse JSON to extract lab name and convert to YAML
 		var topoData map[string]interface{}
-		err = yaml.Unmarshal([]byte(trimmedContent), &topoData)
+		err = json.Unmarshal([]byte(jsonContent), &topoData)
 		if err != nil {
-			log.Warnf("DeployLab failed for user '%s': Invalid topology YAML: %v", username, err)
-			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid topology YAML: " + err.Error()})
+			log.Warnf("DeployLab failed for user '%s': Invalid topology JSON: %v", username, err)
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid topology JSON: " + err.Error()})
 			return
 		}
+
+		// Extract name from the JSON
 		originalLabNameValue, ok := topoData["name"]
 		if !ok {
-			log.Warnf("DeployLab failed for user '%s': Topology YAML missing 'name' field", username)
-			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Topology YAML must contain a top-level 'name' field."})
+			log.Warnf("DeployLab failed for user '%s': JSON topology missing 'name' field", username)
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "JSON topology must contain a top-level 'name' field."})
 			return
 		}
 		originalLabName, ok = originalLabNameValue.(string)
 		if !ok || originalLabName == "" {
-			log.Warnf("DeployLab failed for user '%s': Topology 'name' field is not a non-empty string", username)
+			log.Warnf("DeployLab failed for user '%s': JSON topology 'name' field is not a non-empty string", username)
 			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Topology 'name' field must be a non-empty string."})
 			return
 		}
@@ -155,6 +159,15 @@ func DeployLabHandler(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in topology 'name'."})
 			return
 		}
+
+		// Convert JSON to YAML for containerlab
+		yamlBytes, err := yaml.Marshal(topoData)
+		if err != nil {
+			log.Warnf("DeployLab failed for user '%s': Failed to convert JSON topology to YAML: %v", username, err)
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Failed to convert JSON topology to YAML: " + err.Error()})
+			return
+		}
+		topoContent = string(yamlBytes)
 
 		// Determine effective lab name
 		if labNameOverride != "" {
@@ -225,7 +238,7 @@ func DeployLabHandler(c *gin.Context) {
 			// Log warning, but proceed. File write/chown might still work.
 			log.Warnf("DeployLab user '%s': Failed to set ownership on lab directory '%s': %v. Continuing...", username, targetDir, err)
 		}
-		err = os.WriteFile(targetFilePath, []byte(strings.TrimSpace(req.TopologyContent)), 0640)
+		err = os.WriteFile(targetFilePath, []byte(strings.TrimSpace(topoContent)), 0640)
 		if err != nil {
 			log.Errorf("DeployLab failed for user '%s': Failed to write topology file '%s': %v", username, targetFilePath, err)
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to write topology file: %s.", err.Error())})

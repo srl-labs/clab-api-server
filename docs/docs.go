@@ -172,7 +172,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Deploys a containerlab topology. Requires EITHER 'topologyContent' OR 'topologySourceUrl' in the request body, but not both. The lab will be owned by the authenticated user.\nDeployment is DENIED if a lab with the target name already exists, UNLESS 'reconfigure=true' is specified AND the authenticated user owns the existing lab.\nOptional deployment flags are provided as query parameters.",
+                "description": "Deploys a containerlab topology. Requires ONE OF 'topologyContent', 'topologySourceUrl', or 'jsonTopology' in the request body. The lab will be owned by the authenticated user.\n'jsonTopology' can be used to provide a structured JSON representation of the topology which will be converted to YAML format.\nDeployment is DENIED if a lab with the target name already exists, UNLESS 'reconfigure=true' is specified AND the authenticated user owns the existing lab.\nOptional deployment flags are provided as query parameters.",
                 "consumes": [
                     "application/json"
                 ],
@@ -185,7 +185,7 @@ const docTemplate = `{
                 "summary": "Deploy Lab",
                 "parameters": [
                     {
-                        "description": "Deployment Source: Provide 'topologyContent' OR 'topologySourceUrl'.",
+                        "description": "Deployment Source: Provide 'topologyContent', 'topologySourceUrl', OR 'jsonTopology'",
                         "name": "deploy_request",
                         "in": "body",
                         "required": true,
@@ -2516,10 +2516,13 @@ const docTemplate = `{
         "models.DeployRequest": {
             "type": "object",
             "properties": {
+                "jsonTopology": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
                 "topologyContent": {
-                    "description": "Option 1: Direct Topology Content.\nProvide the full containerlab topology YAML as a single string.\nIf this is provided, 'topologySourceUrl' MUST be empty.",
-                    "type": "string",
-                    "example": "# topology documentation: http://containerlab.dev/lab-examples/single-srl/\nname: srl01\ntopology:\n kinds:\n nokia_srlinux:\n type: ixrd3\n image: ghcr.io/nokia/srlinux\n\n nodes:\n srl1:\n kind: nokia_srlinux\n srl2:\n kind: nokia_srlinux\n\n links:\n - endpoints: [\"srl1:e1-1\",\"srl2:e1-1\"]"
+                    "description": "Option 1: Direct Topology Content.\nProvide the full containerlab topology YAML as a json string.\nIf this is provided, 'topologySourceUrl' MUST be empty.",
+                    "type": "string"
                 },
                 "topologySourceUrl": {
                     "description": "Option 2: Remote Topology Source URL.\nProvide a URL to a Git repository, a specific .clab.yml file in Git (github/gitlab), or a raw HTTP(S) URL.\nIf this is provided, 'topologyContent' MUST be empty.",
