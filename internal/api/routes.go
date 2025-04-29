@@ -79,6 +79,9 @@ func SetupRoutes(router *gin.Engine) {
 					// Show netem for all interfaces on node
 					nodeSpecific.GET("/netem", ShowNetemHandler) // GET /api/v1/labs/{labName}/nodes/{nodeName}/netem
 
+					// Logs
+					nodeSpecific.GET("/logs", GetNodeLogsHandler) // GET /api/v1/labs/{labName}/nodes/{nodeName}/logs
+
 					// Interface Specific Routes (nested under node)
 					interfaceSpecific := nodeSpecific.Group("/interfaces/:interfaceName")
 					{
