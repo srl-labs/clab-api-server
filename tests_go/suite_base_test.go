@@ -237,20 +237,28 @@ func (s *BaseSuite) getAuthHeaders(token string) http.Header {
 	return headers
 }
 
-// --- Lab Lifecycle Helpers (now methods on BaseSuite) ---
-
 // createLab sends the request to create/reconfigure a lab.
 // It returns the raw response body, status code, and any transport error.
 // Assertions on the status code should be done by the caller.
 func (s *BaseSuite) createLab(headers http.Header, labName, topologyContent string, reconfigure bool, timeout time.Duration) ([]byte, int, error) {
 	s.T().Helper()
 	deployURL := fmt.Sprintf("%s/api/v1/labs", s.cfg.APIURL)
-	payload := map[string]string{
-		"topologyContent": topologyContent,
+
+	// Parse topology content from string to JSON object
+	var topologyJSON json.RawMessage
+	err := json.Unmarshal([]byte(topologyContent), &topologyJSON)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to parse topology content as JSON: %w", err)
 	}
+
+	// Now create the payload with the parsed JSON object
+	payload := map[string]json.RawMessage{
+		"topologyContent": topologyJSON,
+	}
+
 	jsonPayload, err := json.Marshal(payload)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to marshal deploy payload: %w", err) // Return error for caller
+		return nil, 0, fmt.Errorf("failed to marshal deploy payload: %w", err)
 	}
 
 	reqURL, _ := url.Parse(deployURL)
