@@ -197,7 +197,7 @@ jobs:
     # 9 — Upload binaries to the GitHub Release page
     #---------------------------------------------------------------
     - name: Upload Release Assets (Binaries)
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         files: |
           dist/clab-api-server-linux-amd64
