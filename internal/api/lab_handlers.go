@@ -23,7 +23,7 @@ import (
 
 // @Summary Deploy Lab
 // @Description Deploys a containerlab topology. Requires EITHER 'topologyContent' OR 'topologySourceUrl' in the request body, but not both. The lab will be owned by the authenticated user.
-// @Description The 'topologyContent' field now accepts a JSON object for the topology structure instead of YAML.
+// @Description The 'topologyContent' field accepts a JSON object for the topology structure.
 // @Description Deployment is DENIED if a lab with the target name already exists, UNLESS 'reconfigure=true' is specified AND the authenticated user owns the existing lab.
 // @Description Optional deployment flags are provided as query parameters.
 // @Tags Labs
@@ -31,7 +31,6 @@ import (
 // @Accept json
 // @Produce json
 // @Param deploy_request body models.DeployRequest true "Deployment Source: Provide 'topologyContent' OR 'topologySourceUrl'."
-// @Param labNameOverride query string false "Overrides the 'name' field within the topology or inferred from URL." example="my-specific-lab-run"
 // @Param reconfigure query boolean false "Allow overwriting an existing lab IF owned by the user (default: false)." example="true"
 // @Param maxWorkers query int false "Limit concurrent workers (0 or omit for default)." example="4"
 // @Param exportTemplate query string false "Custom Go template file for topology data export ('__full' for full export)." example="__full"
@@ -58,7 +57,7 @@ func DeployLabHandler(c *gin.Context) {
 	}
 
 	// --- Validate Input: Must have Content XOR URL ---
-	hasContent := strings.TrimSpace(req.TopologyContent) != ""
+	hasContent := len(req.TopologyContent) > 0
 	hasUrl := strings.TrimSpace(req.TopologySourceUrl) != ""
 
 	if !hasContent && !hasUrl {
@@ -130,11 +129,10 @@ func DeployLabHandler(c *gin.Context) {
 		}
 	} else { // hasContent
 		log.Infof("DeployLab user '%s': Deploying from provided topology content.", username)
-		jsonContent := strings.TrimSpace(req.TopologyContent)
 
-		// Parse JSON to extract lab name and convert to YAML
+		// Parse JSON directly from req.TopologyContent
 		var topoData map[string]interface{}
-		err = json.Unmarshal([]byte(jsonContent), &topoData)
+		err = json.Unmarshal(req.TopologyContent, &topoData)
 		if err != nil {
 			log.Warnf("DeployLab failed for user '%s': Invalid topology JSON: %v", username, err)
 			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid topology JSON: " + err.Error()})

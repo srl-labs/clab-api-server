@@ -24,7 +24,36 @@ type DeployRequest struct {
 	// Option 1: Direct Topology Content.
 	// Provide the full containerlab topology YAML as a json string.
 	// If this is provided, 'topologySourceUrl' MUST be empty.
-	TopologyContent string `json:"topologyContent"`
+	// {
+	// 	"topologyContent": {
+	// 	  "name": "your-lab-name",
+	// 	  "topology": {
+	// 		"kinds": {
+	// 		  "nokia_srlinux": {
+	// 			"type": "ixrd3",
+	// 			"image": "ghcr.io/nokia/srlinux"
+	// 		  }
+	// 		},
+	// 		"nodes": {
+	// 		  "srl1": {
+	// 			"kind": "nokia_srlinux"
+	// 		  },
+	// 		  "srl2": {
+	// 			"kind": "nokia_srlinux"
+	// 		  }
+	// 		},
+	// 		"links": [
+	// 		  {
+	// 			"endpoints": [
+	// 			  "srl1:e1-1",
+	// 			  "srl2:e1-1"
+	// 			]
+	// 		  }
+	// 		]
+	// 	  }
+	// 	}
+	//   }
+	TopologyContent json.RawMessage `json:"topologyContent" swaggertype:"object"`
 
 	// Option 2: Remote Topology Source URL.
 	// Provide a URL to a Git repository, a specific .clab.yml file in Git (github/gitlab), or a raw HTTP(S) URL.

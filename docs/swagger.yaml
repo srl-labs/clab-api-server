@@ -178,15 +178,17 @@ definitions:
     type: object
   models.DeployRequest:
     properties:
-      jsonTopology:
-        additionalProperties: true
-        type: object
       topologyContent:
-        description: |-
-          Option 1: Direct Topology Content.
-          Provide the full containerlab topology YAML as a json string.
-          If this is provided, 'topologySourceUrl' MUST be empty.
-        type: string
+        description: "Option 1: Direct Topology Content.\nProvide the full containerlab
+          topology YAML as a json string.\nIf this is provided, 'topologySourceUrl'
+          MUST be empty.\n{\n\t\"topologyContent\": {\n\t  \"name\": \"your-lab-name\",\n\t
+          \ \"topology\": {\n\t\t\"kinds\": {\n\t\t  \"nokia_srlinux\": {\n\t\t\t\"type\":
+          \"ixrd3\",\n\t\t\t\"image\": \"ghcr.io/nokia/srlinux\"\n\t\t  }\n\t\t},\n\t\t\"nodes\":
+          {\n\t\t  \"srl1\": {\n\t\t\t\"kind\": \"nokia_srlinux\"\n\t\t  },\n\t\t
+          \ \"srl2\": {\n\t\t\t\"kind\": \"nokia_srlinux\"\n\t\t  }\n\t\t},\n\t\t\"links\":
+          [\n\t\t  {\n\t\t\t\"endpoints\": [\n\t\t\t  \"srl1:e1-1\",\n\t\t\t  \"srl2:e1-1\"\n\t\t\t]\n\t\t
+          \ }\n\t\t]\n\t  }\n\t}\n  }"
+        type: object
       topologySourceUrl:
         description: |-
           Option 2: Remote Topology Source URL.
@@ -832,23 +834,17 @@ paths:
       consumes:
       - application/json
       description: |-
-        Deploys a containerlab topology. Requires ONE OF 'topologyContent', 'topologySourceUrl', or 'jsonTopology' in the request body. The lab will be owned by the authenticated user.
-        'jsonTopology' can be used to provide a structured JSON representation of the topology which will be converted to YAML format.
+        Deploys a containerlab topology. Requires EITHER 'topologyContent' OR 'topologySourceUrl' in the request body, but not both. The lab will be owned by the authenticated user.
+        The 'topologyContent' field accepts a JSON object for the topology structure.
         Deployment is DENIED if a lab with the target name already exists, UNLESS 'reconfigure=true' is specified AND the authenticated user owns the existing lab.
         Optional deployment flags are provided as query parameters.
       parameters:
-      - description: 'Deployment Source: Provide ''topologyContent'', ''topologySourceUrl'',
-          OR ''jsonTopology'''
+      - description: 'Deployment Source: Provide ''topologyContent'' OR ''topologySourceUrl''.'
         in: body
         name: deploy_request
         required: true
         schema:
           $ref: '#/definitions/models.DeployRequest'
-      - description: Overrides the 'name' field within the topology or inferred from
-          URL.
-        in: query
-        name: labNameOverride
-        type: string
       - description: 'Allow overwriting an existing lab IF owned by the user (default:
           false).'
         in: query

@@ -168,7 +168,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Deploys a containerlab topology. Requires ONE OF 'topologyContent', 'topologySourceUrl', or 'jsonTopology' in the request body. The lab will be owned by the authenticated user.\n'jsonTopology' can be used to provide a structured JSON representation of the topology which will be converted to YAML format.\nDeployment is DENIED if a lab with the target name already exists, UNLESS 'reconfigure=true' is specified AND the authenticated user owns the existing lab.\nOptional deployment flags are provided as query parameters.",
+                "description": "Deploys a containerlab topology. Requires EITHER 'topologyContent' OR 'topologySourceUrl' in the request body, but not both. The lab will be owned by the authenticated user.\nThe 'topologyContent' field accepts a JSON object for the topology structure.\nDeployment is DENIED if a lab with the target name already exists, UNLESS 'reconfigure=true' is specified AND the authenticated user owns the existing lab.\nOptional deployment flags are provided as query parameters.",
                 "consumes": [
                     "application/json"
                 ],
@@ -181,19 +181,13 @@
                 "summary": "Deploy Lab",
                 "parameters": [
                     {
-                        "description": "Deployment Source: Provide 'topologyContent', 'topologySourceUrl', OR 'jsonTopology'",
+                        "description": "Deployment Source: Provide 'topologyContent' OR 'topologySourceUrl'.",
                         "name": "deploy_request",
                         "in": "body",
                         "required": true,
                         "schema": {
                             "$ref": "#/definitions/models.DeployRequest"
                         }
-                    },
-                    {
-                        "type": "string",
-                        "description": "Overrides the 'name' field within the topology or inferred from URL.",
-                        "name": "labNameOverride",
-                        "in": "query"
                     },
                     {
                         "type": "boolean",
@@ -2512,13 +2506,9 @@
         "models.DeployRequest": {
             "type": "object",
             "properties": {
-                "jsonTopology": {
-                    "type": "object",
-                    "additionalProperties": true
-                },
                 "topologyContent": {
-                    "description": "Option 1: Direct Topology Content.\nProvide the full containerlab topology YAML as a json string.\nIf this is provided, 'topologySourceUrl' MUST be empty.",
-                    "type": "string"
+                    "description": "Option 1: Direct Topology Content.\nProvide the full containerlab topology YAML as a json string.\nIf this is provided, 'topologySourceUrl' MUST be empty.\n{\n\t\"topologyContent\": {\n\t  \"name\": \"your-lab-name\",\n\t  \"topology\": {\n\t\t\"kinds\": {\n\t\t  \"nokia_srlinux\": {\n\t\t\t\"type\": \"ixrd3\",\n\t\t\t\"image\": \"ghcr.io/nokia/srlinux\"\n\t\t  }\n\t\t},\n\t\t\"nodes\": {\n\t\t  \"srl1\": {\n\t\t\t\"kind\": \"nokia_srlinux\"\n\t\t  },\n\t\t  \"srl2\": {\n\t\t\t\"kind\": \"nokia_srlinux\"\n\t\t  }\n\t\t},\n\t\t\"links\": [\n\t\t  {\n\t\t\t\"endpoints\": [\n\t\t\t  \"srl1:e1-1\",\n\t\t\t  \"srl2:e1-1\"\n\t\t\t]\n\t\t  }\n\t\t]\n\t  }\n\t}\n  }",
+                    "type": "object"
                 },
                 "topologySourceUrl": {
                     "description": "Option 2: Remote Topology Source URL.\nProvide a URL to a Git repository, a specific .clab.yml file in Git (github/gitlab), or a raw HTTP(S) URL.\nIf this is provided, 'topologyContent' MUST be empty.",
