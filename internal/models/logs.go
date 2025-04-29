@@ -1,5 +1,3 @@
-// Add to internal/models/logs.go or appropriate models file
-
 package models
 
 // ContainerLogInfo contains information about a container needed for logs retrieval

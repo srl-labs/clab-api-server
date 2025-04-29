@@ -1308,7 +1308,8 @@ paths:
       - Tools - Netem
   /api/v1/labs/{labName}/nodes/{nodeName}/logs:
     get:
-      description: Get logs from a specific lab node (container)
+      description: Get logs from a specific lab node (container). When follow=true,
+        logs will stream until client disconnects or 30-minute timeout.
       parameters:
       - description: Name of the lab
         in: path
@@ -1324,21 +1325,13 @@ paths:
         in: query
         name: tail
         type: integer
-      - description: Show logs since timestamp (e.g. '2023-01-01T00:00:00Z' or duration
-          like '5m')
-        in: query
-        name: since
-        type: string
-      - description: Show logs until timestamp (e.g. '2023-01-01T00:00:00Z' or duration
-          like '5m')
-        in: query
-        name: until
-        type: string
-      - description: Follow log output (stream logs)
+      - description: 'Follow log output (stream logs). Note: In Swagger UI, streaming
+          may not display correctly.'
         in: query
         name: follow
         type: boolean
-      - description: Output format ('plain' or 'json'). Default is 'plain'.
+      - description: Output format ('plain' or 'json'). Default is 'plain'. When follow=true,
+          only 'plain' format is supported.
         in: query
         name: format
         type: string

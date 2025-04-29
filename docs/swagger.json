@@ -958,7 +958,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Get logs from a specific lab node (container)",
+                "description": "Get logs from a specific lab node (container). When follow=true, logs will stream until client disconnects or 30-minute timeout.",
                 "produces": [
                     "text/plain",
                     "application/json",
@@ -990,26 +990,14 @@
                         "in": "query"
                     },
                     {
-                        "type": "string",
-                        "description": "Show logs since timestamp (e.g. '2023-01-01T00:00:00Z' or duration like '5m')",
-                        "name": "since",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "Show logs until timestamp (e.g. '2023-01-01T00:00:00Z' or duration like '5m')",
-                        "name": "until",
-                        "in": "query"
-                    },
-                    {
                         "type": "boolean",
-                        "description": "Follow log output (stream logs)",
+                        "description": "Follow log output (stream logs). Note: In Swagger UI, streaming may not display correctly.",
                         "name": "follow",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "Output format ('plain' or 'json'). Default is 'plain'.",
+                        "description": "Output format ('plain' or 'json'). Default is 'plain'. When follow=true, only 'plain' format is supported.",
                         "name": "format",
                         "in": "query"
                     }
