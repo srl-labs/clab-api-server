@@ -4,7 +4,6 @@ package api
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -79,22 +78,33 @@ func GetNodeLogsHandler(c *gin.Context) {
 
 	log.Debugf("GetNodeLogs user '%s': Fetching logs for lab '%s', container '%s'", username, labName, containerName)
 
-	// --- Verify Container Ownership ---
-	_, err := verifyContainerOwnership(c, username, containerName)
+	// --- First verify that the lab exists and user has permission ---
+	_, err := verifyLabOwnership(c, username, labName)
+	if err != nil {
+		// verifyLabOwnership already sent response (404 or 403)
+		return
+	}
+
+	// --- Next, verify the container name follows the expected format for the lab ---
+	expectedPrefix := "clab-" + labName + "-"
+	if !strings.HasPrefix(containerName, expectedPrefix) {
+		log.Warnf("GetNodeLogs failed for user '%s': Container '%s' does not belong to lab '%s'",
+			username, containerName, labName)
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error: fmt.Sprintf("Container '%s' does not belong to lab '%s'", containerName, labName),
+		})
+		return
+	}
+
+	// --- Now verify container ownership and existence ---
+	containerInfo, err := verifyContainerOwnership(c, username, containerName)
 	if err != nil {
 		// verifyContainerOwnership already sent response (404 or 500)
 		return
 	}
 
 	// Get container ID for direct Docker/Podman call to get logs
-	containerInfo, err := getContainerInfo(c, username, containerName)
-	if err != nil {
-		// getContainerInfo should already log errors
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to get container info: %s", err.Error())})
-		return
-	}
-
-	containerID := containerInfo.ID
+	containerID := containerInfo.ContainerID
 	if containerID == "" {
 		log.Errorf("GetNodeLogs failed for user '%s': Container '%s' has no ID", username, containerName)
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Container has no ID for logs retrieval."})
@@ -265,47 +275,6 @@ func GetNodeLogsHandler(c *gin.Context) {
 			c.String(http.StatusOK, stdout)
 		}
 	}
-}
-
-// getContainerInfo gets detailed information about a container using docker/podman inspect
-func getContainerInfo(c *gin.Context, username string, containerName string) (*models.ContainerLogInfo, error) {
-	containerRuntime, err := getContainerRuntime(c, username)
-	if err != nil {
-		return nil, err
-	}
-
-	// Run docker/podman inspect command with the exec package directly
-	args := []string{"inspect", containerName}
-	stdout, stderr, err := runCommand(c.Request.Context(), containerRuntime, args...)
-
-	if err != nil {
-		log.Errorf("getContainerInfo failed for container '%s': %v. Stderr: %s",
-			containerName, err, stderr)
-		return nil, fmt.Errorf("container inspect failed: %w", err)
-	}
-
-	// Parse the output (basic JSON parsing for now)
-	var containers []map[string]interface{}
-	if err := json.Unmarshal([]byte(stdout), &containers); err != nil {
-		log.Errorf("getContainerInfo failed to parse JSON for container '%s': %v",
-			containerName, err)
-		return nil, fmt.Errorf("failed to parse container inspect output: %w", err)
-	}
-
-	if len(containers) == 0 {
-		return nil, fmt.Errorf("no container info found for: %s", containerName)
-	}
-
-	// Extract the container ID
-	containerID, ok := containers[0]["Id"].(string)
-	if !ok {
-		return nil, fmt.Errorf("could not extract container ID from inspect output")
-	}
-
-	return &models.ContainerLogInfo{
-		Name: containerName,
-		ID:   containerID,
-	}, nil
 }
 
 // getContainerRuntime determines if the system is using Docker or Podman

@@ -83,16 +83,53 @@ func (s *LogsSuite) SetupSuite() {
 
 // TearDownSuite cleans up all test resources
 func (s *LogsSuite) TearDownSuite() {
-	// Clean up the shared lab
-	if s.sharedLabName != "" {
-		s.cleanupLab(s.sharedLabName, true)
-		s.logTeardown("Cleaned up shared test lab: %s", s.sharedLabName)
+	// Clean up the superuser lab first - use superuser credentials
+	if s.suLabName != "" {
+		s.logTeardown("Cleaning up superuser test lab: %s", s.suLabName)
+		_, _, err := s.destroyLab(s.superuserHeaders, s.suLabName, true, s.cfg.CleanupTimeout)
+		if err != nil {
+			s.logWarning("Error during superuser lab cleanup: %v", err)
+		}
+		time.Sleep(s.cfg.CleanupPause)
 	}
 
-	// Clean up the superuser lab
-	if s.suLabName != "" {
-		s.cleanupLab(s.suLabName, true)
-		s.logTeardown("Cleaned up superuser test lab: %s", s.suLabName)
+	// Refresh the API user token to ensure it's valid
+	s.apiUserToken = s.login(s.cfg.APIUserUser, s.cfg.APIUserPass)
+	s.apiUserHeaders = s.getAuthHeaders(s.apiUserToken)
+
+	// Make a direct API call to check if the lab still exists
+	if s.sharedLabName != "" {
+		s.logTeardown("Cleaning up shared test lab: %s", s.sharedLabName)
+
+		// Try to destroy with apiUserHeaders first (the owner)
+		bodyBytes, statusCode, err := s.destroyLab(s.apiUserHeaders, s.sharedLabName, true, s.cfg.CleanupTimeout)
+		if err == nil && statusCode == http.StatusOK {
+			s.logTeardown("Successfully cleaned up shared test lab using API user credentials")
+		} else {
+			s.logWarning("Could not clean up lab with API user: %v, status: %d", err, statusCode)
+
+			// If that fails, try with superuser credentials
+			s.logTeardown("Attempting cleanup of shared test lab using superuser credentials")
+			bodyBytes, statusCode, err = s.destroyLab(s.superuserHeaders, s.sharedLabName, true, s.cfg.CleanupTimeout)
+			if err == nil && statusCode == http.StatusOK {
+				s.logTeardown("Successfully cleaned up shared test lab using superuser credentials")
+			} else {
+				s.logWarning("Failed to clean up lab with superuser as well: %v, status: %d, body: %s",
+					err, statusCode, string(bodyBytes))
+			}
+		}
+
+		// Double check if the lab is really gone
+		checkURL := fmt.Sprintf("%s/api/v1/labs/%s", s.cfg.APIURL, s.sharedLabName)
+		_, checkStatus, _ := s.doRequest("GET", checkURL, s.superuserHeaders, nil, s.cfg.RequestTimeout)
+		if checkStatus != http.StatusNotFound {
+			s.logWarning("Lab '%s' may still exist after cleanup attempts! Status: %d",
+				s.sharedLabName, checkStatus)
+		} else {
+			s.logTeardown("Confirmed lab '%s' no longer exists", s.sharedLabName)
+		}
+
+		time.Sleep(s.cfg.CleanupPause)
 	}
 
 	s.BaseSuite.TearDownSuite()
@@ -239,75 +276,68 @@ func (s *LogsSuite) TestInvalidNodeName() {
 
 // TestLabNotFound tests error handling for non-existent labs
 func (s *LogsSuite) TestLabNotFound() {
-	s.logTest("Testing logs endpoint with non-existent lab (expecting 403 or 404)")
+	s.logTest("Testing logs endpoint with non-existent lab (expecting 404)")
 
 	nonExistentLab := "non-existent-lab-" + s.randomSuffix(5)
 	logsURL := fmt.Sprintf("%s/api/v1/labs/%s/nodes/%s/logs", s.cfg.APIURL, nonExistentLab, s.sharedNodeName)
 	bodyBytes, statusCode, err := s.doRequest("GET", logsURL, s.apiUserHeaders, nil, s.cfg.RequestTimeout)
 	s.Require().NoError(err, "Failed to execute non-existent lab logs request")
 
-	// The API might return either 403 Forbidden or 404 Not Found for non-existent labs
-	// Accept either response as valid
-	s.Assert().True(statusCode == http.StatusNotFound || statusCode == http.StatusForbidden,
-		"Expected status 403 or 404 for non-existent lab. Got: %d, Body: %s", statusCode, string(bodyBytes))
+	s.Assert().Equal(http.StatusNotFound, statusCode,
+		"Expected status 404 for non-existent lab. Got: %d, Body: %s", statusCode, string(bodyBytes))
 
 	var errResp struct {
 		Error string `json:"error"`
 	}
 	err = json.Unmarshal(bodyBytes, &errResp)
 	s.Require().NoError(err, "Failed to unmarshal error response")
+	s.Assert().Contains(errResp.Error, "not found", "Error message should mention lab not found")
 
-	if statusCode == http.StatusNotFound {
-		s.logSuccess("Correctly received status 404 for non-existent lab")
-	} else if statusCode == http.StatusForbidden {
-		s.logSuccess("Received status 403 for non-existent lab - this is also acceptable")
-	}
+	s.logSuccess("Correctly received status 404 for non-existent lab")
 }
 
 // TestNodeNotFound tests error handling for non-existent nodes in existing labs
 func (s *LogsSuite) TestNodeNotFound() {
 	s.logTest("Testing logs endpoint with non-existent node in existing lab (expecting 404 Not Found)")
 
-	nonExistentNode := "non-existent-node-" + s.randomSuffix(5)
+	nonExistentNode := "clab-" + s.sharedLabName + "-nonexistent" + s.randomSuffix(5)
 	logsURL := fmt.Sprintf("%s/api/v1/labs/%s/nodes/%s/logs", s.cfg.APIURL, s.sharedLabName, nonExistentNode)
 	bodyBytes, statusCode, err := s.doRequest("GET", logsURL, s.apiUserHeaders, nil, s.cfg.RequestTimeout)
 	s.Require().NoError(err, "Failed to execute non-existent node logs request")
 
-	// The actual response code could be either 403 or 404 depending on implementation
-	s.Assert().True(statusCode == http.StatusNotFound || statusCode == http.StatusForbidden,
-		"Expected status 403 or 404 for non-existent node. Got: %d, Body: %s", statusCode, string(bodyBytes))
+	s.Assert().Equal(http.StatusNotFound, statusCode,
+		"Expected status 404 for non-existent node. Got: %d, Body: %s", statusCode, string(bodyBytes))
 
 	var errResp struct {
 		Error string `json:"error"`
 	}
 	err = json.Unmarshal(bodyBytes, &errResp)
 	s.Require().NoError(err, "Failed to unmarshal error response")
+	s.Assert().Contains(errResp.Error, "not found", "Error message should mention node not found")
 
-	if statusCode == http.StatusNotFound {
-		s.logSuccess("Correctly received status 404 for non-existent node")
-	} else if statusCode == http.StatusForbidden {
-		s.logSuccess("Received status 403 for non-existent node - this is also acceptable")
-	}
+	s.logSuccess("Correctly received status 404 for non-existent node")
 }
 
 // TestNonOwnerAccess tests that a user cannot access logs of a lab they don't own
 func (s *LogsSuite) TestNonOwnerAccess() {
-	s.logTest("Testing logs endpoint for non-owner access (expecting 403 or 404)")
+	s.logTest("Testing logs endpoint for non-owner access (expecting 404)")
 
 	// Try to access the logs of superuser's lab as a regular user
 	logsURL := fmt.Sprintf("%s/api/v1/labs/%s/nodes/%s/logs", s.cfg.APIURL, s.suLabName, s.suNodeName)
 	bodyBytes, statusCode, err := s.doRequest("GET", logsURL, s.apiUserHeaders, nil, s.cfg.RequestTimeout)
 	s.Require().NoError(err, "Failed to execute non-owner logs request")
 
-	// Non-owners should get either 404 Not Found or 403 Forbidden
-	s.Assert().True(statusCode == http.StatusNotFound || statusCode == http.StatusForbidden,
-		"Expected status 403 or 404 for non-owner access. Got: %d, Body: %s", statusCode, string(bodyBytes))
+	s.Assert().Equal(http.StatusNotFound, statusCode,
+		"Expected status 404 for non-owner access. Got: %d, Body: %s", statusCode, string(bodyBytes))
 
-	if statusCode == http.StatusNotFound {
-		s.logSuccess("Correctly received status 404 when non-owner tries to access logs")
-	} else if statusCode == http.StatusForbidden {
-		s.logSuccess("Received status 403 when non-owner tries to access logs - this is also acceptable")
+	var errResp struct {
+		Error string `json:"error"`
 	}
+	err = json.Unmarshal(bodyBytes, &errResp)
+	s.Require().NoError(err, "Failed to unmarshal error response")
+	s.Assert().Contains(errResp.Error, "not found", "Error message should mention lab not found or not owned")
+
+	s.logSuccess("Correctly received status 404 when non-owner tries to access logs")
 }
 
 // TestSuperuserAccess tests that a superuser can access logs of any lab
@@ -321,6 +351,28 @@ func (s *LogsSuite) TestSuperuserAccess() {
 	s.Require().Equal(http.StatusOK, statusCode, "Expected status 200 for superuser logs access. Body: %s", string(bodyBytes))
 
 	s.logSuccess("Successfully accessed API user's lab logs as superuser")
+}
+
+// TestMismatchedLabNode tests error handling when container name doesn't match lab name
+func (s *LogsSuite) TestMismatchedLabNode() {
+	s.logTest("Testing logs endpoint with container from different lab (expecting 400 Bad Request)")
+
+	// Try to access the logs of superuser's node but in the context of apiUser's lab
+	// This should fail because the node name (clab-suLabName-xyz) doesn't match the lab name (sharedLabName)
+	logsURL := fmt.Sprintf("%s/api/v1/labs/%s/nodes/%s/logs", s.cfg.APIURL, s.sharedLabName, s.suNodeName)
+	bodyBytes, statusCode, err := s.doRequest("GET", logsURL, s.apiUserHeaders, nil, s.cfg.RequestTimeout)
+	s.Require().NoError(err, "Failed to execute mismatched lab/node logs request")
+
+	s.Assert().Equal(http.StatusBadRequest, statusCode, "Expected status 400 for mismatched lab/node. Body: %s", string(bodyBytes))
+
+	var errResp struct {
+		Error string `json:"error"`
+	}
+	err = json.Unmarshal(bodyBytes, &errResp)
+	s.Require().NoError(err, "Failed to unmarshal error response")
+	s.Assert().Contains(errResp.Error, "not belong", "Error message should mention container not belonging to lab")
+
+	s.logSuccess("Correctly received status 400 for container from different lab")
 }
 
 // getFirstNodeName is a helper to get the first node name from a lab
