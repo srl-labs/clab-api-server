@@ -2,7 +2,6 @@
 
 A standalone RESTful API server for managing [Containerlab](https://containerlab.dev/) deployments, enabling programmatic control and remote management of network labs.
 
-> 📚 **Looking for detailed integration information?** Check out the [Integration Guide](docs/integration_guide.md) for in-depth documentation on architecture, deployment models, and configuration details.
 
 ---
 
@@ -35,14 +34,41 @@ A standalone RESTful API server for managing [Containerlab](https://containerlab
 
 ---
 
-> [!NOTE]
-> Containerlab 0.68.0+ is not available yet, but the 0.1.0 release of the clab‑api‑server is compatible with Containerlab 0.67.0.
-
 ## 🚀 Deployment Options
 
 The Containerlab API Server can be deployed in several ways:
 
-### 1. Binary Installation (Recommended for Production)
+### 1. Containerlab Tools Command
+
+Use Containerlab's built-in command to manage the API server directly:
+
+```bash
+# Start the API server
+containerlab tools api-server start [flags]
+
+# Stop the API server
+containerlab tools api-server stop
+
+# Check API server status
+containerlab tools api-server status
+```
+
+This method automatically handles Docker image pulling, container creation, and environment configuration. The API server provides a RESTful HTTP interface for managing Containerlab operations programmatically, including lab deployment, node management, and configuration tasks.
+
+Common flags for the start command include:
+- `--port | -p`: Port to expose the API server on (default: 8080)
+- `--host`: Host address for the API server (default: localhost)
+- `--labs-dir | -l`: Directory to mount as shared labs directory
+- `--jwt-secret`: JWT secret key for authentication
+- `--tls-enable`: Enable TLS for HTTPS connections
+
+This is the simplest way to deploy the API server if you already have Containerlab installed.
+
+Once the server is up and running, you can access the interactive API documentation at:
+- Swagger UI: `http://<server_ip>:<API_PORT>/swagger/index.html`
+- ReDoc UI: `http://<server_ip>:<API_PORT>/redoc`
+
+### 2. Binary Installation
 
 The simplest approach for direct installation on a Linux host:
 
@@ -57,7 +83,7 @@ This will:
 
 For post-installation steps, see the [Post-Install Configuration](#-post-install-configuration) section below.
 
-### 2. Docker Deployment
+### 3. Docker Deployment
 
 Run the API server as a Docker container with access to the host resources:
 
@@ -83,7 +109,7 @@ docker run -d \
 > Volume mounts enable Docker management, networking features, Linux PAM authentication, and user file storage.
 
 
-### 3. Other Docker Deployment Options
+### 4. Other Docker Deployment Options
 
 The repository also includes support for Docker-in-Docker (DinD) and Docker-out-of-Docker (DooD) deployment models:
 
@@ -213,9 +239,7 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/labs
 curl -X POST http://localhost:8080/api/v1/labs \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{
-    "topologyContent": "name: simple-lab\ntopology:\n  nodes:\n    router1:\n      kind: linux\n    router2:\n      kind: linux\n  links:\n    - endpoints: [\"router1:eth1\", \"router2:eth1\"]"
-  }'
+  -d '{"jsonTopology":{"name":"srl01","topology":{"kinds":{"nokia_srlinux":{"type":"ixrd3","image":"ghcr.io/nokia/srlinux"}},"nodes":{"srl1":{"kind":"nokia_srlinux"},"srl2":{"kind":"nokia_srlinux"}},"links":[{"endpoints":["srl1:e1-1","srl2:e1-1"]}]}}}'
 ```
 
 ## 🔌 Flashpost Collection
