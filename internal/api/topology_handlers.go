@@ -65,7 +65,7 @@ func GenerateTopologyHandler(c *gin.Context) {
 
 	// --- Pre-Deployment Check (if Deploy=true) ---
 	if req.Deploy {
-		labInfo, exists, checkErr := getLabInfo(ctx, req.Name) // Use req.Name as the lab name
+		labInfo, exists, checkErr := getLabInfo(ctx, username, req.Name)
 		if checkErr != nil {
 			log.Errorf("GenerateTopology failed for user '%s': Error checking lab '%s' existence: %v", username, req.Name, checkErr)
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Error checking lab '%s' status: %s", req.Name, checkErr.Error())})

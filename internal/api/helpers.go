@@ -168,19 +168,15 @@ func getUserCertBasePath(username string) (string, error) {
 	return basePath, nil
 }
 
-// getLabInfo runs 'clab inspect --name <labName>' to check existence and get owner info.
-// It does NOT send HTTP responses directly.
-// Returns:
-// - info: Pointer to the first container's info if the lab exists.
-// - exists: Boolean indicating if the lab was found.
-// - err: Error if the clab command failed unexpectedly (not including "not found" errors).
-func getLabInfo(ctx context.Context, labName string) (info *models.ClabContainerInfo, exists bool, err error) {
-	log.Debugf("getLabInfo: Checking existence and owner for lab '%s'", labName)
+func getLabInfo(ctx context.Context, username string, labName string) (info *models.ClabContainerInfo, exists bool, err error) {
+	log.Debugf("getLabInfo: Checking existence and owner for lab '%s' as user '%s'", labName, username)
 
 	inspectArgs := []string{"inspect", "--name", labName, "--format", "json"}
-	// Run command without specifying a user context, as we just need info
-	inspectStdout, inspectStderr, inspectErr := clab.RunClabCommand(ctx, "api-server", inspectArgs...) // Use "api-server" or similar placeholder for user
 
+	// Use the authenticated username
+	inspectStdout, inspectStderr, inspectErr := clab.RunClabCommand(ctx, username, inspectArgs...)
+
+	// Rest of the function remains the same
 	if inspectErr != nil {
 		// Check common "not found" scenarios - these are NOT errors for this function
 		errMsg := inspectErr.Error()
@@ -227,7 +223,7 @@ func verifyLabOwnership(c *gin.Context, username, labName string) (string, error
 	log.Debugf("Verifying ownership for user '%s', lab '%s'", username, labName)
 
 	// Use getLabInfo to check existence and get owner in one step
-	labInfo, exists, err := getLabInfo(c.Request.Context(), labName)
+	labInfo, exists, err := getLabInfo(c.Request.Context(), username, labName)
 
 	if err != nil {
 		// getLabInfo already logged the error
