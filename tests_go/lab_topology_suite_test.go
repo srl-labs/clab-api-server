@@ -76,9 +76,9 @@ func (s *LabTopologySuite) TestGenerateTopology() {
 
 	// Verify we can parse the response - this should match the actual response structure
 	var generateResponse struct {
-		Message       string `json:"message"`
-		DeployOutput  string `json:"deployOutput,omitempty"`
-		SavedFilePath string `json:"savedFilePath,omitempty"`
+		Message       string                         `json:"message"`
+		DeployOutput  map[string][]ClabContainerInfo `json:"deployOutput,omitempty"`
+		SavedFilePath string                         `json:"savedFilePath,omitempty"`
 	}
 
 	err = json.Unmarshal(bodyBytes, &generateResponse)
@@ -93,10 +93,26 @@ func (s *LabTopologySuite) TestGenerateTopology() {
 		s.Assert().NotEmpty(generateResponse.DeployOutput, "Response missing deployOutput for a deployed topology")
 		s.Assert().NotEmpty(generateResponse.SavedFilePath, "Response missing savedFilePath for a deployed topology")
 
-		// Verify the output contains references to the expected resources
+		// Verify the lab name is in the keys of DeployOutput
 		s.Assert().Contains(generateResponse.DeployOutput, generatedLabName, "Deploy output doesn't reference the lab name")
-		s.Assert().Contains(generateResponse.DeployOutput, "nokia_srlinux", "Deploy output doesn't reference the node kind")
-		s.Assert().Contains(generateResponse.DeployOutput, "clos-tier-1", "Deploy output doesn't reference the group prefix")
+
+		// Check if any container has the expected kind
+		foundKind := false
+		// Instead of directly checking the Group field, use JSON string inspection
+		rawJSON := string(bodyBytes)
+
+		for _, containers := range generateResponse.DeployOutput {
+			for _, container := range containers {
+				if container.Kind == "nokia_srlinux" {
+					foundKind = true
+					break
+				}
+			}
+		}
+
+		s.Assert().True(foundKind, "Deploy output doesn't reference the node kind")
+		// Check for group prefix in the raw JSON
+		s.Assert().Contains(rawJSON, `"group":"clos-tier-1"`, "Deploy output doesn't reference the group prefix")
 	} else {
 		// The test for deploy=false would check for topologyYaml field
 		var yamlResponse struct {
