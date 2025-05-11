@@ -38,6 +38,7 @@ type TestConfig struct {
 	CleanupPause          time.Duration
 	LabNamePrefix         string
 	SimpleTopologyContent string
+	TopologySourceURL     string
 	LogLevel              string // Added log level configuration
 	rng                   *rand.Rand
 }
@@ -80,6 +81,7 @@ func TestMain(m *testing.M) {
 		CleanupPause:          getEnvDuration("GOTEST_CLEANUP_PAUSE", 3*time.Second),
 		LabNamePrefix:         getEnv("GOTEST_LAB_NAME_PREFIX", "gotest"),
 		SimpleTopologyContent: getEnvOrDie("GOTEST_SIMPLE_TOPOLOGY_CONTENT"),
+		TopologySourceURL:     getEnv("GOTEST_TOPOLOGY_SOURCE_URL", "https://github.com/srl-labs/srlinux-vlan-handling-lab"),
 		LogLevel:              getEnv("GOTEST_LOG_LEVEL", LogLevelInfo),
 		rng:                   rng,
 	}
@@ -616,6 +618,7 @@ type ClabContainerInfo struct {
 	IPv6Address string `json:"ipv6_address"`
 	LabName     string `json:"lab_name"`
 	Owner       string `json:"owner"`
+	Group       string `json:"group"`
 }
 
 type ClabInspectOutput map[string][]ClabContainerInfo

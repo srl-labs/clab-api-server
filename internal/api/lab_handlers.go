@@ -177,7 +177,7 @@ func DeployLabHandler(c *gin.Context) {
 
 	// --- Pre-Deployment Check: Lab Existence and Ownership (if name is known) ---
 	if effectiveLabName != "<determined_by_clab_from_url>" {
-		labInfo, exists, checkErr := getLabInfo(ctx, effectiveLabName)
+		labInfo, exists, checkErr := getLabInfo(ctx, username, effectiveLabName)
 		if checkErr != nil {
 			log.Errorf("DeployLab failed for user '%s': Error checking lab '%s' existence: %v", username, effectiveLabName, checkErr)
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Error checking lab '%s' status: %s", effectiveLabName, checkErr.Error())})
@@ -384,7 +384,7 @@ func DeployLabArchiveHandler(c *gin.Context) {
 	}
 
 	// --- Pre-Extraction Check: Lab Existence and Ownership ---
-	labInfo, exists, checkErr := getLabInfo(ctx, labName)
+	labInfo, exists, checkErr := getLabInfo(ctx, username, labName)
 	if checkErr != nil {
 		log.Errorf("DeployLab (Archive) failed for user '%s': Error checking lab '%s' existence: %v", username, labName, checkErr)
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Error checking lab '%s' status: %s", labName, checkErr.Error())})

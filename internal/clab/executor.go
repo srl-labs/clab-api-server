@@ -6,8 +6,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,12 +22,39 @@ import (
 const clabExecutable = "containerlab"  // Assumes clab is in PATH
 const defaultTimeout = 5 * time.Minute // Timeout for clab commands
 
-// RunClabCommand executes a clab command directly as the user running the API server.
+// RunClabCommand executes a clab command directly as the user running the API server,
+// using the authenticated user's ~/.clab/ directory as the working directory.
 func RunClabCommand(ctx context.Context, username string, args ...string) (stdout string, stderr string, err error) {
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, defaultTimeout)
 		defer cancel()
+	}
+
+	// Find the user's home directory and create path to ~/.clab/
+	usr, lookupErr := user.Lookup(username)
+	if lookupErr != nil {
+		return "", "", fmt.Errorf("failed to lookup user: %w", lookupErr)
+	}
+
+	// Create path to ~/.clab/ directory and ensure it exists
+	clabDir := filepath.Join(usr.HomeDir, ".clab")
+	if mkdirErr := os.MkdirAll(clabDir, 0750); mkdirErr != nil {
+		return "", "", fmt.Errorf("failed to create .clab directory: %w", mkdirErr)
+	}
+
+	// Try to set ownership of the .clab directory to the actual user
+	uid, uidErr := strconv.Atoi(usr.Uid)
+	gid, gidErr := strconv.Atoi(usr.Gid)
+	if uidErr == nil && gidErr == nil {
+		if chownErr := os.Chown(clabDir, uid, gid); chownErr != nil {
+			// Just log a warning if we can't set ownership
+			log.Warn("Failed to set ownership on .clab directory",
+				"dir", clabDir,
+				"user", username,
+				"error", chownErr,
+			)
+		}
 	}
 
 	// --- Prepare final arguments including runtime ---
@@ -35,11 +65,9 @@ func RunClabCommand(ctx context.Context, username string, args ...string) (stdou
 		// Add --runtime flag if needed (and not the default)
 		configuredRuntime := config.AppConfig.ClabRuntime
 		if configuredRuntime != "" && configuredRuntime != "docker" {
-			// Use log.Debug (key-value) instead of log.Debugf
 			log.Debug("Using non-default container runtime", "runtime", configuredRuntime)
 			finalArgs = append(finalArgs, "--runtime", configuredRuntime)
 		} else {
-			// Use log.Debug (key-value) instead of log.Debugf
 			log.Debug("Using default container runtime", "runtime", "docker")
 		}
 
@@ -57,6 +85,9 @@ func RunClabCommand(ctx context.Context, username string, args ...string) (stdou
 	commandString := fmt.Sprintf("%s %s", clabExecutable, strings.Join(finalArgs, " "))
 	cmd := exec.CommandContext(ctx, clabExecutable, finalArgs...) // Use finalArgs
 
+	// Set working directory to user's ~/.clab/ directory
+	cmd.Dir = clabDir
+
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
@@ -66,7 +97,7 @@ func RunClabCommand(ctx context.Context, username string, args ...string) (stdou
 		"triggered_by_user", username,
 		"runtime", config.AppConfig.ClabRuntime,
 		"command", commandString,
-		"cwd", cmd.Dir, // cmd.Dir might be empty if not set, which is fine
+		"cwd", cmd.Dir,
 	)
 
 	startTime := time.Now()

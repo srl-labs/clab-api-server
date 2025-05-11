@@ -2,6 +2,7 @@
 package tests_go
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -348,6 +349,63 @@ func (s *LabCoreSuite) TestLabRedeploy_BasicRedeploy() {
 	err = json.Unmarshal(inspectBytes, &labDetails)
 	s.Require().NoError(err, "Failed to unmarshal lab details after redeploy")
 	s.Require().NotEmpty(labDetails, "Lab details should not be empty after redeploy")
+}
+
+func (s *LabCoreSuite) TestDeployLabFromURL() {
+	// Get auth headers for the API user
+	apiUserHeaders := s.apiUserHeaders
+
+	// We'll use the default name from the repo's topology
+	// For srlinux-vlan-handling-lab, the lab name is "vlan"
+	labName := "vlan"
+
+	s.logTest("Attempting to deploy lab '%s' from URL source using configured URL: %s",
+		labName, s.cfg.TopologySourceURL)
+
+	// Prepare the request payload with topologySourceUrl from config
+	payload := map[string]string{
+		"topologySourceUrl": s.cfg.TopologySourceURL,
+	}
+
+	// Add reconfigure=true to ensure we can redeploy if needed
+	deployURL := fmt.Sprintf("%s/api/v1/labs?reconfigure=true", s.cfg.APIURL)
+
+	jsonPayload, err := json.Marshal(payload)
+	s.Require().NoError(err, "Failed to marshal URL deploy payload")
+
+	// Execute the deploy request
+	bodyBytes, statusCode, err := s.doRequest("POST", deployURL, apiUserHeaders, bytes.NewBuffer(jsonPayload), s.cfg.DeployTimeout)
+
+	// Register cleanup regardless of test outcome
+	defer s.cleanupLab(labName, true)
+
+	// Verify request execution succeeded
+	s.Require().NoError(err, "Failed to execute deploy from URL request")
+
+	// Check status code and response
+	s.Require().Equal(http.StatusOK, statusCode, "Expected status 200 deploying lab from URL. Body: %s", string(bodyBytes))
+
+	// Allow time for deployment to complete
+	s.logInfo("Deployment completed, pausing for lab stabilization...")
+	time.Sleep(s.cfg.StabilizePause * 2) // Double pause time for URL-based deployment
+
+	// Verify lab appears in the list
+	s.logTest("Verifying lab '%s' is in the list after URL deployment", labName)
+	listURL := fmt.Sprintf("%s/api/v1/labs", s.cfg.APIURL)
+	listBytes, listStatus, listErr := s.doRequest("GET", listURL, apiUserHeaders, nil, s.cfg.RequestTimeout)
+
+	s.Require().NoError(listErr, "Failed to list labs after URL deployment")
+	s.Require().Equal(http.StatusOK, listStatus, "Expected status 200 listing labs after URL deployment")
+
+	var labsData ClabInspectOutput
+	err = json.Unmarshal(listBytes, &labsData)
+	s.Require().NoError(err, "Failed to unmarshal labs list response")
+
+	s.Assert().Contains(labsData, labName, "Lab '%s' created via URL was not found in /api/v1/labs output", labName)
+
+	if !s.T().Failed() {
+		s.logSuccess("Lab '%s' successfully deployed from URL and verified", labName)
+	}
 }
 
 // TestLabRedeploy_WithOptions tests redeploy with various optional parameters
