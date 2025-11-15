@@ -53,7 +53,9 @@ func (s *LabCoreSuite) TestListLabsIncludesCreated() {
 	err = json.Unmarshal(bodyBytes, &labsData)
 	s.Require().NoError(err, "Failed to unmarshal labs list response. Body: %s", string(bodyBytes))
 
-	s.Assert().Contains(labsData, labName, "Lab '%s' created by setup was not found in /api/v1/labs output for the user", labName)
+	if !s.Assert().Contains(labsData, labName, "Lab '%s' created by setup was not found in /api/v1/labs output for the user", labName) {
+		s.dumpLabDiagnostics(labName, userHeaders)
+	}
 	if nodes, exists := labsData[labName]; exists {
 		s.Assert().NotEmpty(nodes, "Lab '%s' should have container entries in the list", labName)
 	}
@@ -224,6 +226,33 @@ func (s *LabCoreSuite) TestListLabsSuperuser() {
 	if s.Assert().Contains(labsData, apiLabName) && s.Assert().Contains(labsData, suLabName) {
 		s.logSuccess("Superuser list check successful: Both labs found")
 	}
+}
+
+// dumpLabDiagnostics captures extra server responses to help explain lab visibility issues.
+func (s *LabCoreSuite) dumpLabDiagnostics(labName string, apiUserHeaders http.Header) {
+	listURL := fmt.Sprintf("%s/api/v1/labs", s.cfg.APIURL)
+
+	logList := func(label string, headers http.Header) {
+		bodyBytes, statusCode, err := s.doRequest("GET", listURL, headers, nil, s.cfg.RequestTimeout)
+		if err != nil {
+			s.logWarning("Diagnostics: failed to list labs as %s: %v", label, err)
+			return
+		}
+		s.logWarning("Diagnostics: labs output as %s (status %d): %s", label, statusCode, string(bodyBytes))
+	}
+
+	logList(fmt.Sprintf("owner '%s'", s.cfg.APIUserUser), apiUserHeaders)
+	if len(s.superuserHeaders) > 0 {
+		logList(fmt.Sprintf("superuser '%s'", s.cfg.SuperuserUser), s.superuserHeaders)
+	}
+
+	inspectURL := fmt.Sprintf("%s/api/v1/labs/%s", s.cfg.APIURL, labName)
+	bodyBytes, statusCode, err := s.doRequest("GET", inspectURL, s.superuserHeaders, nil, s.cfg.RequestTimeout)
+	if err != nil {
+		s.logWarning("Diagnostics: failed to inspect lab '%s' as superuser: %v", labName, err)
+		return
+	}
+	s.logWarning("Diagnostics: inspect output for '%s' as superuser (status %d): %s", labName, statusCode, string(bodyBytes))
 }
 
 func (s *LabCoreSuite) TestListLabsAPIUserFilters() {
