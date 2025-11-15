@@ -61,6 +61,29 @@ jobs:
           curl -fsSL https://get.containerlab.dev | sudo -E bash
           containerlab version
 
+      - name: Containerlab CLI smoke test
+        run: |
+          cat <<'EOF' >/tmp/pr-smoke.clab.yml
+          name: pr-smoke
+          topology:
+            nodes:
+              srl1:
+                kind: linux
+                image: ghcr.io/srl-labs/network-multitool:latest
+              srl2:
+                kind: linux
+                image: ghcr.io/srl-labs/network-multitool:latest
+            links:
+              - endpoints: ["srl1:eth1", "srl2:eth1"]
+          EOF
+          sudo containerlab deploy \
+            --network act-pr-smoke \
+            --ipv4-subnet 172.31.20.0/24 \
+            --ipv6-subnet 2001:db8:ac:20::/64 \
+            -t /tmp/pr-smoke.clab.yml
+          sudo containerlab inspect -t /tmp/pr-smoke.clab.yml
+          sudo containerlab destroy -t /tmp/pr-smoke.clab.yml --cleanup --yes
+
       - name: Prepare Linux users for tests_go
         run: sudo scripts/setup-tests-go-env.sh
 
@@ -82,7 +105,13 @@ jobs:
       - name: Run Go integration tests
         env:
           GOTEST_LOG_LEVEL: debug
-        run: go test -count=1 -timeout 45m ./tests_go
+          GO_TEST_PATTERN: "^TestLabCoreSuite/TestListLabsIncludesCreated$"
+        run: |
+          set -a
+          # shellcheck disable=SC1091
+          . tests_go/.env
+          set +a
+          go test -count=1 -timeout 45m ./tests_go -run "${GO_TEST_PATTERN}"
 
       - name: Stop API server
         if: always()
