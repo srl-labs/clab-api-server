@@ -41,6 +41,17 @@ jobs:
         with:
           go-version: '1.24.x'
 
+      - name: Install go-task
+        run: |
+          curl -sSL https://taskfile.dev/install.sh | sh -s -- -d
+          sudo mv ./task /usr/local/bin/task
+          task --version
+
+      - name: Install Go test tooling
+        run: |
+          go install gotest.tools/gotestsum@latest
+          go install github.com/FloSch62/go-test2html@latest
+
       - name: Cache Go modules
         uses: actions/cache@v4
         with:
@@ -102,15 +113,10 @@ jobs:
       - name: Wait for API readiness
         run: timeout 60 bash -c 'until curl -fsS http://127.0.0.1:8080/health >/dev/null; do sleep 2; done'
 
-      - name: Run Go integration tests
+      - name: Run Task tests
         env:
           GOTEST_LOG_LEVEL: debug
-        run: |
-          set -a
-          # shellcheck disable=SC1091
-          . tests_go/.env
-          set +a
-          go test -count=1 -timeout 45m ./tests_go
+        run: task test
 
       - name: Stop API server
         if: always()
@@ -125,6 +131,14 @@ jobs:
           if [ -f server.log ]; then
             cat server.log
           fi
+
+      - name: Upload HTML test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-test-report
+          path: test-reports/test-report.html
+          if-no-files-found: warn
 
       - name: Cleanup leftover labs
         if: always()
