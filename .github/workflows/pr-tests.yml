@@ -43,8 +43,7 @@ jobs:
 
       - name: Install go-task
         run: |
-          curl -sSL https://taskfile.dev/install.sh | sh -s -- -d
-          sudo mv ./task /usr/local/bin/task
+          curl -sSL https://taskfile.dev/install.sh | sudo sh -s -- -b /usr/local/bin
           task --version
 
       - name: Install Go test tooling
