@@ -89,6 +89,33 @@ ensure_not_in_groups() {
   done
 }
 
+add_user_to_group() {
+  local user="$1"
+  local group="$2"
+
+  if [[ -z "$user" || -z "$group" ]]; then
+    return
+  fi
+
+  if ! id -u "$user" >/dev/null 2>&1; then
+    echo "User '$user' does not exist; cannot add to group '$group'"
+    return
+  fi
+
+  if ! getent group "$group" >/dev/null 2>&1; then
+    echo "Group '$group' does not exist; cannot add user '$user'"
+    return
+  fi
+
+  if id -nG "$user" | tr ' ' '\n' | grep -qx "$group"; then
+    echo "User '$user' already a member of '$group'"
+    return
+  fi
+
+  echo "Adding user '$user' to group '$group'"
+  usermod -aG "$group" "$user"
+}
+
 SUPERUSER_USER="$(get_env_value "SUPERUSER_USER")"
 SUPERUSER_PASS="$(get_env_value "SUPERUSER_PASS")"
 APIUSER_USER="$(get_env_value "APIUSER_USER")"
@@ -114,5 +141,16 @@ ensure_user "$SUPERUSER_USER" "$SUPERUSER_PASS" "$SUPERUSER_GROUP" "$APIUSER_GRO
 ensure_user "$APIUSER_USER" "$APIUSER_PASS" "$APIUSER_GROUP"
 ensure_user "$UNAUTH_USER" "$UNAUTH_PASS"
 ensure_not_in_groups "$UNAUTH_USER" "$SUPERUSER_GROUP" "$APIUSER_GROUP"
+
+HOST_USER="${SUDO_USER:-}"
+if [[ -z "$HOST_USER" ]]; then
+  HOST_USER="$(logname 2>/dev/null || true)"
+fi
+
+if [[ -n "$HOST_USER" ]]; then
+  add_user_to_group "$HOST_USER" "$SUPERUSER_GROUP"
+else
+  echo "Unable to detect host user for group alignment"
+fi
 
 echo "Test users/groups aligned with tests_go/.env"
