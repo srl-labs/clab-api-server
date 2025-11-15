@@ -186,3 +186,13 @@ GOTEST_SIMPLE_TOPOLOGY_CONTENT=...
 ```
 
 The GOTEST_SIMPLE_TOPOLOGY_CONTENT must contain a `{lab_name}` placeholder that will be replaced with a generated lab name during testing.
+
+### Provisioning Local Test Accounts
+
+The credentials referenced in `tests_go/.env` must exist as Linux users/groups on the host that runs the API server. Use the helper script to create/update them:
+
+```bash
+sudo scripts/setup-tests-go-env.sh
+```
+
+This script reads `tests_go/.env`, ensures the `clab_admins`/`clab_api` groups exist, and provisions the `SUPERUSER_USER`, `APIUSER_USER`, and `UNAUTH_USER` accounts with the expected passwords so that PAM authentication behaves like it does in CI.
