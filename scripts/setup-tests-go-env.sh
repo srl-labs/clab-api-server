@@ -153,4 +153,7 @@ else
   echo "Unable to detect host user for group alignment"
 fi
 
+# Ensure root (which runs the API server under sudo) can also set lab owners.
+add_user_to_group root "$SUPERUSER_GROUP"
+
 echo "Test users/groups aligned with tests_go/.env"
