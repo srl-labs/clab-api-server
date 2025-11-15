@@ -105,13 +105,12 @@ jobs:
       - name: Run Go integration tests
         env:
           GOTEST_LOG_LEVEL: debug
-          GO_TEST_PATTERN: "^TestLabCoreSuite/TestListLabsIncludesCreated$"
         run: |
           set -a
           # shellcheck disable=SC1091
           . tests_go/.env
           set +a
-          go test -count=1 -timeout 45m ./tests_go -run "${GO_TEST_PATTERN}"
+          go test -count=1 -timeout 45m ./tests_go
 
       - name: Stop API server
         if: always()
