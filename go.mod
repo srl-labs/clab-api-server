@@ -13,7 +13,7 @@ require (
 	github.com/charmbracelet/log v0.4.2
 	github.com/containernetworking/plugins v1.8.0
 	github.com/gin-gonic/gin v1.11.0
-	github.com/golang-jwt/jwt/v5 v5.3.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/joho/godotenv v1.5.1
 	github.com/msteinert/pam v1.2.0
 	github.com/shirou/gopsutil/v4 v4.25.12
