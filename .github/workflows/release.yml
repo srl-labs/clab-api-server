@@ -148,7 +148,7 @@ jobs:
     # Build and push simple-container multi-arch image
     #---------------------------------------------------------------
     - name: Build and push simple-container
-      uses: docker/build-push-action@v6
+      uses: docker/build-push-action@v7
       with:
         context: . # Build context is the repo root
         file: ./docker/simple-container/Dockerfile # Path to the Dockerfile
