@@ -136,7 +136,7 @@ jobs:
     #---------------------------------------------------------------
     - name: Extract Docker metadata for simple-container
       id: meta_simple
-      uses: docker/metadata-action@v5
+      uses: docker/metadata-action@v6
       with:
         images: ghcr.io/${{ env.REPO_LOWER }}/clab-api-server # Use lowercase repo name
         tags: |
