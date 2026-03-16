@@ -8,7 +8,7 @@ replace (
 )
 
 require (
-	github.com/charmbracelet/log v0.4.2
+	github.com/charmbracelet/log v1.0.0
 	github.com/containernetworking/plugins v1.9.0
 	github.com/florianl/go-tc v0.4.7
 	github.com/gin-gonic/gin v1.11.0
