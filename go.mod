@@ -9,7 +9,7 @@ replace (
 
 require (
 	github.com/charmbracelet/log v1.0.0
-	github.com/containernetworking/plugins v1.9.0
+	github.com/containernetworking/plugins v1.9.1
 	github.com/florianl/go-tc v0.4.7
 	github.com/gin-gonic/gin v1.12.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
