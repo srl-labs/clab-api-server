@@ -17,7 +17,7 @@ jobs:
     # 1 — Checkout with full history (tags needed for git describe)
     #---------------------------------------------------------------
     - name: Checkout repository
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         fetch-depth: 0
 
