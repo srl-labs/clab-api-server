@@ -100,8 +100,8 @@ github.com/containernetworking/cni v1.3.0 h1:v6EpN8RznAZj9765HhXQrtXgX+ECGebEYEm
 github.com/containernetworking/cni v1.3.0/go.mod h1:Bs8glZjjFfGPHMw6hQu82RUgEPNGEaBb9KS5KtNMnJ4=
 github.com/containernetworking/plugins v1.9.1 h1:8oU6WsIsU3bpnNZuvHp74a6cE1MJwbj2P7s4/yTUNlA=
 github.com/containernetworking/plugins v1.9.1/go.mod h1:fj7kS55qg3o/RgS+WGsF3+ZxwIImMPusQZKzBpcSr4c=
-github.com/containers/buildah v1.43.1 h1:hZO/b0BxDTu38vVc3CaUhe1q3s+q2Y3goeY6QRqm4Qg=
-github.com/containers/buildah v1.43.1/go.mod h1:LSi6Syf+ntc1g0WcUa7yb5dT1W2KzA//+aW+TLgj1os=
+github.com/containers/buildah v1.43.2 h1:KbxgDNWtbMTQtbSElh4e/n8pJa9EDF+/jtIKPr1QtZI=
+github.com/containers/buildah v1.43.2/go.mod h1:dXSaAu+S9aiY0j1teX+7btxBKSZlLfWU5LXnXwPaxf8=
 github.com/containers/libtrust v0.0.0-20230121012942-c1716e8a8d01 h1:Qzk5C6cYglewc+UyGf6lc8Mj2UaPTHy/iF2De0/77CA=
 github.com/containers/libtrust v0.0.0-20230121012942-c1716e8a8d01/go.mod h1:9rfv8iPl1ZP7aqh9YA68wnZv2NUDbXdcdPHVz0pFbPY=
 github.com/containers/ocicrypt v1.2.1 h1:0qIOTT9DoYwcKmxSt8QJt+VzMY18onl9jUXsxpVhSmM=
