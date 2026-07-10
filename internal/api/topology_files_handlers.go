@@ -123,22 +123,20 @@ func canonicalizeTopologyName(raw []byte, labName string) []byte {
 }
 
 func copyDirectoryTree(sourceDir, targetDir string, uid, gid int) error {
-	sourceRoot := filepath.Clean(sourceDir)
-	targetRoot := filepath.Clean(targetDir)
+	sourceRoot, err := openWorkspaceRoot(sourceDir)
+	if err != nil {
+		return err
+	}
+	defer sourceRoot.Close()
+	targetRoot, err := openWorkspaceRoot(targetDir)
+	if err != nil {
+		return err
+	}
+	defer targetRoot.Close()
 
-	return filepath.WalkDir(sourceRoot, func(currentPath string, entry fs.DirEntry, walkErr error) error {
+	return fs.WalkDir(sourceRoot.FS(), ".", func(relativePath string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
-		}
-
-		relativePath, relErr := filepath.Rel(sourceRoot, currentPath)
-		if relErr != nil {
-			return relErr
-		}
-
-		targetPath := targetRoot
-		if relativePath != "." {
-			targetPath = filepath.Join(targetRoot, relativePath)
 		}
 
 		if entry.Type()&os.ModeSymlink != 0 {
@@ -147,45 +145,39 @@ func copyDirectoryTree(sourceDir, targetDir string, uid, gid int) error {
 		}
 
 		if entry.IsDir() {
-			mode := os.FileMode(0750)
-			if info, infoErr := entry.Info(); infoErr == nil {
-				if perm := info.Mode().Perm(); perm != 0 {
-					mode = perm
-				}
+			if relativePath == "." {
+				return nil
 			}
-			if err := os.MkdirAll(targetPath, mode); err != nil {
-				return err
-			}
-			_ = os.Chown(targetPath, uid, gid)
-			return nil
+			return ensureTopologyRootDirectory(targetRoot, filepath.FromSlash(relativePath), uid, gid)
 		}
 
 		info, infoErr := entry.Info()
 		if infoErr != nil {
 			return infoErr
 		}
-		if err := os.MkdirAll(filepath.Dir(targetPath), 0750); err != nil {
-			return err
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("unsupported repository file type at %q", relativePath)
 		}
-		content, readErr := os.ReadFile(currentPath)
+		content, readErr := sourceRoot.ReadFile(filepath.FromSlash(relativePath))
 		if readErr != nil {
 			return readErr
 		}
-
-		fileMode := info.Mode().Perm()
-		if fileMode == 0 {
-			fileMode = 0640
-		}
-		if writeErr := os.WriteFile(targetPath, content, fileMode); writeErr != nil {
-			return writeErr
-		}
-		_ = os.Chown(targetPath, uid, gid)
-		return nil
+		return writeArchiveFile(targetRoot, filepath.FromSlash(relativePath), bytes.NewReader(content), int64(len(content)), info.Mode(), uid, gid)
 	})
 }
 
 func directoryHasTopLevelTopologyFiles(dirPath string) (bool, error) {
-	entries, err := os.ReadDir(dirPath)
+	root, err := openWorkspaceRoot(dirPath)
+	if err != nil {
+		return false, err
+	}
+	defer root.Close()
+	directory, err := root.Open(".")
+	if err != nil {
+		return false, err
+	}
+	defer directory.Close()
+	entries, err := directory.ReadDir(-1)
 	if err != nil {
 		return false, err
 	}
@@ -269,7 +261,7 @@ func ImportTopologyFromURLHandler(c *gin.Context) {
 		return
 	}
 
-	if stat, statErr := os.Stat(targetDir); statErr == nil {
+	if stat, statErr := os.Lstat(targetDir); statErr == nil {
 		if !stat.IsDir() {
 			c.JSON(http.StatusConflict, models.ErrorResponse{Error: fmt.Sprintf("Path for lab '%s' already exists and is not a directory.", labName)})
 			return
@@ -287,7 +279,7 @@ func ImportTopologyFromURLHandler(c *gin.Context) {
 
 		// The user may have deleted only the topology file, leaving a stale lab directory behind.
 		// Remove it to ensure import recreates a clean undeployed lab tree.
-		if removeErr := os.RemoveAll(targetDir); removeErr != nil {
+		if removeErr := removeManagedLabDirectory(username, labName); removeErr != nil {
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to reset existing lab directory: %s", removeErr.Error())})
 			return
 		}
@@ -319,13 +311,18 @@ func ImportTopologyFromURLHandler(c *gin.Context) {
 	}
 	if sourceDir != targetDir {
 		if copyErr := copyDirectoryTree(sourceDir, targetDir, uid, gid); copyErr != nil {
-			_ = os.RemoveAll(targetDir)
+			_ = removeManagedLabDirectory(username, labName)
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to copy cloned repository: %s", copyErr.Error())})
 			return
 		}
 	}
 
-	topologyContent, readErr := os.ReadFile(cloned.TopologyPath)
+	rootedTopologySource, resolveSourceErr := resolveUserRootedFilePath(username, cloned.TopologyPath)
+	if resolveSourceErr != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: fmt.Sprintf("Invalid cloned topology path: %s", resolveSourceErr.Error())})
+		return
+	}
+	topologyContent, readErr := readRootedFile(rootedTopologySource)
 	if readErr != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to read topology file: %s", readErr.Error())})
 		return
@@ -334,28 +331,41 @@ func ImportTopologyFromURLHandler(c *gin.Context) {
 	fileName := labName + ".clab.yml"
 	canonicalPath := filepath.Join(targetDir, fileName)
 	canonicalContent := canonicalizeTopologyName(topologyContent, labName)
-	if writeErr := os.WriteFile(canonicalPath, canonicalContent, 0640); writeErr != nil {
+	rootedCanonicalPath, resolveCanonicalErr := resolveUserRootedFilePath(username, canonicalPath)
+	if resolveCanonicalErr != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: fmt.Sprintf("Invalid canonical topology path: %s", resolveCanonicalErr.Error())})
+		return
+	}
+	if writeErr := writeRootedFile(rootedCanonicalPath, canonicalContent, false); writeErr != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to write canonical topology file: %s", writeErr.Error())})
 		return
 	}
-	_ = os.Chown(canonicalPath, uid, gid)
 
 	hasAnnotations := false
 	sourceAnnotationsPath := cloned.TopologyPath + ".annotations.json"
 	canonicalAnnotationsPath := canonicalPath + ".annotations.json"
-	if _, statErr := os.Stat(sourceAnnotationsPath); statErr == nil {
+	rootedAnnotationsSource, annotationsResolveErr := resolveUserRootedFilePath(username, sourceAnnotationsPath)
+	if annotationsResolveErr != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: fmt.Sprintf("Invalid cloned annotations path: %s", annotationsResolveErr.Error())})
+		return
+	}
+	if _, statErr := statRootedFile(rootedAnnotationsSource); statErr == nil {
 		hasAnnotations = true
 		if filepath.Clean(sourceAnnotationsPath) != filepath.Clean(canonicalAnnotationsPath) {
-			annotationsContent, readAnnotationsErr := os.ReadFile(sourceAnnotationsPath)
+			annotationsContent, readAnnotationsErr := readRootedFile(rootedAnnotationsSource)
 			if readAnnotationsErr != nil {
 				c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to read annotations file: %s", readAnnotationsErr.Error())})
 				return
 			}
-			if writeAnnotationsErr := os.WriteFile(canonicalAnnotationsPath, annotationsContent, 0640); writeAnnotationsErr != nil {
+			rootedCanonicalAnnotations, canonicalAnnotationsErr := resolveUserRootedFilePath(username, canonicalAnnotationsPath)
+			if canonicalAnnotationsErr != nil {
+				c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: fmt.Sprintf("Invalid canonical annotations path: %s", canonicalAnnotationsErr.Error())})
+				return
+			}
+			if writeAnnotationsErr := writeRootedFile(rootedCanonicalAnnotations, annotationsContent, false); writeAnnotationsErr != nil {
 				c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to write canonical annotations file: %s", writeAnnotationsErr.Error())})
 				return
 			}
-			_ = os.Chown(canonicalAnnotationsPath, uid, gid)
 		}
 	} else if statErr != nil && !os.IsNotExist(statErr) {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to stat annotations file: %s", statErr.Error())})
@@ -391,6 +401,7 @@ func ImportTopologyFromURLHandler(c *gin.Context) {
 // @Param labName path string true "Lab name"
 // @Param path query string false "Relative topology file path inside lab directory (defaults to <labName>.clab.yml)"
 // @Param reconfigure query boolean false "Allow overwriting an existing lab"
+// @Param cleanup query boolean false "Backward-compatible alias for reconfigure"
 // @Param maxWorkers query int false "Limit concurrent workers"
 // @Param exportTemplate query string false "Custom Go template file for topology data export"
 // @Param nodeFilter query string false "Comma-separated list of node names to deploy"
@@ -417,7 +428,7 @@ func DeployTopologyHandler(c *gin.Context) {
 		return
 	}
 
-	reconfigure := c.Query("reconfigure") == "true"
+	reconfigure := deployReconfigureRequested(c)
 	maxWorkersStr := c.DefaultQuery("maxWorkers", "0")
 	exportTemplate := c.Query("exportTemplate")
 	nodeFilter := c.Query("nodeFilter")
@@ -462,7 +473,12 @@ func DeployTopologyHandler(c *gin.Context) {
 		topologyPath = filepath.Join(labDir, labName+".clab.yml")
 	}
 
-	if _, statErr := os.Stat(topologyPath); statErr != nil {
+	rootedTopology, rootedErr := resolveUserRootedFilePath(username, topologyPath)
+	if rootedErr != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: rootedErr.Error()})
+		return
+	}
+	if _, statErr := statRootedFile(rootedTopology); statErr != nil {
 		if os.IsNotExist(statErr) {
 			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Topology file not found for lab '%s'.", labName)})
 			return
@@ -481,7 +497,7 @@ func DeployTopologyHandler(c *gin.Context) {
 	}
 	if exists {
 		if !reconfigure {
-			c.JSON(http.StatusConflict, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' already exists. Use 'reconfigure=true' to overwrite.", labName)})
+			c.JSON(http.StatusConflict, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' already exists. Use 'reconfigure=true' (or legacy 'cleanup=true') to overwrite.", labName)})
 			return
 		}
 		if !isSuperuser(username) && labInfo.Owner != username {
@@ -678,7 +694,12 @@ func ApplyTopologyHandler(c *gin.Context) {
 		topologyPath = filepath.Join(labDir, labName+".clab.yml")
 	}
 
-	if _, statErr := os.Stat(topologyPath); statErr != nil {
+	rootedTopology, rootedErr := resolveUserRootedFilePath(targetOwner, topologyPath)
+	if rootedErr != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: rootedErr.Error()})
+		return
+	}
+	if _, statErr := statRootedFile(rootedTopology); statErr != nil {
 		if os.IsNotExist(statErr) {
 			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Topology file not found for lab '%s'.", labName)})
 			return
@@ -770,22 +791,34 @@ func GetTopologyFileHandler(c *gin.Context) {
 	labName := c.Param("labName")
 	relPath := c.Query("path")
 
-	absPath, _, _, _, err := resolveTopologyFilePath(username, labName, relPath)
+	rootedPath, err := resolveTopologyRootedPath(username, labName, relPath)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: err.Error()})
 		return
 	}
-	writeTopologyRevisionHeader(c, username, labName, relPath)
 
-	content, readErr := os.ReadFile(absPath)
-	if readErr != nil {
-		if os.IsNotExist(readErr) {
-			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: "File not found"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: readErr.Error()})
+	root, rootErr := openWorkspaceRoot(rootedPath.rootPath)
+	if rootErr != nil {
+		writeTopologyRootError(c, rootErr, "File not found")
 		return
 	}
+	defer root.Close()
+
+	info, lstatErr := root.Lstat(rootedPath.relativePath)
+	if lstatErr != nil {
+		writeTopologyRootError(c, lstatErr, "File not found")
+		return
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "File path must reference a regular file without symbolic links"})
+		return
+	}
+	content, readErr := root.ReadFile(rootedPath.relativePath)
+	if readErr != nil {
+		writeTopologyRootError(c, readErr, "File not found")
+		return
+	}
+	writeTopologyRevisionHeader(c, username, labName, relPath)
 
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", content)
 }
@@ -807,21 +840,29 @@ func HeadTopologyFileHandler(c *gin.Context) {
 	labName := c.Param("labName")
 	relPath := c.Query("path")
 
-	absPath, _, _, _, err := resolveTopologyFilePath(username, labName, relPath)
+	rootedPath, err := resolveTopologyRootedPath(username, labName, relPath)
 	if err != nil {
 		c.Status(http.StatusBadRequest)
 		return
 	}
-	writeTopologyRevisionHeader(c, username, labName, relPath)
 
-	if _, statErr := os.Stat(absPath); statErr != nil {
-		if os.IsNotExist(statErr) {
-			c.Status(http.StatusNotFound)
-			return
-		}
-		c.Status(http.StatusInternalServerError)
+	root, rootErr := openWorkspaceRoot(rootedPath.rootPath)
+	if rootErr != nil {
+		writeTopologyRootStatus(c, rootErr)
 		return
 	}
+	defer root.Close()
+
+	info, statErr := root.Lstat(rootedPath.relativePath)
+	if statErr != nil {
+		writeTopologyRootStatus(c, statErr)
+		return
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	writeTopologyRevisionHeader(c, username, labName, relPath)
 
 	c.Status(http.StatusOK)
 }
@@ -845,7 +886,7 @@ func PutTopologyFileHandler(c *gin.Context) {
 	labName := c.Param("labName")
 	relPath := c.Query("path")
 
-	absPath, labDir, uid, gid, err := resolveTopologyFilePath(username, labName, relPath)
+	rootedPath, err := resolveTopologyRootedPath(username, labName, relPath)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: err.Error()})
 		return
@@ -857,16 +898,51 @@ func PutTopologyFileHandler(c *gin.Context) {
 		return
 	}
 
-	if mkdirErr := ensureLabDirectory(labDir, uid, gid); mkdirErr != nil {
+	if mkdirErr := ensureWorkspaceRoot(rootedPath.rootPath, rootedPath.uid, rootedPath.gid); mkdirErr != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to ensure lab directory: %s", mkdirErr.Error())})
 		return
 	}
 
-	if writeErr := os.WriteFile(absPath, body, 0640); writeErr != nil {
+	root, rootErr := openWorkspaceRoot(rootedPath.rootPath)
+	if rootErr != nil {
+		writeTopologyRootError(c, rootErr, "File not found")
+		return
+	}
+	defer root.Close()
+
+	parentPath := filepath.Dir(rootedPath.relativePath)
+	if parentPath != "." {
+		if mkdirErr := ensureTopologyRootDirectory(root, parentPath, rootedPath.uid, rootedPath.gid); mkdirErr != nil {
+			writeTopologyRootError(c, mkdirErr, "Parent directory not found")
+			return
+		}
+	}
+	if info, lstatErr := root.Lstat(rootedPath.relativePath); lstatErr == nil && info.Mode()&os.ModeSymlink != 0 {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "File path must not be a symbolic link"})
+		return
+	} else if lstatErr != nil && !os.IsNotExist(lstatErr) {
+		writeTopologyRootError(c, lstatErr, "File not found")
+		return
+	}
+
+	file, openErr := root.OpenFile(rootedPath.relativePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0640)
+	if openErr != nil {
+		writeTopologyRootError(c, openErr, "File not found")
+		return
+	}
+	defer file.Close()
+	if chownErr := file.Chown(rootedPath.uid, rootedPath.gid); chownErr != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to set file ownership: %s", chownErr.Error())})
+		return
+	}
+	if chmodErr := file.Chmod(0o640); chmodErr != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to set file permissions: %s", chmodErr.Error())})
+		return
+	}
+	if _, writeErr := file.Write(body); writeErr != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to write file: %s", writeErr.Error())})
 		return
 	}
-	_ = os.Chown(absPath, uid, gid)
 
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
@@ -888,14 +964,25 @@ func DeleteTopologyFileHandler(c *gin.Context) {
 	labName := c.Param("labName")
 	relPath := c.Query("path")
 
-	absPath, _, _, _, err := resolveTopologyFilePath(username, labName, relPath)
+	rootedPath, err := resolveTopologyRootedPath(username, labName, relPath)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: err.Error()})
 		return
 	}
 
-	if unlinkErr := os.Remove(absPath); unlinkErr != nil && !os.IsNotExist(unlinkErr) {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to delete file: %s", unlinkErr.Error())})
+	root, rootErr := openWorkspaceRoot(rootedPath.rootPath)
+	if rootErr != nil {
+		if os.IsNotExist(rootErr) {
+			c.JSON(http.StatusOK, gin.H{"success": true})
+			return
+		}
+		writeTopologyRootError(c, rootErr, "File not found")
+		return
+	}
+	defer root.Close()
+
+	if unlinkErr := root.Remove(rootedPath.relativePath); unlinkErr != nil && !os.IsNotExist(unlinkErr) {
+		writeTopologyRootError(c, unlinkErr, "File not found")
 		return
 	}
 
@@ -925,34 +1012,47 @@ func RenameTopologyFileHandler(c *gin.Context) {
 		return
 	}
 
-	oldPath, _, _, _, oldErr := resolveTopologyFilePath(username, labName, req.OldPath)
+	oldPath, oldErr := resolveTopologyRootedPath(username, labName, req.OldPath)
 	if oldErr != nil {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: oldErr.Error()})
 		return
 	}
 
-	newPath, labDir, uid, gid, newErr := resolveTopologyFilePath(username, labName, req.NewPath)
+	newPath, newErr := resolveTopologyRootedPath(username, labName, req.NewPath)
 	if newErr != nil {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: newErr.Error()})
 		return
 	}
 
-	if ensureErr := ensureLabDirectory(labDir, uid, gid); ensureErr != nil {
+	if oldPath.rootPath != newPath.rootPath {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Source and destination must be in the same workspace"})
+		return
+	}
+	if ensureErr := ensureWorkspaceRoot(newPath.rootPath, newPath.uid, newPath.gid); ensureErr != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to ensure lab directory: %s", ensureErr.Error())})
 		return
 	}
 
-	if mkdirErr := os.MkdirAll(filepath.Dir(newPath), 0750); mkdirErr != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to ensure destination directory: %s", mkdirErr.Error())})
+	root, rootErr := openWorkspaceRoot(newPath.rootPath)
+	if rootErr != nil {
+		writeTopologyRootError(c, rootErr, "Source file not found")
 		return
 	}
-	_ = os.Chown(filepath.Dir(newPath), uid, gid)
+	defer root.Close()
 
-	if renameErr := os.Rename(oldPath, newPath); renameErr != nil {
+	newParentPath := filepath.Dir(newPath.relativePath)
+	if newParentPath != "." {
+		if mkdirErr := ensureTopologyRootDirectory(root, newParentPath, newPath.uid, newPath.gid); mkdirErr != nil {
+			writeTopologyRootError(c, mkdirErr, "Destination directory not found")
+			return
+		}
+	}
+
+	if renameErr := root.Rename(oldPath.relativePath, newPath.relativePath); renameErr != nil {
 		// Make rename robust for retry/concurrency races used by editor temp-file flows:
 		// if source vanished but destination already exists, treat as already-renamed.
 		if os.IsNotExist(renameErr) {
-			_, statErr := os.Stat(newPath)
+			_, statErr := root.Stat(newPath.relativePath)
 			if statErr == nil {
 				c.JSON(http.StatusOK, gin.H{"success": true})
 				return
@@ -961,10 +1061,10 @@ func RenameTopologyFileHandler(c *gin.Context) {
 				c.JSON(http.StatusNotFound, models.ErrorResponse{Error: "Source file not found"})
 				return
 			}
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to stat destination file: %s", statErr.Error())})
+			writeTopologyRootError(c, statErr, "Destination file not found")
 			return
 		}
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to rename file: %s", renameErr.Error())})
+		writeTopologyRootError(c, renameErr, "Source file not found")
 		return
 	}
 
@@ -975,16 +1075,27 @@ func listTopologyEntries(baseDir string) ([]models.TopologyEntry, error) {
 	entries := []models.TopologyEntry{}
 	entryByLab := map[string]models.TopologyEntry{}
 
-	dirEntries, err := os.ReadDir(baseDir)
+	root, err := openWorkspaceRoot(baseDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return entries, nil
 		}
 		return nil, fmt.Errorf("failed to read labs directory: %w", err)
 	}
+	defer root.Close()
+	baseDirectory, err := root.Open(".")
+	if err != nil {
+		return nil, fmt.Errorf("failed to open labs directory: %w", err)
+	}
+	dirEntries, err := baseDirectory.ReadDir(-1)
+	_ = baseDirectory.Close()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read labs directory: %w", err)
+	}
 
 	for _, entry := range dirEntries {
-		if !entry.IsDir() {
+		entryInfo, infoErr := root.Lstat(entry.Name())
+		if infoErr != nil || entryInfo.Mode()&os.ModeSymlink != 0 || !entryInfo.IsDir() {
 			continue
 		}
 
@@ -993,15 +1104,20 @@ func listTopologyEntries(baseDir string) ([]models.TopologyEntry, error) {
 			continue
 		}
 
-		labDir := filepath.Join(baseDir, labName)
-		labDirEntries, readErr := os.ReadDir(labDir)
+		labDirectory, openErr := root.Open(labName)
+		if openErr != nil {
+			continue
+		}
+		labDirEntries, readErr := labDirectory.ReadDir(-1)
+		_ = labDirectory.Close()
 		if readErr != nil {
 			continue
 		}
 
 		yamlCandidates := []string{}
 		for _, labEntry := range labDirEntries {
-			if labEntry.IsDir() {
+			labEntryInfo, labInfoErr := root.Lstat(filepath.Join(labName, labEntry.Name()))
+			if labInfoErr != nil || labEntryInfo.Mode()&os.ModeSymlink != 0 || !labEntryInfo.Mode().IsRegular() {
 				continue
 			}
 			name := labEntry.Name()
@@ -1029,12 +1145,9 @@ func listTopologyEntries(baseDir string) ([]models.TopologyEntry, error) {
 		}
 
 		annotationsFileName := yamlFileName + ".annotations.json"
-		annotationsPath := filepath.Join(labDir, annotationsFileName)
-
-		_, hasAnnotations := func() (os.FileInfo, bool) {
-			info, err := os.Stat(annotationsPath)
-			return info, err == nil
-		}()
+		annotationsPath := filepath.Join(labName, annotationsFileName)
+		annotationsInfo, annotationsErr := root.Lstat(annotationsPath)
+		hasAnnotations := annotationsErr == nil && annotationsInfo.Mode().IsRegular()
 
 		topologyEntry := models.TopologyEntry{
 			LabName:             labName,
@@ -1048,7 +1161,8 @@ func listTopologyEntries(baseDir string) ([]models.TopologyEntry, error) {
 	}
 
 	for _, entry := range dirEntries {
-		if entry.IsDir() {
+		entryInfo, infoErr := root.Lstat(entry.Name())
+		if infoErr != nil || entryInfo.Mode()&os.ModeSymlink != 0 || !entryInfo.Mode().IsRegular() {
 			continue
 		}
 
@@ -1072,11 +1186,8 @@ func listTopologyEntries(baseDir string) ([]models.TopologyEntry, error) {
 		}
 
 		annotationsFileName := name + ".annotations.json"
-		annotationsPath := filepath.Join(baseDir, annotationsFileName)
-		_, hasAnnotations := func() (os.FileInfo, bool) {
-			info, err := os.Stat(annotationsPath)
-			return info, err == nil
-		}()
+		annotationsInfo, annotationsErr := root.Lstat(annotationsFileName)
+		hasAnnotations := annotationsErr == nil && annotationsInfo.Mode().IsRegular()
 
 		topologyEntry := models.TopologyEntry{
 			LabName:             labName,
@@ -1123,7 +1234,7 @@ func resolveCanonicalTopologyRootPath(cleanLabDir, labName, cleanPath string) st
 	rootDir := filepath.Clean(filepath.Dir(cleanLabDir))
 	rootCandidate := filepath.Clean(filepath.Join(rootDir, cleanPath))
 
-	if _, err := os.Stat(rootCandidate); err == nil {
+	if info, err := os.Lstat(rootCandidate); err == nil && info.Mode().IsRegular() {
 		return rootCandidate
 	}
 
@@ -1131,7 +1242,7 @@ func resolveCanonicalTopologyRootPath(cleanLabDir, labName, cleanPath string) st
 	// root topology YAML exists, even if annotations are being created first.
 	if strings.HasSuffix(cleanPath, ".annotations.json") {
 		rootYAML := strings.TrimSuffix(rootCandidate, ".annotations.json")
-		if _, err := os.Stat(rootYAML); err == nil {
+		if info, err := os.Lstat(rootYAML); err == nil && info.Mode().IsRegular() {
 			return rootCandidate
 		}
 	}
@@ -1172,4 +1283,111 @@ func resolveTopologyFilePath(username, labName, relPath string) (absolutePath, l
 	}
 
 	return absPath, cleanLabDir, uid, gid, nil
+}
+
+type rootedFilePath struct {
+	rootPath     string
+	relativePath string
+	uid          int
+	gid          int
+}
+
+func resolveTopologyRootedPath(username, labName, relPath string) (rootedFilePath, error) {
+	absPath, labDir, uid, gid, err := resolveTopologyFilePath(username, labName, relPath)
+	if err != nil {
+		return rootedFilePath{}, err
+	}
+
+	rootPath := filepath.Clean(filepath.Dir(labDir))
+	if !pathIsInsideRoot(rootPath, absPath) {
+		return rootedFilePath{}, fmt.Errorf("resolved path escapes workspace directory")
+	}
+	relativePath, err := filepath.Rel(rootPath, absPath)
+	if err != nil || relativePath == "." || relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
+		return rootedFilePath{}, fmt.Errorf("invalid file path")
+	}
+
+	return rootedFilePath{
+		rootPath:     rootPath,
+		relativePath: relativePath,
+		uid:          uid,
+		gid:          gid,
+	}, nil
+}
+
+func writeTopologyRootStatus(c *gin.Context, err error) {
+	switch {
+	case os.IsNotExist(err):
+		c.Status(http.StatusNotFound)
+	case workspaceRootErrorIsBadPath(err):
+		c.Status(http.StatusBadRequest)
+	default:
+		c.Status(http.StatusInternalServerError)
+	}
+}
+
+func writeTopologyRootError(c *gin.Context, err error, notFoundMessage string) {
+	switch {
+	case os.IsNotExist(err):
+		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: notFoundMessage})
+	case workspaceRootErrorIsBadPath(err):
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid file path"})
+	default:
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
+	}
+}
+
+func ensureTopologyRootDirectory(root *os.Root, path string, uid, gid int) error {
+	currentPath := ""
+	for _, component := range strings.Split(filepath.Clean(path), string(filepath.Separator)) {
+		if component == "" || component == "." {
+			continue
+		}
+		if component == ".." {
+			return fmt.Errorf("directory path escapes workspace")
+		}
+		currentPath = filepath.Join(currentPath, component)
+		componentInfo, lstatErr := root.Lstat(currentPath)
+		if os.IsNotExist(lstatErr) {
+			if mkdirErr := root.Mkdir(currentPath, 0o750); mkdirErr != nil {
+				return mkdirErr
+			}
+			componentInfo, lstatErr = root.Lstat(currentPath)
+		}
+		if lstatErr != nil {
+			return lstatErr
+		}
+		if componentInfo.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("directory path must not contain symbolic links")
+		}
+		if !componentInfo.IsDir() {
+			return fmt.Errorf("path is not a directory")
+		}
+		dir, err := root.Open(currentPath)
+		if err != nil {
+			return err
+		}
+		info, statErr := dir.Stat()
+		if statErr != nil {
+			_ = dir.Close()
+			return statErr
+		}
+		if !info.IsDir() {
+			_ = dir.Close()
+			return fmt.Errorf("path is not a directory")
+		}
+		chownErr := dir.Chown(uid, gid)
+		chmodErr := dir.Chmod(0o750)
+		closeErr := dir.Close()
+		if chownErr != nil {
+			return chownErr
+		}
+		if chmodErr != nil {
+			return chmodErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
+	return nil
 }

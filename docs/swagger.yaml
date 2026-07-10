@@ -92,6 +92,22 @@ definitions:
         description: Overall CPU usage percentage
         type: number
     type: object
+  models.CapabilitiesResponse:
+    properties:
+      apiVersion:
+        example: v1
+        type: string
+      features:
+        items:
+          type: string
+        type: array
+      runtime:
+        example: docker
+        type: string
+      serverVersion:
+        example: v0.5.0
+        type: string
+    type: object
   models.CaptureCloseAllResponse:
     properties:
       closed:
@@ -1021,6 +1037,19 @@ definitions:
         description: API server version
         type: string
     type: object
+  models.SessionResponse:
+    properties:
+      expiresAt:
+        type: string
+      issuedAt:
+        type: string
+      roles:
+        items:
+          type: string
+        type: array
+      username:
+        type: string
+    type: object
   models.ShareToolResponse:
     properties:
       link:
@@ -1341,6 +1370,26 @@ info:
   title: Containerlab API Server
   version: "1.0"
 paths:
+  /api/v1/capabilities:
+    get:
+      description: Returns the API contract version, server version, runtime, and
+        optional protocol features supported by this build.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: API capabilities
+          schema:
+            $ref: '#/definitions/models.CapabilitiesResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get API capabilities
+      tags:
+      - Session
   /api/v1/capture/wireshark-vnc-sessions:
     delete:
       description: Terminates all capture VNC sessions owned by the authenticated
@@ -1573,7 +1622,7 @@ paths:
         - The `images` and `licenses` fields map node kind to image or license path (e.g., {"nokia_srlinux":"ghcr.io/..."}).
         - When `deploy=true`, the topology is saved to the user's managed lab directory and `outputFile` is ignored.
         - When `deploy=false` and `outputFile` is empty, YAML is returned in the response.
-        - When `deploy=false` and `outputFile` is set, the file is saved to that path on the server (requires API server write permissions).
+        - When `deploy=false` and `outputFile` is set, the relative file path is saved inside the authenticated user's managed workspace.
       parameters:
       - description: Topology generation parameters. The 'images' field maps kind
           to image path.
@@ -1779,6 +1828,10 @@ paths:
       - description: Allow overwriting an existing lab IF owned by the user
         in: query
         name: reconfigure
+        type: boolean
+      - description: Backward-compatible alias for reconfigure
+        in: query
+        name: cleanup
         type: boolean
       - description: Limit concurrent workers
         in: query
@@ -2237,6 +2290,10 @@ paths:
       - description: Allow overwriting an existing lab
         in: query
         name: reconfigure
+        type: boolean
+      - description: Backward-compatible alias for reconfigure
+        in: query
+        name: cleanup
         type: boolean
       - description: Limit concurrent workers
         in: query
@@ -3691,7 +3748,9 @@ paths:
     post:
       consumes:
       - multipart/form-data
-      description: Deploys a containerlab topology provided as a .zip or .tar.gz archive.
+      description: |-
+        Deploys a containerlab topology provided as a .zip or .tar.gz archive.
+        Archives are staged and validated before replacing an existing workspace; the previous workspace is restored if deployment fails. Compressed and uncompressed content are limited to 256 MiB and special/symbolic-link entries are rejected.
       parameters:
       - description: Lab archive (.zip or .tar.gz)
         in: formData
@@ -3706,6 +3765,10 @@ paths:
       - description: Allow overwriting an existing lab
         in: query
         name: reconfigure
+        type: boolean
+      - description: Backward-compatible alias for reconfigure
+        in: query
+        name: cleanup
         type: boolean
       - description: Limit concurrent workers
         in: query
@@ -3748,6 +3811,10 @@ paths:
             $ref: '#/definitions/models.ErrorResponse'
         "409":
           description: Conflict
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "413":
+          description: Archive exceeds configured size limits
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "500":
@@ -3834,8 +3901,9 @@ paths:
     post:
       consumes:
       - application/json
-      description: Creates a directory inside the authenticated user's editable lab
-        workspace root.
+      description: |-
+        Creates a directory inside the authenticated user's editable lab workspace root.
+        Paths whose first component starts with `.archive-*` or `.backup-*` are reserved and rejected.
       parameters:
       - description: Directory path
         in: body
@@ -3869,8 +3937,9 @@ paths:
       - Labs
   /api/v1/labs/workspace/events:
     get:
-      description: Streams create/change/delete/rename events inside the authenticated
-        user's editable lab workspace root as NDJSON.
+      description: |-
+        Streams create/change/delete/rename events inside the authenticated user's editable lab workspace root as NDJSON.
+        Internal `.archive-*` and `.backup-*` transaction paths are excluded from the stream.
       produces:
       - application/x-ndjson
       responses:
@@ -3893,8 +3962,9 @@ paths:
       - Labs
   /api/v1/labs/workspace/file:
     delete:
-      description: Deletes a file or directory inside the authenticated user's editable
-        lab workspace root. Directories with children require recursive=true.
+      description: |-
+        Deletes a file or directory inside the authenticated user's editable lab workspace root. Directories with children require recursive=true.
+        Paths whose first component starts with `.archive-*` or `.backup-*` are reserved and rejected.
       parameters:
       - description: Relative file path inside the workspace root
         in: query
@@ -3930,8 +4000,9 @@ paths:
       tags:
       - Labs
     get:
-      description: Reads a text or binary file from the authenticated user's editable
-        lab workspace root.
+      description: |-
+        Reads a text or binary file from the authenticated user's editable lab workspace root.
+        Paths whose first component starts with `.archive-*` or `.backup-*` are reserved and rejected.
       parameters:
       - description: Relative file path inside the workspace root
         in: query
@@ -3969,8 +4040,9 @@ paths:
     put:
       consumes:
       - text/plain
-      description: Writes a file inside the authenticated user's editable lab workspace
-        root.
+      description: |-
+        Writes a file inside the authenticated user's editable lab workspace root.
+        Paths whose first component starts with `.archive-*` or `.backup-*` are reserved and rejected.
       parameters:
       - description: Relative file path inside the workspace root
         in: query
@@ -4011,8 +4083,9 @@ paths:
     post:
       consumes:
       - application/json
-      description: Renames or moves a file inside the authenticated user's editable
-        lab workspace root.
+      description: |-
+        Renames or moves a file inside the authenticated user's editable lab workspace root.
+        Source or destination paths whose first component starts with `.archive-*` or `.backup-*` are reserved and rejected.
       parameters:
       - description: Old and new relative file paths
         in: body
@@ -4046,8 +4119,9 @@ paths:
       - Labs
   /api/v1/labs/workspace/tree:
     get:
-      description: Lists files and folders inside the authenticated user's editable
-        lab workspace root.
+      description: |-
+        Lists files and folders inside the authenticated user's editable lab workspace root.
+        Top-level `.archive-*` and `.backup-*` entries are reserved for internal archive transactions and are hidden.
       parameters:
       - description: Relative directory path inside the workspace root
         in: query
@@ -4083,6 +4157,26 @@ paths:
       summary: List lab workspace files
       tags:
       - Labs
+  /api/v1/session:
+    get:
+      description: Returns the stable API identity, roles, and bearer-token lifetime
+        for the current caller.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Authenticated session
+          schema:
+            $ref: '#/definitions/models.SessionResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get authenticated session
+      tags:
+      - Session
   /api/v1/ssh/sessions:
     get:
       description: |-

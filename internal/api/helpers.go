@@ -6,6 +6,7 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -26,12 +27,11 @@ import (
 	"github.com/srl-labs/clab-api-server/internal/clab"
 	"github.com/srl-labs/clab-api-server/internal/config"
 	"github.com/srl-labs/clab-api-server/internal/models"
+	workspacestore "github.com/srl-labs/clab-api-server/internal/workspace"
 )
 
 // isValidLabName checks for potentially harmful characters in lab names.
 var labNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
-
-const clabLabsRootEnv = "CLAB_LABS_ROOT"
 
 // isValidContainerName checks container names (often includes lab prefix)
 var containerNameRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]+$`) // Docker's typical naming restrictions
@@ -291,6 +291,7 @@ func verifyLabOwnership(c *gin.Context, username, labName string) (string, error
 	// Lab exists, now check ownership
 	actualOwner := labInfo.Owner
 	originalTopoPath := labInfo.AbsLabPath // Using AbsLabPath as LabPath (relative) does not delete lab dir on cleanup
+	c.Set(verifiedLabOwnerContextKey, actualOwner)
 
 	// Check superuser status or direct ownership
 	if isSuperuser(username) {
@@ -431,81 +432,55 @@ func extractZip(archiveReader io.ReaderAt, archiveSize int64, targetDir string, 
 	if err != nil {
 		return fmt.Errorf("failed to create zip reader: %w", err)
 	}
+	if len(zipReader.File) > maxLabArchiveEntries {
+		return fmt.Errorf("%w: %d entries exceeds %d", errLabArchiveLimit, len(zipReader.File), maxLabArchiveEntries)
+	}
 
-	// Clean the target directory path for reliable prefix checking
-	cleanTargetDir := filepath.Clean(targetDir)
+	root, err := openWorkspaceRoot(targetDir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 
-	for _, f := range zipReader.File {
-		// **Zip Slip Protection**
-		// filepath.Join cleans the path, removing potential "../" etc.
-		filePath := filepath.Join(cleanTargetDir, f.Name)
-		// Double check it's still within the target directory
-		if !strings.HasPrefix(filePath, cleanTargetDir+string(os.PathSeparator)) && filePath != cleanTargetDir {
-			return fmt.Errorf("illegal path in zip archive: '%s' attempts to escape target directory", f.Name)
+	var totalBytes int64
+	seenPaths := make(map[string]struct{}, len(zipReader.File))
+	for _, entry := range zipReader.File {
+		relativePath, pathErr := cleanArchiveEntryPath(entry.Name)
+		if pathErr != nil {
+			return pathErr
 		}
-
-		// Create directories or files
-		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(filePath, 0750); err != nil { // Use 0750 for directories
-				return fmt.Errorf("failed to create directory '%s': %w", filePath, err)
+		if _, duplicate := seenPaths[relativePath]; duplicate {
+			return fmt.Errorf("archive contains duplicate path %q", relativePath)
+		}
+		seenPaths[relativePath] = struct{}{}
+		if entry.FileInfo().IsDir() {
+			if relativePath == "." {
+				continue
 			}
-			// Attempt to set ownership on the directory
-			if err := os.Chown(filePath, uid, gid); err != nil {
-				log.Warnf("extractZip: Failed to set ownership on directory '%s': %v", filePath, err)
-				// Continue even if chown fails
+			if err := ensureTopologyRootDirectory(root, relativePath, uid, gid); err != nil {
+				return fmt.Errorf("failed to create archive directory %q: %w", entry.Name, err)
 			}
 			continue
 		}
-
-		// Create parent directory if it doesn't exist
-		parentDir := filepath.Dir(filePath)
-		if err := os.MkdirAll(parentDir, 0750); err != nil {
-			return fmt.Errorf("failed to create parent directory '%s': %w", parentDir, err)
+		if entry.Mode()&os.ModeType != 0 {
+			return fmt.Errorf("unsupported special or symbolic-link entry %q", entry.Name)
 		}
-		// Attempt ownership on parent dir (might be redundant but safe)
-		if err := os.Chown(parentDir, uid, gid); err != nil {
-			log.Warnf("extractZip: Failed to set ownership on parent directory '%s': %v", parentDir, err)
+		if entry.UncompressedSize64 > uint64(maxLabArchiveUncompressedBytes-totalBytes) {
+			return fmt.Errorf("%w: uncompressed content exceeds %d bytes", errLabArchiveLimit, maxLabArchiveUncompressedBytes)
 		}
+		totalBytes += int64(entry.UncompressedSize64)
 
-		// Create and write the file
-		// Use file mode from archive, but ensure it's reasonable (e.g., mask out world write)
-		// 0640 is a reasonable default if archive mode is weird.
-		fileMode := f.Mode() & 0777 // Mask to standard permission bits
-		if fileMode == 0 {
-			fileMode = 0640
-		} // Fallback if mode is zero
-
-		dstFile, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileMode)
-		if err != nil {
-			return fmt.Errorf("failed to open destination file '%s': %w", filePath, err)
+		source, openErr := entry.Open()
+		if openErr != nil {
+			return fmt.Errorf("failed to open archive entry %q: %w", entry.Name, openErr)
 		}
-
-		srcFile, err := f.Open()
-		if err != nil {
-			dstFile.Close() // Close dstFile before returning error
-			return fmt.Errorf("failed to open source file '%s' in archive: %w", f.Name, err)
+		writeErr := writeArchiveFile(root, relativePath, source, int64(entry.UncompressedSize64), entry.Mode(), uid, gid)
+		closeErr := source.Close()
+		if writeErr != nil {
+			return fmt.Errorf("failed to extract archive entry %q: %w", entry.Name, writeErr)
 		}
-
-		_, copyErr := io.Copy(dstFile, srcFile)
-
-		// Close files regardless of copy error
-		closeSrcErr := srcFile.Close()
-		closeDstErr := dstFile.Close()
-
-		if copyErr != nil {
-			return fmt.Errorf("failed to copy file '%s': %w", f.Name, copyErr)
-		}
-		if closeSrcErr != nil {
-			log.Warnf("extractZip: Error closing source file '%s': %v", f.Name, closeSrcErr)
-		}
-		if closeDstErr != nil {
-			log.Warnf("extractZip: Error closing destination file '%s': %v", filePath, closeDstErr)
-		}
-
-		// Attempt to set ownership on the created file
-		if err := os.Chown(filePath, uid, gid); err != nil {
-			log.Warnf("extractZip: Failed to set ownership on file '%s': %v", filePath, err)
-			// Continue even if chown fails
+		if closeErr != nil {
+			return fmt.Errorf("failed to close archive entry %q: %w", entry.Name, closeErr)
 		}
 	}
 	return nil
@@ -521,8 +496,15 @@ func extractTarGz(archiveReader io.Reader, targetDir string, uid, gid int) error
 	defer gzReader.Close()
 
 	tarReader := tar.NewReader(gzReader)
-	cleanTargetDir := filepath.Clean(targetDir)
+	root, err := openWorkspaceRoot(targetDir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 
+	entryCount := 0
+	var totalBytes int64
+	seenPaths := make(map[string]struct{})
 	for {
 		header, err := tarReader.Next()
 
@@ -533,119 +515,109 @@ func extractTarGz(archiveReader io.Reader, targetDir string, uid, gid int) error
 			return fmt.Errorf("failed to read tar header: %w", err)
 		}
 
-		// **Tar Slip Protection**
-		filePath := filepath.Join(cleanTargetDir, header.Name)
-		if !strings.HasPrefix(filePath, cleanTargetDir+string(os.PathSeparator)) && filePath != cleanTargetDir {
-			return fmt.Errorf("illegal path in tar archive: '%s' attempts to escape target directory", header.Name)
+		entryCount++
+		if entryCount > maxLabArchiveEntries {
+			return fmt.Errorf("%w: more than %d entries", errLabArchiveLimit, maxLabArchiveEntries)
 		}
-
-		// Get FileInfo from header for mode/type
-		fileInfo := header.FileInfo()
+		relativePath, pathErr := cleanArchiveEntryPath(header.Name)
+		if pathErr != nil {
+			return pathErr
+		}
+		if _, duplicate := seenPaths[relativePath]; duplicate {
+			return fmt.Errorf("archive contains duplicate path %q", relativePath)
+		}
+		seenPaths[relativePath] = struct{}{}
 
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(filePath, 0750); err != nil { // Use 0750 for directories
-				return fmt.Errorf("failed to create directory '%s': %w", filePath, err)
+			if relativePath == "." {
+				continue
 			}
-			// Attempt ownership
-			if err := os.Chown(filePath, uid, gid); err != nil {
-				log.Warnf("extractTarGz: Failed to set ownership on directory '%s': %v", filePath, err)
-			}
-
-		case tar.TypeReg:
-			// Create parent directory if it doesn't exist
-			parentDir := filepath.Dir(filePath)
-			if err := os.MkdirAll(parentDir, 0750); err != nil {
-				return fmt.Errorf("failed to create parent directory '%s': %w", parentDir, err)
-			}
-			// Attempt ownership on parent dir
-			if err := os.Chown(parentDir, uid, gid); err != nil {
-				log.Warnf("extractTarGz: Failed to set ownership on parent directory '%s': %v", parentDir, err)
+			if err := ensureTopologyRootDirectory(root, relativePath, uid, gid); err != nil {
+				return fmt.Errorf("failed to create archive directory %q: %w", header.Name, err)
 			}
 
-			// Create and write the file
-			// Use file mode from archive, masked
-			fileMode := fileInfo.Mode() & 0777
-			if fileMode == 0 {
-				fileMode = 0640
-			} // Fallback
-
-			dstFile, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileMode)
-			if err != nil {
-				return fmt.Errorf("failed to open destination file '%s': %w", filePath, err)
+		case tar.TypeReg, tar.TypeRegA:
+			if header.Size < 0 || header.Size > maxLabArchiveUncompressedBytes-totalBytes {
+				return fmt.Errorf("%w: uncompressed content exceeds %d bytes", errLabArchiveLimit, maxLabArchiveUncompressedBytes)
 			}
-
-			_, copyErr := io.Copy(dstFile, tarReader)
-			closeErr := dstFile.Close() // Close file regardless of copy error
-
-			if copyErr != nil {
-				return fmt.Errorf("failed to copy file '%s': %w", header.Name, copyErr)
+			totalBytes += header.Size
+			if err := writeArchiveFile(root, relativePath, tarReader, header.Size, header.FileInfo().Mode(), uid, gid); err != nil {
+				return fmt.Errorf("failed to extract archive entry %q: %w", header.Name, err)
 			}
-			if closeErr != nil {
-				log.Warnf("extractTarGz: Error closing destination file '%s': %v", filePath, closeErr)
-			}
-
-			// Attempt ownership
-			if err := os.Chown(filePath, uid, gid); err != nil {
-				log.Warnf("extractTarGz: Failed to set ownership on file '%s': %v", filePath, err)
-			}
-
-		case tar.TypeSymlink, tar.TypeLink, tar.TypeChar, tar.TypeBlock, tar.TypeFifo:
-			// Security: Explicitly ignore symlinks and other potentially problematic types for now.
-			log.Warnf("extractTarGz: Ignoring unsupported file type '%c' for entry '%s' in archive.", header.Typeflag, header.Name)
-			continue // Skip to the next entry
 
 		default:
-			log.Warnf("extractTarGz: Ignoring unknown file type '%c' for entry '%s' in archive.", header.Typeflag, header.Name)
+			return fmt.Errorf("unsupported special or symbolic-link entry %q", header.Name)
 		}
 	}
 	return nil
 }
 
-func configuredLabsRoot() (string, error) {
-	root := strings.TrimSpace(config.AppConfig.ClabLabsRoot)
-	if root == "" {
-		root = strings.TrimSpace(os.Getenv(clabLabsRootEnv))
+const (
+	maxLabArchiveEntries           = 10_000
+	maxLabArchiveCompressedBytes   = int64(256 << 20)
+	maxLabArchiveUncompressedBytes = int64(256 << 20)
+	maxLabArchiveRequestBytes      = maxLabArchiveCompressedBytes + int64(1<<20)
+)
+
+var errLabArchiveLimit = errors.New("lab archive exceeds configured limit")
+
+func cleanArchiveEntryPath(name string) (string, error) {
+	normalized := filepath.FromSlash(strings.ReplaceAll(strings.TrimSpace(name), `\`, "/"))
+	cleanPath := filepath.Clean(normalized)
+	if cleanPath == "" || cleanPath == "." {
+		return ".", nil
 	}
-	if root == "" {
-		return "", nil
+	if filepath.IsAbs(cleanPath) || cleanPath == ".." || strings.HasPrefix(cleanPath, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("illegal path in archive: %q attempts to escape target directory", name)
 	}
-	if strings.HasPrefix(root, "~") {
-		return "", fmt.Errorf("%s must be an absolute path; '~' is not supported", clabLabsRootEnv)
+	return cleanPath, nil
+}
+
+func writeArchiveFile(root *os.Root, relativePath string, source io.Reader, expectedSize int64, mode os.FileMode, uid, gid int) error {
+	if relativePath == "." {
+		return fmt.Errorf("archive file entry has an empty path")
 	}
-	if !filepath.IsAbs(root) {
-		return "", fmt.Errorf("%s must be an absolute path", clabLabsRootEnv)
+	parentPath := filepath.Dir(relativePath)
+	if parentPath != "." {
+		if err := ensureTopologyRootDirectory(root, parentPath, uid, gid); err != nil {
+			return err
+		}
 	}
-	return filepath.Clean(root), nil
+
+	fileMode := os.FileMode(0o640)
+	if mode.Perm()&0o111 != 0 {
+		fileMode = 0o750
+	}
+	destination, err := root.OpenFile(relativePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileMode)
+	if err != nil {
+		return err
+	}
+	if err := destination.Chown(uid, gid); err != nil {
+		_ = destination.Close()
+		return err
+	}
+	limitedSource := &io.LimitedReader{R: source, N: expectedSize + 1}
+	written, copyErr := io.Copy(destination, limitedSource)
+	closeErr := destination.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if written != expectedSize {
+		return fmt.Errorf("archive entry size mismatch: wrote %d bytes, expected %d", written, expectedSize)
+	}
+	return nil
 }
 
 func getUserLabsBaseDirectoryInfo(username string) (baseDir string, uid, gid int, err error) {
-	// Get user details first (needed for UID/GID regardless of path)
-	usr, err := user.Lookup(username)
+	storage, err := workspacestore.ResolveUserStorage(username)
 	if err != nil {
-		return "", -1, -1, fmt.Errorf("could not determine user details: %w", err)
+		return "", -1, -1, err
 	}
-
-	uid, uidErr := strconv.Atoi(usr.Uid)
-	if uidErr != nil {
-		return "", -1, -1, fmt.Errorf("could not process user UID: %w", uidErr)
-	}
-
-	gid, gidErr := strconv.Atoi(usr.Gid)
-	if gidErr != nil {
-		return "", -1, -1, fmt.Errorf("could not process user GID: %w", gidErr)
-	}
-
-	labsRoot, rootErr := configuredLabsRoot()
-	if rootErr != nil {
-		return "", -1, -1, rootErr
-	}
-	if labsRoot != "" {
-		return filepath.Join(labsRoot, username), uid, gid, nil
-	}
-
-	// Fall back to user's home directory
-	return filepath.Join(usr.HomeDir, ".clab"), uid, gid, nil
+	return storage.BaseDir, storage.UID, storage.GID, nil
 }
 
 // getLabDirectoryInfo returns the appropriate directory path for a lab,
@@ -653,50 +625,35 @@ func getUserLabsBaseDirectoryInfo(username string) (baseDir string, uid, gid int
 // If CLAB_LABS_ROOT is set, it returns $CLAB_LABS_ROOT/$username/$labName.
 // Otherwise, it returns $HOME/.clab/$labName.
 func getLabDirectoryInfo(username, labName string) (targetDir string, uid, gid int, err error) {
-	baseDir, uid, gid, err := getUserLabsBaseDirectoryInfo(username)
+	targetDir, storage, err := workspacestore.ResolveLabDirectory(username, labName)
 	if err != nil {
 		return "", -1, -1, err
 	}
-	return filepath.Join(baseDir, labName), uid, gid, nil
+	return targetDir, storage.UID, storage.GID, nil
 }
 
 func ensureUserLabsBaseDirectory(baseDir string, uid, gid int) error {
-	labsRoot, err := configuredLabsRoot()
-	if err != nil {
-		return err
-	}
-	if labsRoot != "" {
-		cleanLabsRoot := filepath.Clean(labsRoot)
-		cleanBaseDir := filepath.Clean(baseDir)
-		if cleanBaseDir == cleanLabsRoot || !pathIsInsideRoot(cleanLabsRoot, cleanBaseDir) {
-			return fmt.Errorf("labs base directory escapes %s", clabLabsRootEnv)
-		}
-		if err := os.MkdirAll(cleanLabsRoot, 0755); err != nil {
-			return err
-		}
-		if err := os.Chmod(cleanLabsRoot, 0755); err != nil && !os.IsNotExist(err) {
-			log.Warnf("Failed to set permissions for labs root '%s': %v", labsRoot, err)
-		}
-	}
-
-	if err := os.MkdirAll(baseDir, 0750); err != nil {
-		return err
-	}
-	if err := os.Chown(baseDir, uid, gid); err != nil {
-		log.Warnf("Failed to set ownership for labs directory '%s' to %d:%d: %v", baseDir, uid, gid, err)
-	}
-	return nil
+	return workspacestore.EnsureUserBaseDirectory(baseDir, uid, gid)
 }
 
 func ensureLabDirectory(labDir string, uid, gid int) error {
-	if err := ensureUserLabsBaseDirectory(filepath.Dir(labDir), uid, gid); err != nil {
+	baseDir := filepath.Clean(filepath.Dir(labDir))
+	cleanLabDir := filepath.Clean(labDir)
+	if cleanLabDir == baseDir || !pathIsInsideRoot(baseDir, cleanLabDir) {
+		return fmt.Errorf("lab directory escapes user workspace")
+	}
+	if err := ensureUserLabsBaseDirectory(baseDir, uid, gid); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(labDir, 0750); err != nil {
+
+	root, err := openWorkspaceRoot(baseDir)
+	if err != nil {
 		return err
 	}
-	if err := os.Chown(labDir, uid, gid); err != nil {
-		log.Warnf("Failed to set ownership for lab directory '%s' to %d:%d: %v", labDir, uid, gid, err)
+	defer root.Close()
+	relativePath, err := filepath.Rel(baseDir, cleanLabDir)
+	if err != nil || relativePath == "." || filepath.Dir(relativePath) != "." {
+		return fmt.Errorf("invalid lab directory")
 	}
-	return nil
+	return ensureTopologyRootDirectory(root, relativePath, uid, gid)
 }

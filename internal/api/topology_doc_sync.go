@@ -74,12 +74,15 @@ func resolveTopologyDocumentSet(username, labName, relPath string) (topologyDocu
 }
 
 func fileRevisionPart(absPath string) string {
-	info, err := os.Stat(absPath)
+	info, err := os.Lstat(absPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "missing"
 		}
 		return "error"
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "invalid"
 	}
 
 	return fmt.Sprintf("%d-%d", info.Size(), info.ModTime().UnixNano())

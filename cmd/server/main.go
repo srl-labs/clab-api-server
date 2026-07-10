@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -80,7 +81,9 @@ func main() {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok && envFile == defaultEnvFile {
 			basicLogger.Infof("Default config file '%s' not found. Using environment variables and defaults.", defaultEnvFile)
 			viper.Reset()
-			config.LoadConfig("") // Rely on env/defaults
+			if fallbackErr := config.LoadConfig(""); fallbackErr != nil {
+				basicLogger.Fatalf("Failed to load configuration from environment: %v", fallbackErr)
+			}
 		} else {
 			basicLogger.Fatalf("Failed to load configuration: %v", err)
 		}
@@ -102,10 +105,6 @@ func main() {
 	}
 	log.Infof("clab-api-server version %s starting...", version)
 	log.Infof("Configuration processed. Log level set to '%s'.", config.AppConfig.LogLevel)
-	if config.AppConfig.JWTSecret == "default_secret_change_me" {
-		log.Warn("Using default JWT secret. Change JWT_SECRET environment variable or .env file for production!")
-	}
-
 	// --- Initialize Containerlab Service ---
 	log.Info("Initializing Containerlab service (using library directly)...")
 	clabService := clab.NewService()
@@ -196,10 +195,17 @@ func main() {
 	})
 
 	// --- Prepare Server Configuration ---
-	listenAddr := fmt.Sprintf(":%s", config.AppConfig.APIPort)
-	serverBaseURL := fmt.Sprintf("http://localhost:%s", config.AppConfig.APIPort)
+	listenAddr := net.JoinHostPort(config.AppConfig.APIListenAddress, config.AppConfig.APIPort)
+	advertisedHost := strings.TrimSpace(config.AppConfig.APIServerHost)
+	if advertisedHost == "" {
+		advertisedHost = config.AppConfig.APIListenAddress
+	}
+	if advertisedHost == "0.0.0.0" || advertisedHost == "::" {
+		advertisedHost = "localhost"
+	}
+	serverBaseURL := "http://" + net.JoinHostPort(advertisedHost, config.AppConfig.APIPort)
 	if config.AppConfig.TLSEnable {
-		serverBaseURL = fmt.Sprintf("https://localhost:%s", config.AppConfig.APIPort)
+		serverBaseURL = "https://" + net.JoinHostPort(advertisedHost, config.AppConfig.APIPort)
 	}
 	tlsCertFile := config.AppConfig.TLSCertFile
 	tlsKeyFile := config.AppConfig.TLSKeyFile
@@ -235,6 +241,11 @@ func main() {
 		if _, err := os.Stat(tlsKeyFile); os.IsNotExist(err) {
 			log.Fatalf("TLS key file not found: %s", tlsKeyFile)
 		}
+		fingerprint, err := tlsconfig.CertificateFingerprint(tlsCertFile)
+		if err != nil {
+			log.Fatalf("Failed to read TLS certificate fingerprint: %v", err)
+		}
+		log.Infof("TLS certificate SHA-256 fingerprint: %s", fingerprint)
 	}
 
 	srv := &http.Server{
@@ -248,14 +259,14 @@ func main() {
 		protocol := "HTTP"
 		if config.AppConfig.TLSEnable {
 			protocol = "HTTPS"
-			log.Infof("Starting %s server, accessible locally at %s (and potentially other IPs)", protocol, serverBaseURL)
+			log.Infof("Starting %s server on %s, advertised locally at %s", protocol, listenAddr, serverBaseURL)
 			// Start HTTPS server
 			if err := srv.ListenAndServeTLS(tlsCertFile, tlsKeyFile); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Fatalf("Failed to start %s server: %v", protocol, err)
 			}
 		} else {
 			// Start HTTP server
-			log.Infof("Starting %s server, accessible locally at %s (and potentially other IPs)", protocol, serverBaseURL)
+			log.Infof("Starting %s server on %s, advertised locally at %s", protocol, listenAddr, serverBaseURL)
 			if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Fatalf("Failed to start %s server: %v", protocol, err)
 			}

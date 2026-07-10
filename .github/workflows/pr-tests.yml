@@ -100,6 +100,26 @@ jobs:
             --entrypoint /usr/local/bin/clab-api-server \
             clab-api-server-ci:amd64 \
             -v
+          docker inspect clab-api-server-ci:amd64 \
+            --format '{{range .Config.Env}}{{println .}}{{end}}' \
+            | grep -qx 'API_LISTEN_ADDRESS=0.0.0.0'
+          if docker inspect clab-api-server-ci:amd64 \
+            --format '{{range .Config.Env}}{{println .}}{{end}}' \
+            | grep -q '^JWT_SECRET='; then
+            echo 'Image must not bake JWT_SECRET' >&2
+            exit 1
+          fi
+          docker run --rm --platform linux/amd64 \
+            --entrypoint /bin/sh clab-api-server-ci:amd64 -ec \
+            'test ! -e /app/.env; if getent passwd admin >/dev/null; then exit 1; fi'
+          docker run --rm --platform linux/amd64 clab-api-server-ci:amd64 \
+            /bin/sh -ec 'test "${#JWT_SECRET}" -ge 64'
+          if docker run --rm --platform linux/amd64 \
+            -e JWT_SECRET=default_secret_change_me \
+            clab-api-server-ci:amd64 /bin/true; then
+            echo 'Image accepted a placeholder JWT_SECRET' >&2
+            exit 1
+          fi
 
       - name: Build and smoke test arm64 image
         run: |
@@ -115,6 +135,26 @@ jobs:
             --entrypoint /usr/local/bin/clab-api-server \
             clab-api-server-ci:arm64 \
             -v
+          docker inspect clab-api-server-ci:arm64 \
+            --format '{{range .Config.Env}}{{println .}}{{end}}' \
+            | grep -qx 'API_LISTEN_ADDRESS=0.0.0.0'
+          if docker inspect clab-api-server-ci:arm64 \
+            --format '{{range .Config.Env}}{{println .}}{{end}}' \
+            | grep -q '^JWT_SECRET='; then
+            echo 'Image must not bake JWT_SECRET' >&2
+            exit 1
+          fi
+          docker run --rm --platform linux/arm64 \
+            --entrypoint /bin/sh clab-api-server-ci:arm64 -ec \
+            'test ! -e /app/.env; if getent passwd admin >/dev/null; then exit 1; fi'
+          docker run --rm --platform linux/arm64 clab-api-server-ci:arm64 \
+            /bin/sh -ec 'test "${#JWT_SECRET}" -ge 64'
+          if docker run --rm --platform linux/arm64 \
+            -e JWT_SECRET=default_secret_change_me \
+            clab-api-server-ci:arm64 /bin/true; then
+            echo 'Image accepted a placeholder JWT_SECRET' >&2
+            exit 1
+          fi
 
   tests-go:
     name: API + containerlab tests
@@ -139,11 +179,18 @@ jobs:
           if [ ! -f .env ]; then
             cp .env.example .env
           fi
+          JWT_SECRET="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+          sed -i "s|^JWT_SECRET=.*$|JWT_SECRET=${JWT_SECRET}|" .env
 
       - name: Set up Go
         uses: WillAbides/setup-go-faster@v1.19.0
         with:
           go-version: "1.25.x"
+
+      - name: Verify generated Swagger is current
+        run: |
+          go run github.com/swaggo/swag/cmd/swag@v1.16.6 init -g cmd/server/main.go
+          git diff --exit-code -- docs/
 
       - name: Cache Go modules
         uses: actions/cache@v6

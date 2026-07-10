@@ -22,6 +22,37 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/api/v1/capabilities": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns the API contract version, server version, runtime, and optional protocol features supported by this build.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Session"
+                ],
+                "summary": "Get API capabilities",
+                "responses": {
+                    "200": {
+                        "description": "API capabilities",
+                        "schema": {
+                            "$ref": "#/definitions/models.CapabilitiesResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/capture/wireshark-vnc-sessions": {
             "delete": {
                 "security": [
@@ -337,7 +368,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Generates a containerlab topology from CLOS definitions and can optionally deploy it for the authenticated user.\n\n**Notes**\n- Deployment is denied if a lab with the target name already exists.\n- The ` + "`" + `images` + "`" + ` and ` + "`" + `licenses` + "`" + ` fields map node kind to image or license path (e.g., {\"nokia_srlinux\":\"ghcr.io/...\"}).\n- When ` + "`" + `deploy=true` + "`" + `, the topology is saved to the user's managed lab directory and ` + "`" + `outputFile` + "`" + ` is ignored.\n- When ` + "`" + `deploy=false` + "`" + ` and ` + "`" + `outputFile` + "`" + ` is empty, YAML is returned in the response.\n- When ` + "`" + `deploy=false` + "`" + ` and ` + "`" + `outputFile` + "`" + ` is set, the file is saved to that path on the server (requires API server write permissions).",
+                "description": "Generates a containerlab topology from CLOS definitions and can optionally deploy it for the authenticated user.\n\n**Notes**\n- Deployment is denied if a lab with the target name already exists.\n- The ` + "`" + `images` + "`" + ` and ` + "`" + `licenses` + "`" + ` fields map node kind to image or license path (e.g., {\"nokia_srlinux\":\"ghcr.io/...\"}).\n- When ` + "`" + `deploy=true` + "`" + `, the topology is saved to the user's managed lab directory and ` + "`" + `outputFile` + "`" + ` is ignored.\n- When ` + "`" + `deploy=false` + "`" + ` and ` + "`" + `outputFile` + "`" + ` is empty, YAML is returned in the response.\n- When ` + "`" + `deploy=false` + "`" + ` and ` + "`" + `outputFile` + "`" + ` is set, the relative file path is saved inside the authenticated user's managed workspace.",
                 "consumes": [
                     "application/json"
                 ],
@@ -659,6 +690,12 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "type": "boolean",
+                        "description": "Backward-compatible alias for reconfigure",
+                        "name": "cleanup",
+                        "in": "query"
+                    },
+                    {
                         "type": "integer",
                         "description": "Limit concurrent workers",
                         "name": "maxWorkers",
@@ -736,7 +773,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Deploys a containerlab topology provided as a .zip or .tar.gz archive.",
+                "description": "Deploys a containerlab topology provided as a .zip or .tar.gz archive.\nArchives are staged and validated before replacing an existing workspace; the previous workspace is restored if deployment fails. Compressed and uncompressed content are limited to 256 MiB and special/symbolic-link entries are rejected.",
                 "consumes": [
                     "multipart/form-data"
                 ],
@@ -766,6 +803,12 @@ const docTemplate = `{
                         "type": "boolean",
                         "description": "Allow overwriting an existing lab",
                         "name": "reconfigure",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Backward-compatible alias for reconfigure",
+                        "name": "cleanup",
                         "in": "query"
                     },
                     {
@@ -826,6 +869,12 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "413": {
+                        "description": "Archive exceeds configured size limits",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -955,7 +1004,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Creates a directory inside the authenticated user's editable lab workspace root.",
+                "description": "Creates a directory inside the authenticated user's editable lab workspace root.\nPaths whose first component starts with ` + "`" + `.archive-*` + "`" + ` or ` + "`" + `.backup-*` + "`" + ` are reserved and rejected.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1012,7 +1061,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Streams create/change/delete/rename events inside the authenticated user's editable lab workspace root as NDJSON.",
+                "description": "Streams create/change/delete/rename events inside the authenticated user's editable lab workspace root as NDJSON.\nInternal ` + "`" + `.archive-*` + "`" + ` and ` + "`" + `.backup-*` + "`" + ` transaction paths are excluded from the stream.",
                 "produces": [
                     "application/x-ndjson"
                 ],
@@ -1049,7 +1098,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Reads a text or binary file from the authenticated user's editable lab workspace root.",
+                "description": "Reads a text or binary file from the authenticated user's editable lab workspace root.\nPaths whose first component starts with ` + "`" + `.archive-*` + "`" + ` or ` + "`" + `.backup-*` + "`" + ` are reserved and rejected.",
                 "produces": [
                     "text/plain"
                 ],
@@ -1105,7 +1154,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Writes a file inside the authenticated user's editable lab workspace root.",
+                "description": "Writes a file inside the authenticated user's editable lab workspace root.\nPaths whose first component starts with ` + "`" + `.archive-*` + "`" + ` or ` + "`" + `.backup-*` + "`" + ` are reserved and rejected.",
                 "consumes": [
                     "text/plain"
                 ],
@@ -1167,7 +1216,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Deletes a file or directory inside the authenticated user's editable lab workspace root. Directories with children require recursive=true.",
+                "description": "Deletes a file or directory inside the authenticated user's editable lab workspace root. Directories with children require recursive=true.\nPaths whose first component starts with ` + "`" + `.archive-*` + "`" + ` or ` + "`" + `.backup-*` + "`" + ` are reserved and rejected.",
                 "produces": [
                     "application/json"
                 ],
@@ -1225,7 +1274,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Renames or moves a file inside the authenticated user's editable lab workspace root.",
+                "description": "Renames or moves a file inside the authenticated user's editable lab workspace root.\nSource or destination paths whose first component starts with ` + "`" + `.archive-*` + "`" + ` or ` + "`" + `.backup-*` + "`" + ` are reserved and rejected.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1282,7 +1331,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Lists files and folders inside the authenticated user's editable lab workspace root.",
+                "description": "Lists files and folders inside the authenticated user's editable lab workspace root.\nTop-level ` + "`" + `.archive-*` + "`" + ` and ` + "`" + `.backup-*` + "`" + ` entries are reserved for internal archive transactions and are hidden.",
                 "produces": [
                     "application/json"
                 ],
@@ -1919,6 +1968,12 @@ const docTemplate = `{
                         "type": "boolean",
                         "description": "Allow overwriting an existing lab",
                         "name": "reconfigure",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Backward-compatible alias for reconfigure",
+                        "name": "cleanup",
                         "in": "query"
                     },
                     {
@@ -4069,6 +4124,37 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/v1/session": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns the stable API identity, roles, and bearer-token lifetime for the current caller.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Session"
+                ],
+                "summary": "Get authenticated session",
+                "responses": {
+                    "200": {
+                        "description": "Authenticated session",
+                        "schema": {
+                            "$ref": "#/definitions/models.SessionResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/ssh/sessions": {
             "get": {
                 "security": [
@@ -6105,6 +6191,29 @@ const docTemplate = `{
                 }
             }
         },
+        "models.CapabilitiesResponse": {
+            "type": "object",
+            "properties": {
+                "apiVersion": {
+                    "type": "string",
+                    "example": "v1"
+                },
+                "features": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "runtime": {
+                    "type": "string",
+                    "example": "docker"
+                },
+                "serverVersion": {
+                    "type": "string",
+                    "example": "v0.5.0"
+                }
+            }
+        },
         "models.CaptureCloseAllResponse": {
             "type": "object",
             "properties": {
@@ -7421,6 +7530,26 @@ const docTemplate = `{
                 },
                 "version": {
                     "description": "API server version",
+                    "type": "string"
+                }
+            }
+        },
+        "models.SessionResponse": {
+            "type": "object",
+            "properties": {
+                "expiresAt": {
+                    "type": "string"
+                },
+                "issuedAt": {
+                    "type": "string"
+                },
+                "roles": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "username": {
                     "type": "string"
                 }
             }

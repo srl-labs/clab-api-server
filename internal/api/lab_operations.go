@@ -22,6 +22,12 @@ var labOperations = &labOperationRegistry{
 	active: make(map[string]string),
 }
 
+// deployReconfigureRequested keeps cleanup=true as a compatibility alias for
+// clients that historically used that query parameter for deploy replacement.
+func deployReconfigureRequested(c *gin.Context) bool {
+	return c.Query("reconfigure") == "true" || c.Query("cleanup") == "true"
+}
+
 func (r *labOperationRegistry) begin(labName, operation string) (func(), string, bool) {
 	key := strings.TrimSpace(labName)
 	if key == "" {

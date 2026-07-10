@@ -1,6 +1,48 @@
 package api
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/gin-gonic/gin"
+)
+
+func TestDeployReconfigureRequestedCompatibilityAlias(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name  string
+		query string
+		want  bool
+	}{
+		{name: "none"},
+		{name: "reconfigure", query: "reconfigure=true", want: true},
+		{name: "cleanup alias", query: "cleanup=true", want: true},
+		{name: "either true", query: "reconfigure=false&cleanup=true", want: true},
+		{name: "both false", query: "reconfigure=false&cleanup=false"},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			var got bool
+			router := gin.New()
+			router.GET("/", func(c *gin.Context) {
+				got = deployReconfigureRequested(c)
+				c.Status(http.StatusNoContent)
+			})
+
+			requestPath := "/"
+			if testCase.query != "" {
+				requestPath += "?" + testCase.query
+			}
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, requestPath, nil))
+			if got != testCase.want {
+				t.Fatalf("deployReconfigureRequested() = %t, want %t", got, testCase.want)
+			}
+		})
+	}
+}
 
 func TestLabOperationRegistryRejectsConcurrentOperation(t *testing.T) {
 	registry := &labOperationRegistry{active: make(map[string]string)}

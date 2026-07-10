@@ -123,6 +123,8 @@ create_env() {
 # Edit this file, then start or restart the clab-api-server service.
 
 API_PORT=8090
+# Bind loopback by default. Set 0.0.0.0 or a specific host address only when remote access is intended.
+API_LISTEN_ADDRESS=127.0.0.1
 API_SERVER_HOST=localhost
 LOG_LEVEL=info
 

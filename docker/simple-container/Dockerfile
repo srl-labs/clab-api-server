@@ -3,6 +3,10 @@ FROM debian:bookworm-slim
 # Set noninteractive frontend for apt-get
 ENV DEBIAN_FRONTEND=noninteractive
 
+# The container image is expected to be reached through its Docker network or
+# host-network namespace. Native/systemd installs keep the safer loopback default.
+ENV API_LISTEN_ADDRESS=0.0.0.0
+
 # Install base dependencies and required tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -33,17 +37,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     docker-compose-plugin \
  && rm -rf /var/lib/apt/lists/*
 
-# User setup
-ARG API_USER=admin
-ARG API_PASS=admin
-RUN groupadd --system docker && \
-    useradd -m -s /bin/bash ${API_USER} && \
-    (getent group clab_admins || groupadd clab_admins) && \
-    usermod -aG clab_admins,docker ${API_USER} && \
-    usermod -aG clab_admins,docker root && \
-    echo "${API_USER}:${API_PASS}" | chpasswd && \
-    echo "INFO: Created user '${API_USER}' with provided password."
-
 WORKDIR /app
 
 # ARG to specify the target architecture (automatically set by Buildx)
@@ -58,9 +51,6 @@ RUN case "${TARGETARCH}" in \
 COPY dist/clab-api-server-linux-${TARGETARCH} /usr/local/bin/clab-api-server
 RUN chmod +x /usr/local/bin/clab-api-server && \
     /usr/local/bin/clab-api-server -v
-
-# Copy the example .env file to provide configuration
-COPY .env.example /app/.env
 
 # Copy entrypoint script
 COPY docker/simple-container/entrypoint.sh /usr/local/bin/entrypoint.sh

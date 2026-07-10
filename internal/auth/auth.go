@@ -22,7 +22,9 @@ var (
 // InitAuth initializes the auth package with the current server start time
 func InitAuth() {
 	startTimeMutex.Lock()
-	serverStartTime = time.Now()
+	// JWT NumericDate values have one-second precision. Truncating the server
+	// start time avoids rejecting tokens issued later in this same second.
+	serverStartTime = time.Now().Truncate(time.Second)
 	startTimeMutex.Unlock()
 }
 
@@ -135,7 +137,7 @@ func GenerateJWT(username string, expiresIn time.Duration) (string, error) {
 func ValidateJWT(tokenString string) (*Claims, error) {
 	claims := &Claims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+		if token.Method != jwt.SigningMethodHS256 {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return []byte(config.AppConfig.JWTSecret), nil
@@ -148,13 +150,29 @@ func ValidateJWT(tokenString string) (*Claims, error) {
 	if !token.Valid {
 		return nil, fmt.Errorf("invalid token")
 	}
+	if strings.TrimSpace(claims.Username) == "" {
+		return nil, fmt.Errorf("token username is required")
+	}
+	if strings.TrimSpace(claims.Subject) == "" || claims.Subject != claims.Username {
+		return nil, fmt.Errorf("token subject must match username")
+	}
+	if claims.ExpiresAt == nil {
+		return nil, fmt.Errorf("token expiration is required")
+	}
+	if claims.IssuedAt == nil {
+		return nil, fmt.Errorf("token issued-at time is required")
+	}
+	if !claims.ExpiresAt.Time.After(claims.IssuedAt.Time) {
+		return nil, fmt.Errorf("token expiration must be after issued-at time")
+	}
 
 	// Add explicit expiration check to guarantee time validation
-	if claims.ExpiresAt != nil {
-		now := time.Now()
-		if now.After(claims.ExpiresAt.Time) {
-			return nil, fmt.Errorf("token has expired")
-		}
+	now := time.Now()
+	if now.After(claims.ExpiresAt.Time) {
+		return nil, fmt.Errorf("token has expired")
+	}
+	if claims.IssuedAt.Time.After(now.Add(time.Minute)) {
+		return nil, fmt.Errorf("token issued-at time is in the future")
 	}
 
 	// Check if token was issued before the server started (server restarted since token was issued)

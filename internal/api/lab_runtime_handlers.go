@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -531,6 +530,10 @@ func RunLabFcliHandler(c *gin.Context) {
 	if err != nil {
 		return
 	}
+	pathOwner := c.GetString(verifiedLabOwnerContextKey)
+	if strings.TrimSpace(pathOwner) == "" {
+		pathOwner = username
+	}
 	if topoPath == "" || strings.HasPrefix(strings.ToLower(topoPath), "http") {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Lab topology path is unavailable for fcli execution."})
 		return
@@ -560,7 +563,7 @@ func RunLabFcliHandler(c *gin.Context) {
 
 	output, runErr := svc.RunFcliCommand(ctx, clab.FcliRunOptions{
 		Runtime:      config.AppConfig.ClabRuntime,
-		Network:      readMgmtNetworkFromTopologyFile(topoPath),
+		Network:      readMgmtNetworkFromTopologyFile(pathOwner, topoPath),
 		TopologyPath: topoPath,
 		CommandArgs:  commandArgs,
 	})
@@ -601,6 +604,10 @@ func GenerateLabDrawioHandler(c *gin.Context) {
 	topoPath, err := verifyLabOwnership(c, username, labName)
 	if err != nil {
 		return
+	}
+	pathOwner := c.GetString(verifiedLabOwnerContextKey)
+	if strings.TrimSpace(pathOwner) == "" {
+		pathOwner = username
 	}
 	if topoPath == "" || strings.HasPrefix(strings.ToLower(topoPath), "http") {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Lab topology path is unavailable for graph generation."})
@@ -650,7 +657,12 @@ func GenerateLabDrawioHandler(c *gin.Context) {
 		return
 	}
 
-	content, readErr := os.ReadFile(drawioResult.Path)
+	rootedDrawio, resolveErr := resolveUserRootedFilePath(pathOwner, drawioResult.Path)
+	if resolveErr != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: resolveErr.Error()})
+		return
+	}
+	content, readErr := readRootedFile(rootedDrawio)
 	if readErr != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
 			Error: fmt.Sprintf("failed to read generated drawio file: %v", readErr),
@@ -839,8 +851,13 @@ func hasDifferentDefaultContainerlabPrefix(labName, containerName string) bool {
 	return strings.HasPrefix(normalizedName, "clab-") && !strings.HasPrefix(normalizedName, expectedPrefix)
 }
 
-func readMgmtNetworkFromTopologyFile(topoPath string) string {
-	content, err := os.ReadFile(topoPath)
+func readMgmtNetworkFromTopologyFile(username, topoPath string) string {
+	rootedTopology, resolveErr := resolveUserRootedFilePath(username, topoPath)
+	if resolveErr != nil {
+		log.Warnf("fcli: rejected topology file path '%s': %v", topoPath, resolveErr)
+		return defaultMgmtNet
+	}
+	content, err := readRootedFile(rootedTopology)
 	if err != nil {
 		log.Warnf("fcli: failed to read topology file '%s': %v", topoPath, err)
 		return defaultMgmtNet

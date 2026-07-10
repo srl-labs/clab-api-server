@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -25,7 +24,7 @@ import (
 // @Description - The `images` and `licenses` fields map node kind to image or license path (e.g., {"nokia_srlinux":"ghcr.io/..."}).
 // @Description - When `deploy=true`, the topology is saved to the user's managed lab directory and `outputFile` is ignored.
 // @Description - When `deploy=false` and `outputFile` is empty, YAML is returned in the response.
-// @Description - When `deploy=false` and `outputFile` is set, the file is saved to that path on the server (requires API server write permissions).
+// @Description - When `deploy=false` and `outputFile` is set, the relative file path is saved inside the authenticated user's managed workspace.
 // @Tags Topology Generation
 // @Security BearerAuth
 // @Accept json
@@ -167,47 +166,33 @@ func GenerateTopologyHandler(c *gin.Context) {
 		}
 		log.Infof("GenerateTopology user '%s': Ensured directory '%s' exists and attempted ownership set.", username, targetDir)
 
-		// Write the generated topology to file
-		if err := os.WriteFile(targetFilePath, topoYAML, 0640); err != nil {
+		rootedTarget, resolveErr := resolveUserRootedFilePath(username, targetFilePath)
+		if resolveErr != nil {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: resolveErr.Error()})
+			return
+		}
+		if err := writeRootedFile(rootedTarget, topoYAML, false); err != nil {
 			log.Errorf("GenerateTopology failed for user '%s': Failed to write topology file '%s': %v", username, targetFilePath, err)
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to write topology file: %s", err.Error())})
 			return
 		}
 
-		// Set file ownership
-		if chErr := os.Chown(targetFilePath, uid, gid); chErr != nil {
-			log.Warnf("GenerateTopology user '%s': Failed to set ownership on generated topology file '%s': %v.", username, targetFilePath, chErr)
-		} else {
-			log.Infof("GenerateTopology user '%s': Set ownership on generated file '%s'", username, targetFilePath)
-		}
-
 	} else {
-		// --- Deploy=false: Save to OutputFile (server path) or return YAML ---
+		// --- Deploy=false: Save inside the user's workspace or return YAML ---
 		if req.OutputFile != "" {
-			var sanitizeErr error
-			targetFilePath, sanitizeErr = clab.SanitizePath(req.OutputFile)
-			if sanitizeErr != nil {
-				log.Warnf("GenerateTopology failed for user '%s': Invalid OutputFile path '%s': %v", username, req.OutputFile, sanitizeErr)
-				c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid OutputFile path: " + sanitizeErr.Error()})
+			absolutePath, rootPath, relativePath, outputUID, outputGID, resolveErr := resolveWorkspacePath(username, req.OutputFile, false)
+			if resolveErr != nil {
+				log.Warnf("GenerateTopology failed for user '%s': Invalid OutputFile path '%s': %v", username, req.OutputFile, resolveErr)
+				c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid OutputFile path: " + resolveErr.Error()})
 				return
 			}
-			// Ensure directory exists
-			dir := filepath.Dir(targetFilePath)
-			if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
-				if mkdirErr := os.MkdirAll(dir, 0750); mkdirErr != nil {
-					log.Warnf("GenerateTopology failed for user '%s': OutputFile directory does not exist and could not be created: %s. Error: %v", username, dir, mkdirErr)
-					c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: fmt.Sprintf("OutputFile directory does not exist and could not be created: %s", dir)})
-					return
-				}
-				log.Infof("GenerateTopology user '%s': Created OutputFile directory: %s", username, dir)
-			} else if statErr != nil {
-				log.Warnf("GenerateTopology failed for user '%s': Error checking OutputFile directory '%s': %v", username, dir, statErr)
-				c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Error checking OutputFile directory: %s", dir)})
-				return
-			}
-
-			// Write the topology file
-			if err := os.WriteFile(targetFilePath, topoYAML, 0640); err != nil {
+			targetFilePath = absolutePath
+			if err := writeRootedFile(rootedFilePath{
+				rootPath:     rootPath,
+				relativePath: relativePath,
+				uid:          outputUID,
+				gid:          outputGID,
+			}, topoYAML, true); err != nil {
 				log.Errorf("GenerateTopology failed for user '%s': Failed to write topology file '%s': %v", username, targetFilePath, err)
 				c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to write topology file: %s", err.Error())})
 				return

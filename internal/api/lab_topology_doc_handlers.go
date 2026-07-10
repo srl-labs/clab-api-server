@@ -146,46 +146,34 @@ func readLabTopologyDoc(c *gin.Context, docType string) {
 	}
 
 	if paths.deployed && strings.TrimSpace(paths.runningDoc) != "" {
-		content, readErr := os.ReadFile(paths.runningDoc)
+		runningPath, resolveErr := resolveUserRootedFilePath(paths.ownerUsername, paths.runningDoc)
+		if resolveErr != nil {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: resolveErr.Error()})
+			return
+		}
+		content, readErr := readRootedFile(runningPath)
 		if readErr == nil {
 			c.Data(http.StatusOK, "text/plain; charset=utf-8", content)
 			return
 		}
 		if !os.IsNotExist(readErr) {
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: readErr.Error()})
+			writeTopologyRootError(c, readErr, "File not found")
 			return
 		}
 	}
 
-	content, readErr := os.ReadFile(paths.localDoc)
+	localPath, resolveErr := resolveUserRootedFilePath(paths.ownerUsername, paths.localDoc)
+	if resolveErr != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: resolveErr.Error()})
+		return
+	}
+	content, readErr := readRootedFile(localPath)
 	if readErr != nil {
-		if os.IsNotExist(readErr) {
-			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: "File not found"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: readErr.Error()})
+		writeTopologyRootError(c, readErr, "File not found")
 		return
 	}
 
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", content)
-}
-
-func writeLabTopologyDocFile(absPath, ownerUsername, labName string, body []byte) error {
-	targetDir := filepath.Dir(absPath)
-	if mkdirErr := os.MkdirAll(targetDir, 0750); mkdirErr != nil {
-		return fmt.Errorf("failed to ensure lab directory: %w", mkdirErr)
-	}
-
-	if writeErr := os.WriteFile(absPath, body, 0640); writeErr != nil {
-		return fmt.Errorf("failed to write file: %w", writeErr)
-	}
-
-	if _, uid, gid, uidErr := getLabDirectoryInfo(ownerUsername, labName); uidErr == nil {
-		_ = os.Chown(targetDir, uid, gid)
-		_ = os.Chown(absPath, uid, gid)
-	}
-
-	return nil
 }
 
 func writeLabTopologyDoc(c *gin.Context, docType string) {
@@ -200,18 +188,29 @@ func writeLabTopologyDoc(c *gin.Context, docType string) {
 		return
 	}
 
-	targetPath := paths.localDoc
+	targetPath, resolveErr := resolveUserRootedFilePath(paths.ownerUsername, paths.localDoc)
+	if resolveErr != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: resolveErr.Error()})
+		return
+	}
+	ensureRoot := true
 	if paths.deployed && strings.TrimSpace(paths.runningDoc) != "" {
-		if _, statErr := os.Stat(paths.runningDoc); statErr == nil {
-			targetPath = paths.runningDoc
+		runningPath, runningResolveErr := resolveUserRootedFilePath(paths.ownerUsername, paths.runningDoc)
+		if runningResolveErr != nil {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: runningResolveErr.Error()})
+			return
+		}
+		if _, statErr := statRootedFile(runningPath); statErr == nil {
+			targetPath = runningPath
+			ensureRoot = false
 		} else if !os.IsNotExist(statErr) {
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: statErr.Error()})
+			writeTopologyRootError(c, statErr, "File not found")
 			return
 		}
 	}
 
-	if writeErr := writeLabTopologyDocFile(targetPath, paths.ownerUsername, c.Param("labName"), body); writeErr != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: writeErr.Error()})
+	if writeErr := writeRootedFile(targetPath, body, ensureRoot); writeErr != nil {
+		writeTopologyRootError(c, writeErr, "File not found")
 		return
 	}
 

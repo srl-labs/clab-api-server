@@ -10,6 +10,11 @@ import (
 	"github.com/srl-labs/clab-api-server/internal/models"
 )
 
+const (
+	authClaimsContextKey       = "authClaims"
+	verifiedLabOwnerContextKey = "verifiedLabOwner"
+)
+
 // CORSMiddleware enables browser access for configured origins.
 // Origins are matched exactly against CORS_ALLOWED_ORIGINS, unless "*" is set.
 func CORSMiddleware() gin.HandlerFunc {
@@ -91,6 +96,7 @@ func AuthMiddleware() gin.HandlerFunc {
 
 		// Store username in context for handlers to use
 		c.Set("username", claims.Username)
+		c.Set(authClaimsContextKey, claims)
 		c.Next()
 	}
 }

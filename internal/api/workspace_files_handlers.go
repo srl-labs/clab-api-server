@@ -16,8 +16,12 @@ import (
 	"github.com/srl-labs/clab-api-server/internal/models"
 )
 
-const workspaceFileKindDirectory = "directory"
-const workspaceFileKindFile = "file"
+const (
+	workspaceFileKindDirectory      = "directory"
+	workspaceFileKindFile           = "file"
+	managedArchiveEntryPrefix       = ".archive-"
+	managedArchiveBackupEntryPrefix = ".backup-"
+)
 
 func getUserWorkspaceDirectory(username string) (string, int, int, error) {
 	sentinelDir, uid, gid, err := getLabDirectoryInfo(username, "__sentinel__")
@@ -46,7 +50,20 @@ func cleanWorkspacePath(rawPath string, allowRoot bool) (string, error) {
 	if cleanPath == ".." || strings.HasPrefix(cleanPath, ".."+string(filepath.Separator)) || filepath.IsAbs(cleanPath) {
 		return "", fmt.Errorf("invalid file path")
 	}
+	if workspacePathUsesReservedManagedEntry(cleanPath) {
+		return "", fmt.Errorf("path uses a reserved managed workspace entry")
+	}
 	return cleanPath, nil
+}
+
+func workspacePathUsesReservedManagedEntry(relativePath string) bool {
+	cleanPath := filepath.Clean(filepath.FromSlash(strings.TrimSpace(relativePath)))
+	if cleanPath == "" || cleanPath == "." {
+		return false
+	}
+	firstComponent := strings.SplitN(cleanPath, string(filepath.Separator), 2)[0]
+	return strings.HasPrefix(firstComponent, managedArchiveEntryPrefix) ||
+		strings.HasPrefix(firstComponent, managedArchiveBackupEntryPrefix)
 }
 
 func pathIsInsideRoot(rootPath, targetPath string) bool {
@@ -130,6 +147,7 @@ func workspaceRootErrorIsBadPath(err error) bool {
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "path escapes") ||
 		strings.Contains(message, "too many levels of symbolic links") ||
+		strings.Contains(message, "symbolic link") ||
 		strings.Contains(message, "not a directory")
 }
 
@@ -170,6 +188,9 @@ func workspaceQueryBool(c *gin.Context, key string) bool {
 
 func workspaceEntryFromRootDirEntry(root *os.Root, parentPath string, entry os.DirEntry) (models.WorkspaceFileEntry, bool) {
 	entryPath := filepath.Join(parentPath, entry.Name())
+	if workspacePathUsesReservedManagedEntry(entryPath) {
+		return models.WorkspaceFileEntry{}, false
+	}
 	info, infoErr := root.Lstat(entryPath)
 	if infoErr != nil {
 		return models.WorkspaceFileEntry{}, false
@@ -233,6 +254,7 @@ func listWorkspaceEntriesInRoot(root *os.Root, dirPath string) ([]models.Workspa
 
 // @Summary List lab workspace files
 // @Description Lists files and folders inside the authenticated user's editable lab workspace root.
+// @Description Top-level `.archive-*` and `.backup-*` entries are reserved for internal archive transactions and are hidden.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce json
@@ -298,6 +320,7 @@ func ListWorkspaceTreeHandler(c *gin.Context) {
 
 // @Summary Read lab workspace file
 // @Description Reads a text or binary file from the authenticated user's editable lab workspace root.
+// @Description Paths whose first component starts with `.archive-*` or `.backup-*` are reserved and rejected.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce plain
@@ -360,6 +383,7 @@ func GetWorkspaceFileHandler(c *gin.Context) {
 
 // @Summary Write lab workspace file
 // @Description Writes a file inside the authenticated user's editable lab workspace root.
+// @Description Paths whose first component starts with `.archive-*` or `.backup-*` are reserved and rejected.
 // @Tags Labs
 // @Security BearerAuth
 // @Accept plain
@@ -425,6 +449,7 @@ func PutWorkspaceFileHandler(c *gin.Context) {
 
 // @Summary Delete lab workspace file
 // @Description Deletes a file or directory inside the authenticated user's editable lab workspace root. Directories with children require recursive=true.
+// @Description Paths whose first component starts with `.archive-*` or `.backup-*` are reserved and rejected.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce json
@@ -493,6 +518,7 @@ func DeleteWorkspaceFileHandler(c *gin.Context) {
 
 // @Summary Rename lab workspace file
 // @Description Renames or moves a file inside the authenticated user's editable lab workspace root.
+// @Description Source or destination paths whose first component starts with `.archive-*` or `.backup-*` are reserved and rejected.
 // @Tags Labs
 // @Security BearerAuth
 // @Accept json
@@ -571,6 +597,7 @@ func RenameWorkspaceFileHandler(c *gin.Context) {
 
 // @Summary Create lab workspace directory
 // @Description Creates a directory inside the authenticated user's editable lab workspace root.
+// @Description Paths whose first component starts with `.archive-*` or `.backup-*` are reserved and rejected.
 // @Tags Labs
 // @Security BearerAuth
 // @Accept json

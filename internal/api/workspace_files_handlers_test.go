@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/gin-gonic/gin"
 
 	"github.com/srl-labs/clab-api-server/internal/config"
@@ -332,5 +333,114 @@ func TestWorkspaceFileBlocksNonEmptyDirectoryDelete(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(workspaceRoot, "lab1")); !os.IsNotExist(err) {
 		t.Fatalf("recursive delete left directory, stat err = %v", err)
+	}
+}
+
+func TestWorkspaceManagedTransactionEntriesAreHiddenAndReserved(t *testing.T) {
+	router, workspaceRoot := workspaceTestRouter(t)
+	backupDir := filepath.Join(workspaceRoot, managedArchiveBackupEntryPrefix+"demo-token")
+	stagingDir := filepath.Join(workspaceRoot, managedArchiveEntryPrefix+"demo-token")
+	visibleDir := filepath.Join(workspaceRoot, "visible")
+	for _, dir := range []string{backupDir, stagingDir, visibleDir} {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatalf("create workspace directory %s: %v", dir, err)
+		}
+	}
+	backupFile := filepath.Join(backupDir, "demo.clab.yml")
+	if err := os.WriteFile(backupFile, []byte("name: old\n"), 0o640); err != nil {
+		t.Fatalf("write backup marker: %v", err)
+	}
+	visibleFile := filepath.Join(visibleDir, "demo.clab.yml")
+	if err := os.WriteFile(visibleFile, []byte("name: visible\n"), 0o640); err != nil {
+		t.Fatalf("write visible topology: %v", err)
+	}
+
+	rootTree := performWorkspaceRequest(router, http.MethodGet, "/tree", nil)
+	if rootTree.Code != http.StatusOK {
+		t.Fatalf("root tree status = %d, body = %s", rootTree.Code, rootTree.Body.String())
+	}
+	var entries []models.WorkspaceFileEntry
+	if err := json.Unmarshal(rootTree.Body.Bytes(), &entries); err != nil {
+		t.Fatalf("decode root tree: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name != "visible" {
+		t.Fatalf("managed transaction entries leaked through root listing: %#v", entries)
+	}
+
+	reservedBackupPath := managedArchiveBackupEntryPrefix + "demo-token/demo.clab.yml"
+	reservedStagingPath := managedArchiveEntryPrefix + "demo-token/new.clab.yml"
+	tests := []struct {
+		name   string
+		method string
+		target string
+		body   []byte
+	}{
+		{name: "list", method: http.MethodGet, target: "/tree" + workspacePathQuery(managedArchiveBackupEntryPrefix+"demo-token")},
+		{name: "read", method: http.MethodGet, target: "/file" + workspacePathQuery(reservedBackupPath)},
+		{name: "write", method: http.MethodPut, target: "/file" + workspacePathQuery(reservedStagingPath), body: []byte("name: changed\n")},
+		{name: "delete", method: http.MethodDelete, target: "/file" + workspacePathQuery(managedArchiveBackupEntryPrefix+"demo-token") + "&recursive=true"},
+		{name: "create directory", method: http.MethodPost, target: "/directory", body: []byte(`{"path":".archive-demo-token/nested"}`)},
+		{name: "rename source", method: http.MethodPost, target: "/rename", body: []byte(`{"oldPath":".backup-demo-token/demo.clab.yml","newPath":"visible/stolen.clab.yml"}`)},
+		{name: "rename destination", method: http.MethodPost, target: "/rename", body: []byte(`{"oldPath":"visible/demo.clab.yml","newPath":".backup-demo-token/replaced.clab.yml"}`)},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := performWorkspaceRequest(router, testCase.method, testCase.target, testCase.body)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("reserved workspace operation status = %d, body = %s; want 400", response.Code, response.Body.String())
+			}
+		})
+	}
+
+	if content, err := os.ReadFile(backupFile); err != nil || string(content) != "name: old\n" {
+		t.Fatalf("reserved backup changed through public workspace API: content=%q error=%v", content, err)
+	}
+	if content, err := os.ReadFile(visibleFile); err != nil || string(content) != "name: visible\n" {
+		t.Fatalf("visible rename source changed after rejected destination: content=%q error=%v", content, err)
+	}
+}
+
+func TestWorkspaceManagedTransactionEventsAreFiltered(t *testing.T) {
+	rootPath := t.TempDir()
+	backupDir := filepath.Join(rootPath, managedArchiveBackupEntryPrefix+"demo-token")
+	stagingDir := filepath.Join(rootPath, managedArchiveEntryPrefix+"demo-token")
+	visibleDir := filepath.Join(rootPath, "visible")
+	for _, dir := range []string{backupDir, stagingDir, visibleDir} {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatalf("create event test directory %s: %v", dir, err)
+		}
+	}
+
+	for _, reservedPath := range []string{
+		backupDir,
+		filepath.Join(backupDir, "demo.clab.yml"),
+		stagingDir,
+		filepath.Join(stagingDir, "demo.clab.yml"),
+	} {
+		if _, ok := buildWorkspaceFileEvent(rootPath, reservedPath, fsnotify.Create); ok {
+			t.Fatalf("managed transaction event was exposed: %s", reservedPath)
+		}
+	}
+	if event, ok := buildWorkspaceFileEvent(rootPath, visibleDir, fsnotify.Create); !ok || event.Path != "visible" {
+		t.Fatalf("visible workspace event was filtered: event=%#v ok=%t", event, ok)
+	}
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Fatalf("create watcher: %v", err)
+	}
+	defer watcher.Close()
+	watchedDirs := map[string]struct{}{}
+	if err := addWorkspaceWatchDirs(watcher, watchedDirs, rootPath); err != nil {
+		t.Fatalf("add workspace watch directories: %v", err)
+	}
+	if _, watched := watchedDirs[backupDir]; watched {
+		t.Fatalf("reserved backup directory was watched: %s", backupDir)
+	}
+	if _, watched := watchedDirs[stagingDir]; watched {
+		t.Fatalf("reserved staging directory was watched: %s", stagingDir)
+	}
+	if _, watched := watchedDirs[visibleDir]; !watched {
+		t.Fatalf("visible workspace directory was not watched: %s", visibleDir)
 	}
 }

@@ -240,7 +240,7 @@ func ListGlobalIconsHandler(c *gin.Context) {
 		return
 	}
 
-	icons, listErr := listIconsFromDir(globalDir, "global")
+	icons, listErr := listIconsFromDir(username, globalDir, "global")
 	if listErr != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to list icons: " + listErr.Error()})
 		return
@@ -298,13 +298,13 @@ func UploadGlobalIconHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: dirErr.Error()})
 		return
 	}
-	if err := ensureOwnedDir(globalDir, uid, gid); err != nil {
+	if err := ensureOwnedDir(username, globalDir, uid, gid); err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to ensure global icons directory: " + err.Error()})
 		return
 	}
 
-	iconName := uniqueIconName(globalDir, baseName)
-	if err := writeOwnedFile(filepath.Join(globalDir, iconName+ext), body, uid, gid); err != nil {
+	iconName := uniqueIconName(username, globalDir, baseName)
+	if err := writeOwnedFile(username, filepath.Join(globalDir, iconName+ext), body, uid, gid); err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to store icon: " + err.Error()})
 		return
 	}
@@ -341,7 +341,7 @@ func DeleteGlobalIconHandler(c *gin.Context) {
 		return
 	}
 
-	deleted, deleteErr := deleteIconByName(globalDir, iconName)
+	deleted, deleteErr := deleteIconByName(username, globalDir, iconName)
 	if deleteErr != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to delete icon: " + deleteErr.Error()})
 		return

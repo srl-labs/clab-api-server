@@ -14,9 +14,10 @@ import (
 
 type Config struct {
 	APIPort                      string        `mapstructure:"API_PORT"`
+	APIListenAddress             string        `mapstructure:"API_LISTEN_ADDRESS"`
 	JWTSecret                    string        `mapstructure:"JWT_SECRET"`
 	JWTExpiration                time.Duration `mapstructure:"JWT_EXPIRATION"`  // Renamed for clarity - uses time.Duration directly
-	APIUserGroup                 string        `mapstructure:"API_USER_GROUP"`  // Group required for basic API login (alternative to clab_admins)
+	APIUserGroup                 string        `mapstructure:"API_USER_GROUP"`  // Group whose members receive basic API access
 	SuperuserGroup               string        `mapstructure:"SUPERUSER_GROUP"` // Group for elevated privileges
 	ClabRuntime                  string        `mapstructure:"CLAB_RUNTIME"`
 	ClabLabsRoot                 string        `mapstructure:"CLAB_LABS_ROOT"`
@@ -42,6 +43,39 @@ type Config struct {
 
 var AppConfig Config
 
+const minJWTSecretLength = 32
+
+// ValidateJWTSecret rejects secrets that would make bearer tokens predictable.
+// It intentionally validates configuration at startup instead of allowing an
+// insecure server to continue after logging a warning.
+func ValidateJWTSecret(secret string) error {
+	trimmed := strings.TrimSpace(secret)
+	if trimmed == "" {
+		return fmt.Errorf("JWT_SECRET must not be blank")
+	}
+	if len(trimmed) < minJWTSecretLength {
+		return fmt.Errorf("JWT_SECRET must be at least %d characters", minJWTSecretLength)
+	}
+
+	normalized := strings.ToLower(trimmed)
+	for _, marker := range []string{
+		"default_secret_change_me",
+		"a_very_secret_key_change_me_please",
+		"change_me",
+		"change-me",
+		"changeme",
+		"replace_me",
+		"replace-me",
+		"your_jwt_secret",
+	} {
+		if strings.Contains(normalized, marker) {
+			return fmt.Errorf("JWT_SECRET must not use a known placeholder value")
+		}
+	}
+
+	return nil
+}
+
 // LoadConfig loads configuration from the specified .env file path and environment variables.
 func LoadConfig(envFilePath string) error {
 	// Use the provided file path
@@ -50,10 +84,11 @@ func LoadConfig(envFilePath string) error {
 
 	// --- Set Defaults ---
 	viper.SetDefault("API_PORT", "8090")
+	viper.SetDefault("API_LISTEN_ADDRESS", "127.0.0.1")
 	viper.SetDefault("JWT_SECRET", "default_secret_change_me")
 	viper.SetDefault("JWT_EXPIRATION", "24h") // Default 24 hours, but now accepts any duration format
-	viper.SetDefault("API_USER_GROUP", "")
-	viper.SetDefault("SUPERUSER_GROUP", "")
+	viper.SetDefault("API_USER_GROUP", "clab_api")
+	viper.SetDefault("SUPERUSER_GROUP", "clab_admins")
 	viper.SetDefault("CLAB_RUNTIME", "docker")
 	viper.SetDefault("CLAB_LABS_ROOT", "")
 	viper.SetDefault("CAPTURE_PACKETFLIX_PORT", 5001)
@@ -101,6 +136,14 @@ func LoadConfig(envFilePath string) error {
 	err = viper.Unmarshal(&AppConfig)
 	if err != nil {
 		return fmt.Errorf("unable to decode config into struct: %w", err)
+	}
+	if err := ValidateJWTSecret(AppConfig.JWTSecret); err != nil {
+		return err
+	}
+
+	AppConfig.APIListenAddress = strings.TrimSpace(AppConfig.APIListenAddress)
+	if AppConfig.APIListenAddress == "" {
+		return fmt.Errorf("API_LISTEN_ADDRESS must not be empty")
 	}
 
 	AppConfig.ClabLabsRoot = strings.TrimSpace(AppConfig.ClabLabsRoot)

@@ -3,15 +3,15 @@ package api
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/user"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/charmbracelet/log"
 
 	"github.com/srl-labs/clab-api-server/internal/models"
 )
@@ -21,8 +21,6 @@ const (
 	customNodesFileName   = "custom-nodes.json"
 	globalIconsDirName    = "icons"
 	workspaceIconsDirName = ".clab-icons"
-	uiDirPermissions      = 0750
-	uiFilePermissions     = 0640
 )
 
 var (
@@ -216,27 +214,34 @@ func getUserClabDir(username string) (dir string, uid, gid int, err error) {
 	return filepath.Join(homeDir, ".clab"), parsedUID, parsedGID, nil
 }
 
-func ensureOwnedDir(dir string, uid, gid int) error {
-	if err := os.MkdirAll(dir, uiDirPermissions); err != nil {
+func ensureOwnedDir(username, dir string, uid, gid int) error {
+	rootedDir, err := resolveUserRootedFilePath(username, dir)
+	if err != nil {
 		return err
 	}
-	if err := os.Chown(dir, uid, gid); err != nil {
-		log.Warnf("Failed to set ownership for '%s' to %d:%d: %v", dir, uid, gid, err)
+	root, err := openWorkspaceRoot(rootedDir.rootPath)
+	if os.IsNotExist(err) {
+		if ensureErr := ensureWorkspaceRoot(rootedDir.rootPath, uid, gid); ensureErr != nil {
+			return ensureErr
+		}
+		root, err = openWorkspaceRoot(rootedDir.rootPath)
 	}
-	return nil
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return ensureTopologyRootDirectory(root, rootedDir.relativePath, uid, gid)
 }
 
-func writeOwnedFile(path string, body []byte, uid, gid int) error {
-	if err := ensureOwnedDir(filepath.Dir(path), uid, gid); err != nil {
+func writeOwnedFile(username, path string, body []byte, uid, gid int) error {
+	if err := ensureOwnedDir(username, filepath.Dir(path), uid, gid); err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, body, uiFilePermissions); err != nil {
+	rootedPath, err := resolveUserRootedFilePath(username, path)
+	if err != nil {
 		return err
 	}
-	if err := os.Chown(path, uid, gid); err != nil {
-		log.Warnf("Failed to set ownership for '%s' to %d:%d: %v", path, uid, gid, err)
-	}
-	return nil
+	return writeRootedFile(rootedPath, body, false)
 }
 
 func getCustomNodesFilePath(username string) (string, int, int, error) {
@@ -253,7 +258,11 @@ func loadCustomNodes(username string) ([]models.CustomNodeTemplate, error) {
 		return nil, err
 	}
 
-	body, readErr := os.ReadFile(path)
+	rootedPath, rootErr := resolveUserRootedFilePath(username, path)
+	if rootErr != nil {
+		return nil, rootErr
+	}
+	body, readErr := readRootedFile(rootedPath)
 	if readErr != nil {
 		if os.IsNotExist(readErr) {
 			return normalizeCustomNodes(defaultCustomNodes()), nil
@@ -291,7 +300,7 @@ func saveCustomNodes(username string, nodes []models.CustomNodeTemplate) error {
 		return fmt.Errorf("failed to encode custom nodes: %w", marshalErr)
 	}
 	body = append(body, '\n')
-	return writeOwnedFile(path, body, uid, gid)
+	return writeOwnedFile(username, path, body, uid, gid)
 }
 
 func getGlobalIconsDir(username string) (string, int, int, error) {
@@ -378,12 +387,47 @@ func isValidIconName(name string) bool {
 	return true
 }
 
-func listIconsFromDir(dir, source string) ([]models.CustomIconInfo, error) {
-	entries, err := os.ReadDir(dir)
+func openUserRootedDirectory(username, dir string) (*os.Root, string, error) {
+	rootedDir, err := resolveUserRootedFilePath(username, dir)
+	if err != nil {
+		return nil, "", err
+	}
+	root, err := openWorkspaceRoot(rootedDir.rootPath)
+	if err != nil {
+		return nil, "", err
+	}
+	info, err := root.Lstat(rootedDir.relativePath)
+	if err != nil {
+		_ = root.Close()
+		return nil, "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		_ = root.Close()
+		return nil, "", fmt.Errorf("icon directory must not be a symbolic link")
+	}
+	return root, rootedDir.relativePath, nil
+}
+
+func listIconsFromDir(username, dir, source string) ([]models.CustomIconInfo, error) {
+	root, rootedDir, err := openUserRootedDirectory(username, dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []models.CustomIconInfo{}, nil
 		}
+		return nil, err
+	}
+	defer root.Close()
+
+	directory, err := root.Open(rootedDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []models.CustomIconInfo{}, nil
+		}
+		return nil, err
+	}
+	defer directory.Close()
+	entries, err := directory.ReadDir(-1)
+	if err != nil {
 		return nil, err
 	}
 
@@ -400,8 +444,15 @@ func listIconsFromDir(dir, source string) ([]models.CustomIconInfo, error) {
 		if !isSupportedIconExtension(ext) {
 			continue
 		}
-		iconPath := filepath.Join(dir, entry.Name())
-		body, readErr := os.ReadFile(iconPath)
+		iconPath := filepath.Join(rootedDir, entry.Name())
+		info, lstatErr := root.Lstat(iconPath)
+		if lstatErr != nil {
+			return nil, lstatErr
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			continue
+		}
+		body, readErr := root.ReadFile(iconPath)
 		if readErr != nil {
 			return nil, readErr
 		}
@@ -416,48 +467,74 @@ func listIconsFromDir(dir, source string) ([]models.CustomIconInfo, error) {
 	return icons, nil
 }
 
-func iconNameExistsInDir(dir, iconName string) bool {
+func iconNameExistsInDir(username, dir, iconName string) bool {
+	root, rootedDir, err := openUserRootedDirectory(username, dir)
+	if err != nil {
+		return false
+	}
+	defer root.Close()
 	for _, ext := range supportedIconExtensions {
-		if _, err := os.Stat(filepath.Join(dir, iconName+ext)); err == nil {
+		if info, err := root.Lstat(filepath.Join(rootedDir, iconName+ext)); err == nil && info.Mode().IsRegular() {
 			return true
 		}
 	}
 	return false
 }
 
-func uniqueIconName(dir, baseName string) string {
+func uniqueIconName(username, dir, baseName string) string {
 	name := baseName
 	counter := 1
-	for iconNameExistsInDir(dir, name) {
+	for iconNameExistsInDir(username, dir, name) {
 		name = fmt.Sprintf("%s-%d", baseName, counter)
 		counter++
 	}
 	return name
 }
 
-func iconFilePathByName(dir, iconName string) (string, string, bool, error) {
+func iconFilePathByName(username, dir, iconName string) (string, string, bool, error) {
 	if !isValidIconName(iconName) {
 		return "", "", false, nil
 	}
+	root, rootedDir, err := openUserRootedDirectory(username, dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", "", false, nil
+		}
+		return "", "", false, err
+	}
+	defer root.Close()
 	for _, ext := range supportedIconExtensions {
 		path := filepath.Join(dir, iconName+ext)
-		if _, err := os.Stat(path); err == nil {
+		info, statErr := root.Lstat(filepath.Join(rootedDir, iconName+ext))
+		if os.IsNotExist(statErr) {
+			continue
+		}
+		if statErr != nil {
+			return "", "", false, statErr
+		}
+		if info.Mode()&os.ModeSymlink == 0 && info.Mode().IsRegular() {
 			return path, ext, true, nil
-		} else if !os.IsNotExist(err) {
-			return "", "", false, err
 		}
 	}
 	return "", "", false, nil
 }
 
-func deleteIconByName(dir, iconName string) (bool, error) {
+func deleteIconByName(username, dir, iconName string) (bool, error) {
 	if !isValidIconName(iconName) {
 		return false, nil
 	}
+	root, rootedDir, err := openUserRootedDirectory(username, dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer root.Close()
 	deleted := false
 	for _, ext := range supportedIconExtensions {
-		path := filepath.Join(dir, iconName+ext)
-		if err := os.Remove(path); err != nil {
+		path := filepath.Join(rootedDir, iconName+ext)
+		if err := root.Remove(path); err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
@@ -468,20 +545,46 @@ func deleteIconByName(dir, iconName string) (bool, error) {
 	return deleted, nil
 }
 
-func removeEmptyDir(dir string) {
-	entries, err := os.ReadDir(dir)
-	if err != nil || len(entries) > 0 {
+func removeEmptyDir(username, dir string) {
+	root, rootedDir, err := openUserRootedDirectory(username, dir)
+	if err != nil {
 		return
 	}
-	_ = os.Remove(dir)
+	defer root.Close()
+	directory, err := root.Open(rootedDir)
+	if err != nil {
+		return
+	}
+	entries, readErr := directory.ReadDir(1)
+	_ = directory.Close()
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		return
+	}
+	if len(entries) > 0 {
+		return
+	}
+	_ = root.Remove(rootedDir)
 }
 
-func cleanWorkspaceIconsDir(dir string) error {
-	entries, err := os.ReadDir(dir)
+func cleanWorkspaceIconsDir(username, dir string) error {
+	root, rootedDir, err := openUserRootedDirectory(username, dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
+		return err
+	}
+	defer root.Close()
+	directory, err := root.Open(rootedDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	entries, err := directory.ReadDir(-1)
+	_ = directory.Close()
+	if err != nil {
 		return err
 	}
 	for _, entry := range entries {
@@ -491,11 +594,11 @@ func cleanWorkspaceIconsDir(dir string) error {
 		if !isSupportedIconExtension(filepath.Ext(entry.Name())) {
 			continue
 		}
-		if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil && !os.IsNotExist(err) {
+		if err := root.Remove(filepath.Join(rootedDir, entry.Name())); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
-	removeEmptyDir(dir)
+	_ = root.Remove(rootedDir)
 	return nil
 }
 
@@ -517,11 +620,11 @@ func loadMergedLabIcons(username, labName string) ([]models.CustomIconInfo, erro
 		return nil, workspaceErr
 	}
 
-	globalIcons, globalErr := listIconsFromDir(globalDir, "global")
+	globalIcons, globalErr := listIconsFromDir(username, globalDir, "global")
 	if globalErr != nil {
 		return nil, globalErr
 	}
-	workspaceIcons, workspaceListErr := listIconsFromDir(workspaceDir, "workspace")
+	workspaceIcons, workspaceListErr := listIconsFromDir(username, workspaceDir, "workspace")
 	if workspaceListErr != nil {
 		return nil, workspaceListErr
 	}
@@ -572,34 +675,38 @@ func reconcileLabIcons(username, labName string, usedIcons []string) error {
 	}
 
 	if len(usedCustomIcons) == 0 {
-		return cleanWorkspaceIconsDir(workspaceDir)
+		return cleanWorkspaceIconsDir(username, workspaceDir)
 	}
 
-	if err := ensureOwnedDir(workspaceDir, uid, gid); err != nil {
+	if err := ensureOwnedDir(username, workspaceDir, uid, gid); err != nil {
 		return err
 	}
 
 	for _, iconName := range usedCustomIcons {
-		if iconNameExistsInDir(workspaceDir, iconName) {
+		if iconNameExistsInDir(username, workspaceDir, iconName) {
 			continue
 		}
-		sourcePath, ext, found, findErr := iconFilePathByName(globalDir, iconName)
+		sourcePath, ext, found, findErr := iconFilePathByName(username, globalDir, iconName)
 		if findErr != nil {
 			return findErr
 		}
 		if !found {
 			continue
 		}
-		body, readErr := os.ReadFile(sourcePath)
+		rootedSource, resolveErr := resolveUserRootedFilePath(username, sourcePath)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		body, readErr := readRootedFile(rootedSource)
 		if readErr != nil {
 			return readErr
 		}
-		if err := writeOwnedFile(filepath.Join(workspaceDir, iconName+ext), body, uid, gid); err != nil {
+		if err := writeOwnedFile(username, filepath.Join(workspaceDir, iconName+ext), body, uid, gid); err != nil {
 			return err
 		}
 	}
 
-	workspaceIcons, listErr := listIconsFromDir(workspaceDir, "workspace")
+	workspaceIcons, listErr := listIconsFromDir(username, workspaceDir, "workspace")
 	if listErr != nil {
 		return listErr
 	}
@@ -607,10 +714,10 @@ func reconcileLabIcons(username, labName string, usedIcons []string) error {
 		if _, exists := usedSet[icon.Name]; exists {
 			continue
 		}
-		if _, err := deleteIconByName(workspaceDir, icon.Name); err != nil {
+		if _, err := deleteIconByName(username, workspaceDir, icon.Name); err != nil {
 			return err
 		}
 	}
-	removeEmptyDir(workspaceDir)
+	removeEmptyDir(username, workspaceDir)
 	return nil
 }

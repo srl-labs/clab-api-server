@@ -103,15 +103,9 @@ func GetUserDetails(username string) (models.UserDetails, error) {
 		log.Warnf("Error getting groups for user '%s': %v", username, err)
 	}
 
-	// Check if user is in superuser or API user group
+	// Check if user is in the configured superuser or API user group.
 	isSuperuser, _ := IsUserInGroup(username, config.AppConfig.SuperuserGroup)
-	isAPIUser, _ := IsUserInGroup(username, config.AppConfig.APIUserGroup)
-	isClabAdmin, _ := IsUserInGroup(username, requiredAdminGroup)
-
-	// If user is in clab_admins but not explicitly in the configured API group, they're still an API user
-	if isClabAdmin {
-		isAPIUser = true
-	}
+	isAPIUser, _ := IsUserAuthorizedForAPI(username)
 
 	return models.UserDetails{
 		Username:    u.Username,
@@ -177,25 +171,10 @@ func CreateUser(req models.UserCreateRequest) error {
 		}
 	}
 
-	// Add to API access group if it's not the same as the superuser group
-	// and ensure at least one API access group is included
-	apiAccessGranted := false
-
-	// Check for required API access group (clab_admins)
-	if contains(groupsList, requiredAdminGroup) {
-		apiAccessGranted = true
-	}
-
-	// Check for configured API group if different from the required one
-	if config.AppConfig.APIUserGroup != "" &&
-		config.AppConfig.APIUserGroup != requiredAdminGroup &&
-		contains(groupsList, config.AppConfig.APIUserGroup) {
-		apiAccessGranted = true
-	}
-
-	// If no API access group was included, add the required one
-	if !apiAccessGranted {
-		groupsList = append(groupsList, requiredAdminGroup)
+	groupsList, err = ensureConfiguredAccessGroup(groupsList)
+	if err != nil {
+		_ = exec.Command(userdelBin, "-r", req.Username).Run()
+		return err
 	}
 
 	// Make sure the groups exist
@@ -261,24 +240,9 @@ func UpdateUser(username string, req models.UserUpdateRequest, allowPrivilegeUpd
 			}
 		}
 
-		// Ensure at least one API access group is included
-		apiAccessGranted := false
-
-		// Check for required API access group (clab_admins)
-		if contains(groupsList, requiredAdminGroup) {
-			apiAccessGranted = true
-		}
-
-		// Check for configured API group if different from the required one
-		if config.AppConfig.APIUserGroup != "" &&
-			config.AppConfig.APIUserGroup != requiredAdminGroup &&
-			contains(groupsList, config.AppConfig.APIUserGroup) {
-			apiAccessGranted = true
-		}
-
-		// If no API access group was included, add the required one
-		if !apiAccessGranted {
-			groupsList = append(groupsList, requiredAdminGroup)
+		groupsList, err = ensureConfiguredAccessGroup(groupsList)
+		if err != nil {
+			return err
 		}
 
 		// Make sure the groups exist
@@ -484,6 +448,22 @@ func contains(slice []string, value string) bool {
 		}
 	}
 	return false
+}
+
+func ensureConfiguredAccessGroup(groups []string) ([]string, error) {
+	accessGroups := configuredLoginGroups()
+	if len(accessGroups) == 0 {
+		return nil, fmt.Errorf("API_USER_GROUP or SUPERUSER_GROUP must be configured")
+	}
+
+	result := append([]string(nil), groups...)
+	for _, accessGroup := range accessGroups {
+		if contains(result, accessGroup) {
+			return result, nil
+		}
+	}
+
+	return append(result, accessGroups[0]), nil
 }
 
 // Helper to validate username format

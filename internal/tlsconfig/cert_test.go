@@ -1,10 +1,14 @@
 package tlsconfig
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -26,6 +30,18 @@ func TestEnsureSelfSignedCertificateCreatesReusableCertificate(t *testing.T) {
 	}
 
 	cert := readCertificate(t, certFile)
+	fingerprint, err := CertificateFingerprint(certFile)
+	if err != nil {
+		t.Fatalf("CertificateFingerprint returned error: %v", err)
+	}
+	digest := sha256.Sum256(cert.Raw)
+	decodedFingerprint, err := hex.DecodeString(strings.ReplaceAll(fingerprint, ":", ""))
+	if err != nil {
+		t.Fatalf("decode certificate fingerprint: %v", err)
+	}
+	if !bytes.Equal(decodedFingerprint, digest[:]) {
+		t.Fatalf("fingerprint mismatch: got %s", fingerprint)
+	}
 	for _, host := range []string{"localhost", "127.0.0.1", "::1", "api.example.test"} {
 		if err := cert.VerifyHostname(host); err != nil {
 			t.Fatalf("expected certificate to verify %q: %v", host, err)

@@ -2,15 +2,98 @@ package clab
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/user"
 	"testing"
+	"time"
 
 	gotc "github.com/florianl/go-tc"
-	clabcore "github.com/srl-labs/containerlab/core"
 )
 
-func TestNewContainerLabForOwnerSetsOwnerEnvDuringInit(t *testing.T) {
+func TestContainerlabProcessStateSerializesAndRestores(t *testing.T) {
+	restoreTestEnv := preserveEnv("SUDO_USER", "USER", "SUDO_UID", "SUDO_GID")
+	defer restoreTestEnv()
+
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get original cwd: %v", err)
+	}
+	if err := os.Setenv("SUDO_USER", "original-sudo"); err != nil {
+		t.Fatalf("set original SUDO_USER: %v", err)
+	}
+	if err := os.Setenv("USER", "original-user"); err != nil {
+		t.Fatalf("set original USER: %v", err)
+	}
+
+	firstDir := t.TempDir()
+	secondDir := t.TempDir()
+	firstEntered := make(chan struct{})
+	secondEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	errorsCh := make(chan error, 2)
+
+	go func() {
+		errorsCh <- withContainerlabProcessState(firstDir, "first-owner", func() error {
+			cwd, cwdErr := os.Getwd()
+			if cwdErr != nil {
+				return cwdErr
+			}
+			if cwd != firstDir || os.Getenv("SUDO_USER") != "first-owner" || os.Getenv("USER") != "first-owner" {
+				return fmt.Errorf("unexpected first process state cwd=%q sudo=%q user=%q", cwd, os.Getenv("SUDO_USER"), os.Getenv("USER"))
+			}
+			close(firstEntered)
+			<-releaseFirst
+			return nil
+		})
+	}()
+
+	<-firstEntered
+	go func() {
+		errorsCh <- withContainerlabProcessState(secondDir, "second-owner", func() error {
+			cwd, cwdErr := os.Getwd()
+			if cwdErr != nil {
+				return cwdErr
+			}
+			if cwd != secondDir || os.Getenv("SUDO_USER") != "second-owner" || os.Getenv("USER") != "second-owner" {
+				return fmt.Errorf("unexpected second process state cwd=%q sudo=%q user=%q", cwd, os.Getenv("SUDO_USER"), os.Getenv("USER"))
+			}
+			close(secondEntered)
+			return nil
+		})
+	}()
+
+	select {
+	case <-secondEntered:
+		t.Fatal("second process-state operation entered before the first was released")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseFirst)
+	select {
+	case <-secondEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second process-state operation did not enter after the first was released")
+	}
+
+	for range 2 {
+		if err := <-errorsCh; err != nil {
+			t.Fatalf("process-state operation failed: %v", err)
+		}
+	}
+
+	if cwd, err := os.Getwd(); err != nil || cwd != originalDir {
+		t.Fatalf("restored cwd = %q, %v; want %q", cwd, err, originalDir)
+	}
+	if got := os.Getenv("SUDO_USER"); got != "original-sudo" {
+		t.Fatalf("restored SUDO_USER = %q, want original-sudo", got)
+	}
+	if got := os.Getenv("USER"); got != "original-user" {
+		t.Fatalf("restored USER = %q, want original-user", got)
+	}
+}
+
+func TestContainerlabProcessStateSetsOwnerEnv(t *testing.T) {
 	restoreTestEnv := preserveEnv("SUDO_USER", "USER", "SUDO_UID", "SUDO_GID")
 	defer restoreTestEnv()
 
@@ -21,16 +104,15 @@ func TestNewContainerLabForOwnerSetsOwnerEnvDuringInit(t *testing.T) {
 		t.Fatalf("set USER: %v", err)
 	}
 
-	sentinelErr := errors.New("stop after env assertion")
 	var gotSudoUser string
 	var gotUser string
-	_, err := newContainerLabForOwner("test", func(_ *clabcore.CLab) error {
+	err := withContainerlabProcessState("", "test", func() error {
 		gotSudoUser = os.Getenv("SUDO_USER")
 		gotUser = os.Getenv("USER")
-		return sentinelErr
+		return nil
 	})
-	if !errors.Is(err, sentinelErr) {
-		t.Fatalf("newContainerLabForOwner error = %v, want %v", err, sentinelErr)
+	if err != nil {
+		t.Fatalf("withContainerlabProcessState error = %v", err)
 	}
 	if gotSudoUser != "test" {
 		t.Fatalf("SUDO_USER during init = %q, want %q", gotSudoUser, "test")

@@ -34,8 +34,11 @@ func workspaceFileEventAction(op fsnotify.Op) string {
 }
 
 func workspaceFileEventKind(absPath string) string {
-	info, err := os.Stat(absPath)
+	info, err := os.Lstat(absPath)
 	if err != nil {
+		return ""
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
 		return ""
 	}
 	if info.IsDir() {
@@ -57,7 +60,7 @@ func buildWorkspaceFileEvent(rootPath, absPath string, op fsnotify.Op) (models.W
 		return models.WorkspaceFileEventResponse{}, false
 	}
 	relPath := workspaceRelativePath(rootPath, absPath)
-	if relPath == "" {
+	if relPath == "" || workspacePathUsesReservedManagedEntry(relPath) {
 		return models.WorkspaceFileEventResponse{}, false
 	}
 	return models.WorkspaceFileEventResponse{
@@ -87,6 +90,9 @@ func addWorkspaceWatchDirs(watcher *fsnotify.Watcher, watchedDirs map[string]str
 		if !entry.IsDir() {
 			return nil
 		}
+		if relativePath, relErr := filepath.Rel(rootPath, path); relErr == nil && workspacePathUsesReservedManagedEntry(relativePath) {
+			return filepath.SkipDir
+		}
 		if entry.Type()&os.ModeSymlink != 0 {
 			return filepath.SkipDir
 		}
@@ -107,6 +113,7 @@ func workspaceEventIsDuplicate(lastByKey map[string]time.Time, event models.Work
 
 // @Summary Stream lab workspace file events
 // @Description Streams create/change/delete/rename events inside the authenticated user's editable lab workspace root as NDJSON.
+// @Description Internal `.archive-*` and `.backup-*` transaction paths are excluded from the stream.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce application/x-ndjson
@@ -180,15 +187,17 @@ func StreamWorkspaceEventsHandler(c *gin.Context) {
 				continue
 			}
 
+			workspaceEvent, ok := buildWorkspaceFileEvent(rootPath, event.Name, event.Op)
+			if !ok {
+				continue
+			}
 			if event.Op&fsnotify.Create != 0 && workspaceFileEventKind(event.Name) == workspaceFileKindDirectory {
 				_ = addWorkspaceWatchDirs(watcher, watchedDirs, event.Name)
 			}
 			if event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
 				delete(watchedDirs, filepath.Clean(event.Name))
 			}
-
-			workspaceEvent, ok := buildWorkspaceFileEvent(rootPath, event.Name, event.Op)
-			if !ok || workspaceEventIsDuplicate(lastByKey, workspaceEvent) {
+			if workspaceEventIsDuplicate(lastByKey, workspaceEvent) {
 				continue
 			}
 			payload, err := json.Marshal(workspaceEvent)

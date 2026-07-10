@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -34,6 +35,7 @@ import (
 // @Param deploy_request body models.DeployRequest true "Deployment Source"
 // @Param labNameOverride query string false "Override lab name when deploying from a URL (optional)"
 // @Param reconfigure query boolean false "Allow overwriting an existing lab IF owned by the user"
+// @Param cleanup query boolean false "Backward-compatible alias for reconfigure"
 // @Param maxWorkers query int false "Limit concurrent workers"
 // @Param exportTemplate query string false "Custom Go template file for topology data export"
 // @Param nodeFilter query string false "Comma-separated list of node names to deploy"
@@ -74,7 +76,7 @@ func DeployLabHandler(c *gin.Context) {
 
 	// --- Get Query Parameters ---
 	labNameOverride := c.Query("labNameOverride")
-	reconfigure := c.Query("reconfigure") == "true"
+	reconfigure := deployReconfigureRequested(c)
 	maxWorkersStr := c.DefaultQuery("maxWorkers", "0")
 	exportTemplate := c.Query("exportTemplate")
 	nodeFilter := c.Query("nodeFilter")
@@ -176,7 +178,7 @@ func DeployLabHandler(c *gin.Context) {
 
 		if exists {
 			if !reconfigure {
-				c.JSON(http.StatusConflict, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' already exists. Use 'reconfigure=true' to overwrite.", effectiveLabName)})
+				c.JSON(http.StatusConflict, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' already exists. Use 'reconfigure=true' (or legacy 'cleanup=true') to overwrite.", effectiveLabName)})
 				return
 			}
 			if !isSuperuser(username) && labInfo.Owner != username {
@@ -203,13 +205,13 @@ func DeployLabHandler(c *gin.Context) {
 			return
 		}
 
-		if err := os.WriteFile(targetFilePath, []byte(strings.TrimSpace(topoContent)), 0640); err != nil {
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to write topology file: %s", err.Error())})
+		rootedTarget, resolveErr := resolveUserRootedFilePath(username, targetFilePath)
+		if resolveErr != nil {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: resolveErr.Error()})
 			return
 		}
-		if err := os.Chown(targetFilePath, uid, gid); err != nil {
-			_ = os.Remove(targetFilePath)
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to set ownership on topology file: %s", err.Error())})
+		if err := writeRootedFile(rootedTarget, []byte(strings.TrimSpace(topoContent)), false); err != nil {
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to write topology file: %s", err.Error())})
 			return
 		}
 		log.Infof("Saved topology for user '%s' lab '%s' to '%s'", username, originalLabName, targetFilePath)
@@ -255,6 +257,7 @@ func DeployLabHandler(c *gin.Context) {
 
 // @Summary Deploy lab from archive
 // @Description Deploys a containerlab topology provided as a .zip or .tar.gz archive.
+// @Description Archives are staged and validated before replacing an existing workspace; the previous workspace is restored if deployment fails. Compressed and uncompressed content are limited to 256 MiB and special/symbolic-link entries are rejected.
 // @Tags Labs
 // @Security BearerAuth
 // @Accept multipart/form-data
@@ -262,6 +265,7 @@ func DeployLabHandler(c *gin.Context) {
 // @Param labArchive formData file true "Lab archive (.zip or .tar.gz)"
 // @Param labName query string true "Name for the lab"
 // @Param reconfigure query boolean false "Allow overwriting an existing lab"
+// @Param cleanup query boolean false "Backward-compatible alias for reconfigure"
 // @Param maxWorkers query int false "Limit concurrent workers"
 // @Param exportTemplate query string false "Custom Go template file for topology data export"
 // @Param nodeFilter query string false "Comma-separated list of node names to deploy"
@@ -272,6 +276,7 @@ func DeployLabHandler(c *gin.Context) {
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
 // @Failure 403 {object} models.ErrorResponse "Forbidden"
 // @Failure 409 {object} models.ErrorResponse "Conflict"
+// @Failure 413 {object} models.ErrorResponse "Archive exceeds configured size limits"
 // @Failure 500 {object} models.ErrorResponse "Internal server error"
 // @Router /api/v1/labs/archive [post]
 func DeployLabArchiveHandler(c *gin.Context) {
@@ -289,7 +294,7 @@ func DeployLabArchiveHandler(c *gin.Context) {
 		return
 	}
 
-	reconfigure := c.Query("reconfigure") == "true"
+	reconfigure := deployReconfigureRequested(c)
 	maxWorkersStr := c.DefaultQuery("maxWorkers", "0")
 	exportTemplate := c.Query("exportTemplate")
 	nodeFilter := c.Query("nodeFilter")
@@ -323,93 +328,163 @@ func DeployLabArchiveHandler(c *gin.Context) {
 		return
 	}
 
-	targetDir, uid, gid, err := getLabDirectoryInfo(username, labName)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
-		return
-	}
-
+	targetOwner := username
 	if exists {
+		if labInfo == nil {
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Error checking lab '%s' status: missing lab information", labName)})
+			return
+		}
 		if !reconfigure {
-			c.JSON(http.StatusConflict, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' already exists. Use 'reconfigure=true' to overwrite.", labName)})
+			c.JSON(http.StatusConflict, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' already exists. Use 'reconfigure=true' (or legacy 'cleanup=true') to overwrite.", labName)})
 			return
 		}
 		if !isSuperuser(username) && labInfo.Owner != username {
 			c.JSON(http.StatusForbidden, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' is owned by '%s'. Permission denied.", labName, labInfo.Owner)})
 			return
 		}
-		if err := os.RemoveAll(targetDir); err != nil {
-			log.Warnf("DeployLab (Archive) user '%s': Failed to remove existing directory: %v", username, err)
+		if strings.TrimSpace(labInfo.Owner) != "" {
+			targetOwner = labInfo.Owner
 		}
 	}
-
-	if err := ensureLabDirectory(targetDir, uid, gid); err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to create lab directory."})
+	targetDir, _, _, err := getLabDirectoryInfo(targetOwner, labName)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
+		return
+	}
+	if targetInfo, statErr := os.Lstat(targetDir); statErr == nil && !reconfigure {
+		c.JSON(http.StatusConflict, models.ErrorResponse{Error: fmt.Sprintf("Lab workspace '%s' already exists. Use 'reconfigure=true' (or legacy 'cleanup=true') to overwrite.", labName)})
+		return
+	} else if statErr == nil && targetInfo.Mode()&os.ModeSymlink != 0 {
+		c.JSON(http.StatusConflict, models.ErrorResponse{Error: "Existing lab workspace must not be a symbolic link."})
+		return
+	} else if statErr != nil && !os.IsNotExist(statErr) {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to inspect existing lab workspace: %s", statErr.Error())})
 		return
 	}
 
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxLabArchiveRequestBytes)
 	fileHeader, err := c.FormFile("labArchive")
 	if err != nil {
-		_ = os.RemoveAll(targetDir)
-		if err == http.ErrMissingFile {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			c.JSON(http.StatusRequestEntityTooLarge, models.ErrorResponse{Error: fmt.Sprintf("Lab archive request exceeds the %d-byte request limit.", maxLabArchiveRequestBytes)})
+		} else if err == http.ErrMissingFile {
 			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Missing 'labArchive' file in multipart form data."})
 		} else {
 			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Error retrieving 'labArchive' file: " + err.Error()})
 		}
 		return
 	}
+	if c.Request.MultipartForm != nil {
+		defer c.Request.MultipartForm.RemoveAll()
+	}
+	if fileHeader.Size < 0 || fileHeader.Size > maxLabArchiveCompressedBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, models.ErrorResponse{Error: fmt.Sprintf("Lab archive exceeds the %d-byte upload limit.", maxLabArchiveCompressedBytes)})
+		return
+	}
+	filename := fileHeader.Filename
+	isZip := strings.HasSuffix(strings.ToLower(filename), ".zip")
+	isTarGz := strings.HasSuffix(strings.ToLower(filename), ".tar.gz") || strings.HasSuffix(strings.ToLower(filename), ".tgz")
+	if !isZip && !isTarGz {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: fmt.Sprintf("Unsupported archive format: %s. Use .zip or .tar.gz.", filename)})
+		return
+	}
 
 	archiveFile, err := fileHeader.Open()
 	if err != nil {
-		_ = os.RemoveAll(targetDir)
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Cannot open uploaded archive."})
 		return
 	}
 	defer archiveFile.Close()
 
-	filename := fileHeader.Filename
-	var extractionErr error
-
-	if strings.HasSuffix(strings.ToLower(filename), ".zip") {
-		extractionErr = extractZip(archiveFile, fileHeader.Size, targetDir, uid, gid)
-	} else if strings.HasSuffix(strings.ToLower(filename), ".tar.gz") || strings.HasSuffix(strings.ToLower(filename), ".tgz") {
-		extractionErr = extractTarGz(archiveFile, targetDir, uid, gid)
-	} else {
-		_ = os.RemoveAll(targetDir)
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: fmt.Sprintf("Unsupported archive format: %s. Use .zip or .tar.gz.", filename)})
+	stagingDir, stagingEntry, uid, gid, stageErr := createManagedLabStagingDirectory(targetOwner, labName)
+	if stageErr != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to create archive staging directory: %s", stageErr.Error())})
 		return
+	}
+	stagingCommitted := false
+	defer func() {
+		if !stagingCommitted {
+			_ = removeManagedLabStagingDirectory(targetOwner, labName, stagingEntry)
+		}
+	}()
+
+	var extractionErr error
+	if isZip {
+		extractionErr = extractZip(archiveFile, fileHeader.Size, stagingDir, uid, gid)
+	} else {
+		extractionErr = extractTarGz(archiveFile, stagingDir, uid, gid)
 	}
 
 	if extractionErr != nil {
-		_ = os.RemoveAll(targetDir)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to extract archive: %s", extractionErr.Error())})
+		status := http.StatusBadRequest
+		if errors.Is(extractionErr, errLabArchiveLimit) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		c.JSON(status, models.ErrorResponse{Error: fmt.Sprintf("Failed to extract archive: %s", extractionErr.Error())})
 		return
 	}
 
 	// Find topology file
-	topoPathForClab := ""
-	expectedTopoPath := filepath.Join(targetDir, labName+".clab.yml")
-	if _, err := os.Stat(expectedTopoPath); err == nil {
-		topoPathForClab = expectedTopoPath
+	topologyRelativePath := ""
+	labRoot, rootErr := openWorkspaceRoot(stagingDir)
+	if rootErr != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to open extracted lab directory."})
+		return
+	}
+	if info, err := labRoot.Lstat(labName + ".clab.yml"); err == nil && info.Mode().IsRegular() {
+		topologyRelativePath = labName + ".clab.yml"
+	} else if info, err := labRoot.Lstat(labName + ".clab.yaml"); err == nil && info.Mode().IsRegular() {
+		topologyRelativePath = labName + ".clab.yaml"
 	} else {
-		entries, readErr := os.ReadDir(targetDir)
-		if readErr != nil {
+		directory, openErr := labRoot.Open(".")
+		if openErr != nil {
+			_ = labRoot.Close()
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to read extracted lab directory."})
-			_ = os.RemoveAll(targetDir)
 			return
 		}
+		entries, readErr := directory.ReadDir(-1)
+		_ = directory.Close()
+		if readErr != nil {
+			_ = labRoot.Close()
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to read extracted lab directory."})
+			return
+		}
+		candidates := make([]string, 0, 1)
 		for _, entry := range entries {
 			entryNameLower := strings.ToLower(entry.Name())
 			if !entry.IsDir() && (strings.HasSuffix(entryNameLower, ".clab.yml") || strings.HasSuffix(entryNameLower, ".clab.yaml")) {
-				topoPathForClab = filepath.Join(targetDir, entry.Name())
-				break
+				candidates = append(candidates, entry.Name())
 			}
+		}
+		if len(candidates) == 1 {
+			topologyRelativePath = candidates[0]
+		} else if len(candidates) > 1 {
+			_ = labRoot.Close()
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Archive contains multiple topology files; use a canonical '<labName>.clab.yml' file."})
+			return
 		}
 	}
 
-	if topoPathForClab == "" {
+	if topologyRelativePath == "" {
+		_ = labRoot.Close()
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "No '*.clab.yml' or '*.clab.yaml' file found in the archive."})
-		_ = os.RemoveAll(targetDir)
+		return
+	}
+	topologyContent, readTopologyErr := labRoot.ReadFile(topologyRelativePath)
+	_ = labRoot.Close()
+	if readTopologyErr != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: fmt.Sprintf("Failed to read topology from archive: %s", readTopologyErr.Error())})
+		return
+	}
+	var topologyDocument map[string]interface{}
+	if yamlErr := yaml.Unmarshal(topologyContent, &topologyDocument); yamlErr != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: fmt.Sprintf("Invalid topology YAML in archive: %s", yamlErr.Error())})
+		return
+	}
+	topologyName, hasTopologyName := topologyDocument["name"].(string)
+	if !hasTopologyName || strings.TrimSpace(topologyName) != labName {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: fmt.Sprintf("Archive topology name must match labName %q.", labName)})
 		return
 	}
 
@@ -419,6 +494,18 @@ func DeployLabArchiveHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Containerlab service not initialized"})
 		return
 	}
+	workspaceTransaction, replaceErr := beginManagedLabDirectoryTransaction(targetOwner, labName, stagingEntry)
+	if replaceErr != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to activate staged lab archive: %s", replaceErr.Error())})
+		return
+	}
+	stagingCommitted = true
+	defer func() {
+		if rollbackErr := workspaceTransaction.Rollback(); rollbackErr != nil {
+			log.Error("Failed to roll back uncommitted lab workspace transaction", "lab", labName, "owner", targetOwner, "error", rollbackErr)
+		}
+	}()
+	topoPathForClab := filepath.Join(targetDir, topologyRelativePath)
 
 	var nodeFilterSlice []string
 	if nodeFilter != "" {
@@ -427,7 +514,7 @@ func DeployLabArchiveHandler(c *gin.Context) {
 
 	deployOpts := clab.DeployOptions{
 		TopoPath:       topoPathForClab,
-		Username:       username,
+		Username:       targetOwner,
 		Reconfigure:    reconfigure,
 		MaxWorkers:     uint(maxWorkers),
 		ExportTemplate: exportTemplate,
@@ -439,9 +526,15 @@ func DeployLabArchiveHandler(c *gin.Context) {
 	log.Infof("DeployLab (Archive) user '%s': Deploying lab '%s'...", username, labName)
 	containers, err := svc.Deploy(ctx, deployOpts)
 	if err != nil {
+		if rollbackErr := workspaceTransaction.Rollback(); rollbackErr != nil {
+			err = errors.Join(err, fmt.Errorf("failed to roll back lab workspace: %w", rollbackErr))
+		}
 		log.Errorf("DeployLab (Archive) failed for user '%s', lab '%s': %v", username, labName, err)
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to deploy lab '%s': %s", labName, err.Error())})
 		return
+	}
+	if commitErr := workspaceTransaction.Commit(); commitErr != nil {
+		log.Warn("Lab deployed but previous workspace backup could not be removed", "lab", labName, "owner", targetOwner, "error", commitErr)
 	}
 
 	log.Infof("DeployLab (Archive) user '%s': Lab '%s' deployed successfully.", username, labName)
@@ -573,7 +666,7 @@ func DestroyLabHandler(c *gin.Context) {
 		expectedBase = filepath.Clean(expectedBase)
 		targetDir = filepath.Clean(targetDir)
 		if strings.HasPrefix(targetDir, expectedBase+string(filepath.Separator)) {
-			if err := os.RemoveAll(targetDir); err != nil {
+			if err := removeManagedTopLevelDirectory(purgeBaseUser, targetDir); err != nil {
 				log.Warnf("Failed to cleanup directory '%s' for user '%s': %v", targetDir, username, err)
 			} else {
 				log.Infof("Successfully cleaned up directory '%s' for user '%s'", targetDir, username)

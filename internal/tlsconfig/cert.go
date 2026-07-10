@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -26,6 +27,30 @@ const (
 type CertificatePaths struct {
 	CertFile string
 	KeyFile  string
+}
+
+// CertificateFingerprint returns the colon-separated SHA-256 fingerprint of
+// the first certificate in a PEM file. Clients can show the same value during
+// first-use trust confirmation without exposing key material.
+func CertificateFingerprint(certFile string) (string, error) {
+	certPEM, err := os.ReadFile(certFile)
+	if err != nil {
+		return "", fmt.Errorf("read TLS certificate: %w", err)
+	}
+	block, _ := pem.Decode(certPEM)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return "", fmt.Errorf("decode TLS certificate: no certificate PEM block found")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return "", fmt.Errorf("parse TLS certificate: %w", err)
+	}
+	digest := sha256.Sum256(cert.Raw)
+	parts := make([]string, len(digest))
+	for i, value := range digest {
+		parts[i] = fmt.Sprintf("%02X", value)
+	}
+	return strings.Join(parts, ":"), nil
 }
 
 // DefaultCertificatePaths returns the per-user auto-generated TLS certificate paths.

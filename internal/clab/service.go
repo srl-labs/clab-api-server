@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -36,6 +35,7 @@ import (
 	"gopkg.in/yaml.v2"
 
 	"github.com/srl-labs/clab-api-server/internal/config"
+	workspacestore "github.com/srl-labs/clab-api-server/internal/workspace"
 )
 
 const (
@@ -54,23 +54,51 @@ func NewService() *Service {
 	return &Service{}
 }
 
-var containerlabInitMu sync.Mutex
+// containerlabProcessMu protects the process-global state used by containerlab
+// initialization and a few upstream operations. os.Chdir and environment
+// variables affect every goroutine, so callers that need either must hold this
+// lock for their complete operation, not only for initialization.
+var containerlabProcessMu sync.Mutex
 
 func newContainerLab(opts ...clabcore.ClabOption) (*clabcore.CLab, error) {
-	containerlabInitMu.Lock()
-	defer containerlabInitMu.Unlock()
+	containerlabProcessMu.Lock()
+	defer containerlabProcessMu.Unlock()
 
 	return clabcore.NewContainerLab(opts...)
 }
 
-func newContainerLabForOwner(owner string, opts ...clabcore.ClabOption) (*clabcore.CLab, error) {
-	containerlabInitMu.Lock()
-	defer containerlabInitMu.Unlock()
+func newContainerLabProcessLocked(opts ...clabcore.ClabOption) (*clabcore.CLab, error) {
+	return clabcore.NewContainerLab(opts...)
+}
+
+func withContainerlabProcessState(workDir, owner string, run func() error) (returnErr error) {
+	containerlabProcessMu.Lock()
+	defer containerlabProcessMu.Unlock()
+
+	originalDir := ""
+	if strings.TrimSpace(workDir) != "" {
+		var err error
+		originalDir, err = os.Getwd()
+		if err != nil {
+			return fmt.Errorf("failed to get current working directory: %w", err)
+		}
+		if err := os.Chdir(workDir); err != nil {
+			return fmt.Errorf("failed to change to work directory: %w", err)
+		}
+		defer func() {
+			if err := os.Chdir(originalDir); err != nil {
+				log.Error("Failed to restore working directory", "error", err)
+				if returnErr == nil {
+					returnErr = fmt.Errorf("failed to restore working directory: %w", err)
+				}
+			}
+		}()
+	}
 
 	restoreOwnerEnv := setProcessOwnerEnv(owner)
 	defer restoreOwnerEnv()
 
-	return clabcore.NewContainerLab(opts...)
+	return run()
 }
 
 func setProcessOwnerEnv(owner string) func() {
@@ -391,17 +419,6 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 		log.Debug("Using cloned topology file", "path", topoPath)
 	}
 
-	// Change to the work directory for relative path resolution
-	originalDir, _ := os.Getwd()
-	if chErr := os.Chdir(workDir); chErr != nil {
-		return nil, fmt.Errorf("failed to change to work directory: %w", chErr)
-	}
-	defer func() {
-		if restoreErr := os.Chdir(originalDir); restoreErr != nil {
-			log.Warn("Failed to restore working directory", "error", restoreErr)
-		}
-	}()
-
 	// Build clab options
 	clabOpts := []clabcore.ClabOption{
 		clabcore.WithTimeout(defaultTimeout),
@@ -420,12 +437,6 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 		"username", opts.Username,
 		"runtime", config.AppConfig.ClabRuntime,
 	)
-
-	// Create containerlab instance
-	clab, err := newContainerLabForOwner(opts.Username, clabOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create containerlab instance: %w", err)
-	}
 
 	// Build deploy options
 	deployOpts, err := clabcore.NewDeployOptions(opts.MaxWorkers)
@@ -447,20 +458,19 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 		"reconfigure", opts.Reconfigure,
 	)
 
-	// Deploy the lab with the same owner env used during containerlab initialization. containerlab
-	// uses these uid/gid env vars for ownership of deploy-time files it creates.
+	// Containerlab uses process-global cwd and owner environment during both
+	// initialization and deployment, so keep the entire sequence in one critical
+	// section.
 	var containers []clabruntime.GenericContainer
-	err = func() error {
-		containerlabInitMu.Lock()
-		defer containerlabInitMu.Unlock()
-
-		restoreOwnerEnv := setProcessOwnerEnv(opts.Username)
-		defer restoreOwnerEnv()
-
+	err = withContainerlabProcessState(workDir, opts.Username, func() error {
+		clab, initErr := newContainerLabProcessLocked(clabOpts...)
+		if initErr != nil {
+			return fmt.Errorf("failed to create containerlab instance: %w", initErr)
+		}
 		var deployErr error
 		containers, deployErr = clab.Deploy(ctx, deployOpts)
 		return deployErr
-	}()
+	})
 	if err != nil {
 		return nil, fmt.Errorf("deployment failed: %w", err)
 	}
@@ -487,16 +497,6 @@ func (s *Service) Apply(ctx context.Context, opts ApplyOptions) (*clabcore.Apply
 		return nil, fmt.Errorf("failed to prepare working directory: %w", err)
 	}
 
-	originalDir, _ := os.Getwd()
-	if chErr := os.Chdir(workDir); chErr != nil {
-		return nil, fmt.Errorf("failed to change to work directory: %w", chErr)
-	}
-	defer func() {
-		if restoreErr := os.Chdir(originalDir); restoreErr != nil {
-			log.Warn("Failed to restore working directory", "error", restoreErr)
-		}
-	}()
-
 	clabOpts := []clabcore.ClabOption{
 		clabcore.WithTimeout(defaultTimeout),
 		clabcore.WithTopoPath(opts.TopoPath, nil),
@@ -510,11 +510,6 @@ func (s *Service) Apply(ctx context.Context, opts ApplyOptions) (*clabcore.Apply
 		"username", opts.Username,
 		"runtime", config.AppConfig.ClabRuntime,
 	)
-
-	clab, err := newContainerLabForOwner(opts.Username, clabOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create containerlab instance: %w", err)
-	}
 
 	applyOpts, err := clabcore.NewApplyOptions(opts.MaxWorkers)
 	if err != nil {
@@ -531,22 +526,22 @@ func (s *Service) Apply(ctx context.Context, opts ApplyOptions) (*clabcore.Apply
 	)
 
 	var result *clabcore.ApplyResult
-	err = func() error {
-		containerlabInitMu.Lock()
-		defer containerlabInitMu.Unlock()
-
-		restoreOwnerEnv := setProcessOwnerEnv(opts.Username)
-		defer restoreOwnerEnv()
-
+	var configuredLabName string
+	err = withContainerlabProcessState(workDir, opts.Username, func() error {
+		clab, initErr := newContainerLabProcessLocked(clabOpts...)
+		if initErr != nil {
+			return fmt.Errorf("failed to create containerlab instance: %w", initErr)
+		}
+		configuredLabName = clab.Config.Name
 		var applyErr error
 		result, applyErr = clab.Apply(ctx, applyOpts)
 		return applyErr
-	}()
+	})
 	if err != nil {
 		return nil, fmt.Errorf("apply failed: %w", err)
 	}
 	if result != nil && strings.TrimSpace(result.LabName) == "" {
-		result.LabName = clab.Config.Name
+		result.LabName = configuredLabName
 	}
 
 	return result, nil
@@ -562,16 +557,6 @@ func (s *Service) Destroy(ctx context.Context, opts DestroyOptions) error {
 	if err != nil {
 		return fmt.Errorf("failed to prepare working directory: %w", err)
 	}
-
-	originalDir, _ := os.Getwd()
-	if chErr := os.Chdir(workDir); chErr != nil {
-		return fmt.Errorf("failed to change to work directory: %w", chErr)
-	}
-	defer func() {
-		if restoreErr := os.Chdir(originalDir); restoreErr != nil {
-			log.Warn("Failed to restore working directory", "error", restoreErr)
-		}
-	}()
 
 	// Build clab options - use topology path if available, otherwise use lab name
 	clabTimeout := defaultTimeout
@@ -606,11 +591,6 @@ func (s *Service) Destroy(ctx context.Context, opts DestroyOptions) error {
 		"username", opts.Username,
 	)
 
-	clab, err := newContainerLab(clabOpts...)
-	if err != nil {
-		return fmt.Errorf("failed to create containerlab instance: %w", err)
-	}
-
 	// Build destroy options
 	destroyOpts := []clabcore.DestroyOption{
 		clabcore.WithDestroyMaxWorkers(opts.MaxWorkers),
@@ -640,8 +620,14 @@ func (s *Service) Destroy(ctx context.Context, opts DestroyOptions) error {
 		"cleanup", opts.Cleanup,
 	)
 
-	// Destroy the lab
-	if err := clab.Destroy(ctx, destroyOpts...); err != nil {
+	// Destroy the lab while protecting the process-global working directory.
+	if err := withContainerlabProcessState(workDir, "", func() error {
+		clab, initErr := newContainerLabProcessLocked(clabOpts...)
+		if initErr != nil {
+			return fmt.Errorf("failed to create containerlab instance: %w", initErr)
+		}
+		return clab.Destroy(ctx, destroyOpts...)
+	}); err != nil {
 		return fmt.Errorf("destroy failed: %w", err)
 	}
 
@@ -754,16 +740,6 @@ func (s *Service) runTopologyNodeLifecycleAction(ctx context.Context, opts NodeL
 		return fmt.Errorf("failed to prepare working directory: %w", err)
 	}
 
-	originalDir, _ := os.Getwd()
-	if chErr := os.Chdir(workDir); chErr != nil {
-		return fmt.Errorf("failed to change to work directory: %w", chErr)
-	}
-	defer func() {
-		if restoreErr := os.Chdir(originalDir); restoreErr != nil {
-			log.Warn("Failed to restore working directory", "error", restoreErr)
-		}
-	}()
-
 	clabOpts := []clabcore.ClabOption{
 		clabcore.WithTimeout(defaultTimeout),
 		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{Timeout: defaultTimeout}),
@@ -780,11 +756,6 @@ func (s *Service) runTopologyNodeLifecycleAction(ctx context.Context, opts NodeL
 		return fmt.Errorf("either lab name or topology path is required")
 	}
 
-	clab, err := newContainerLab(clabOpts...)
-	if err != nil {
-		return fmt.Errorf("failed to create containerlab instance: %w", err)
-	}
-
 	nodeNames := cleanNodeNames(opts.NodeNames)
 	log.Info("Running topology lifecycle action",
 		"username", opts.Username,
@@ -794,16 +765,22 @@ func (s *Service) runTopologyNodeLifecycleAction(ctx context.Context, opts NodeL
 		"nodes", nodeNames,
 	)
 
-	switch opts.Action {
-	case NodeLifecycleActionStart:
-		err = clab.StartNodes(ctx, nodeNames)
-	case NodeLifecycleActionStop:
-		err = clab.StopNodes(ctx, nodeNames)
-	case NodeLifecycleActionRestart:
-		err = clab.RestartNodes(ctx, nodeNames)
-	default:
-		return fmt.Errorf("unsupported topology lifecycle action: %q", opts.Action)
-	}
+	err = withContainerlabProcessState(workDir, "", func() error {
+		clab, initErr := newContainerLabProcessLocked(clabOpts...)
+		if initErr != nil {
+			return fmt.Errorf("failed to create containerlab instance: %w", initErr)
+		}
+		switch opts.Action {
+		case NodeLifecycleActionStart:
+			return clab.StartNodes(ctx, nodeNames)
+		case NodeLifecycleActionStop:
+			return clab.StopNodes(ctx, nodeNames)
+		case NodeLifecycleActionRestart:
+			return clab.RestartNodes(ctx, nodeNames)
+		default:
+			return fmt.Errorf("unsupported topology lifecycle action: %q", opts.Action)
+		}
+	})
 	if err != nil {
 		return fmt.Errorf("failed to %s node(s): %w", opts.Action, err)
 	}
@@ -1124,16 +1101,6 @@ func (s *Service) Exec(ctx context.Context, opts ExecOptions) (*clabexec.ExecCol
 		return nil, fmt.Errorf("failed to prepare working directory: %w", err)
 	}
 
-	originalDir, _ := os.Getwd()
-	if chErr := os.Chdir(workDir); chErr != nil {
-		return nil, fmt.Errorf("failed to change to work directory: %w", chErr)
-	}
-	defer func() {
-		if restoreErr := os.Chdir(originalDir); restoreErr != nil {
-			log.Warn("Failed to restore working directory", "error", restoreErr)
-		}
-	}()
-
 	// Build clab options
 	var clabOpts []clabcore.ClabOption
 	clabOpts = append(clabOpts, clabcore.WithTimeout(defaultTimeout))
@@ -1143,11 +1110,6 @@ func (s *Service) Exec(ctx context.Context, opts ExecOptions) (*clabexec.ExecCol
 	clabOpts = append(clabOpts,
 		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{Timeout: defaultTimeout}),
 	)
-
-	clab, err := newContainerLab(clabOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create containerlab instance: %w", err)
-	}
 
 	// Build list options for targeting containers
 	var listOpts []clabcore.ListOption
@@ -1167,7 +1129,16 @@ func (s *Service) Exec(ctx context.Context, opts ExecOptions) (*clabexec.ExecCol
 		"containerName", opts.ContainerName,
 	)
 
-	result, err := clab.Exec(ctx, opts.Commands, listOpts...)
+	var result *clabexec.ExecCollection
+	err = withContainerlabProcessState(workDir, "", func() error {
+		clab, initErr := newContainerLabProcessLocked(clabOpts...)
+		if initErr != nil {
+			return fmt.Errorf("failed to create containerlab instance: %w", initErr)
+		}
+		var execErr error
+		result, execErr = clab.Exec(ctx, opts.Commands, listOpts...)
+		return execErr
+	})
 	if err != nil {
 		return nil, fmt.Errorf("exec failed: %w", err)
 	}
@@ -1186,16 +1157,6 @@ func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) error {
 		return fmt.Errorf("failed to prepare working directory: %w", err)
 	}
 
-	originalDir, _ := os.Getwd()
-	if chErr := os.Chdir(workDir); chErr != nil {
-		return fmt.Errorf("failed to change to work directory: %w", chErr)
-	}
-	defer func() {
-		if restoreErr := os.Chdir(originalDir); restoreErr != nil {
-			log.Warn("Failed to restore working directory", "error", restoreErr)
-		}
-	}()
-
 	clabOpts := []clabcore.ClabOption{
 		clabcore.WithTimeout(defaultTimeout),
 		clabcore.WithTopoPath(opts.TopoPath, nil),
@@ -1206,18 +1167,19 @@ func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) error {
 		clabOpts = append(clabOpts, clabcore.WithNodeFilter(opts.NodeFilter))
 	}
 
-	clab, err := newContainerLab(clabOpts...)
-	if err != nil {
-		return fmt.Errorf("failed to create containerlab instance: %w", err)
-	}
-
 	log.Info("Saving lab configuration",
 		"username", opts.Username,
 		"topoPath", opts.TopoPath,
 	)
 
 	// Save config for each node
-	if err := clab.Save(ctx); err != nil {
+	if err := withContainerlabProcessState(workDir, "", func() error {
+		clab, initErr := newContainerLabProcessLocked(clabOpts...)
+		if initErr != nil {
+			return fmt.Errorf("failed to create containerlab instance: %w", initErr)
+		}
+		return clab.Save(ctx)
+	}); err != nil {
 		return fmt.Errorf("save failed: %w", err)
 	}
 
@@ -2313,30 +2275,16 @@ func (s *Service) generateTopologyConfig(
 
 // prepareWorkDir prepares the working directory for a user.
 func (s *Service) prepareWorkDir(username string) (string, error) {
-	usr, err := user.Lookup(username)
+	storage, err := workspacestore.ResolveUserStorage(username)
 	if err != nil {
-		return "", fmt.Errorf("failed to lookup user: %w", err)
+		return "", fmt.Errorf("failed to resolve user workspace: %w", err)
 	}
 
-	clabDir := filepath.Join(usr.HomeDir, ".clab")
-	if err := os.MkdirAll(clabDir, 0750); err != nil {
-		return "", fmt.Errorf("failed to create .clab directory: %w", err)
+	if err := workspacestore.EnsureUserStorage(storage); err != nil {
+		return "", fmt.Errorf("failed to prepare containerlab workspace: %w", err)
 	}
 
-	// Try to set ownership of the .clab directory to the actual user
-	uid, uidErr := strconv.Atoi(usr.Uid)
-	gid, gidErr := strconv.Atoi(usr.Gid)
-	if uidErr == nil && gidErr == nil {
-		if chownErr := os.Chown(clabDir, uid, gid); chownErr != nil {
-			log.Warn("Failed to set ownership on .clab directory",
-				"dir", clabDir,
-				"user", username,
-				"error", chownErr,
-			)
-		}
-	}
-
-	return clabDir, nil
+	return storage.BaseDir, nil
 }
 
 // ensureTimeout ensures the context has a timeout.
@@ -2360,27 +2308,24 @@ func (s *Service) processGitTopoFile(topo, workDir string) (string, error) {
 		return "", fmt.Errorf("failed to parse git URL: %w", err)
 	}
 
-	// Change to workdir so the repo is cloned there
-	originalDir, _ := os.Getwd()
-	if chErr := os.Chdir(workDir); chErr != nil {
-		return "", fmt.Errorf("failed to change to work directory for git clone: %w", chErr)
-	}
-	defer func() {
-		_ = os.Chdir(originalDir)
-	}()
-
 	// Instantiate the git implementation
 	gitImpl := clabgit.NewGoGit(repo)
 
 	// Clone the repo
 	log.Debug("Cloning git repository", "url", topo, "workDir", workDir)
-	if err := gitImpl.Clone(); err != nil {
-		return "", fmt.Errorf("failed to clone git repository: %w", err)
-	}
+	if err := withContainerlabProcessState(workDir, "", func() error {
+		if cloneErr := gitImpl.Clone(); cloneErr != nil {
+			return cloneErr
+		}
 
-	// Adjust permissions for the checked out repo
-	if err := clabutils.SetUIDAndGID(repo.GetName()); err != nil {
-		log.Warn("Error adjusting repository permissions, continuing anyways", "error", err)
+		// SetUIDAndGID currently accepts a relative path and therefore belongs in
+		// the same protected working-directory section as Clone.
+		if ownershipErr := clabutils.SetUIDAndGID(repo.GetName()); ownershipErr != nil {
+			log.Warn("Error adjusting repository permissions, continuing anyways", "error", ownershipErr)
+		}
+		return nil
+	}); err != nil {
+		return "", fmt.Errorf("failed to clone git repository: %w", err)
 	}
 
 	// Find the topology file in the cloned repo
@@ -2410,8 +2355,13 @@ func (s *Service) processGitTopoFile(topo, workDir string) (string, error) {
 }
 
 func (s *Service) runCommand(ctx context.Context, name string, args []string) (string, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	output, err := cmd.CombinedOutput()
+	var output []byte
+	err := withContainerlabProcessState("", "", func() error {
+		cmd := exec.CommandContext(ctx, name, args...)
+		var commandErr error
+		output, commandErr = cmd.CombinedOutput()
+		return commandErr
+	})
 	trimmed := strings.TrimSpace(string(output))
 	if err != nil {
 		if trimmed == "" {
