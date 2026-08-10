@@ -147,6 +147,58 @@ func (n *rootLinkNode) AddEndpoint(e clablinks.Endpoint) error {
 	return nil
 }
 
+func (n *rootLinkNode) AdoptEndpoint(e clablinks.Endpoint) error {
+	if e == nil {
+		return fmt.Errorf("node %q cannot adopt a nil endpoint", n.shortName)
+	}
+
+	owner := e.GetNode()
+	if owner == nil {
+		return fmt.Errorf(
+			"node %q cannot adopt endpoint %q without an owner",
+			n.shortName,
+			e.GetIfaceName(),
+		)
+	}
+	if owner.GetShortName() != n.shortName {
+		return fmt.Errorf(
+			"node %q cannot adopt endpoint %q owned by %q",
+			n.shortName,
+			e.GetIfaceName(),
+			owner.GetShortName(),
+		)
+	}
+
+	for _, owned := range n.endpoints {
+		if owned == e {
+			return nil
+		}
+		if owned.GetIfaceName() == e.GetIfaceName() {
+			return fmt.Errorf(
+				"node %q already tracks interface %q",
+				n.shortName,
+				e.GetIfaceName(),
+			)
+		}
+	}
+
+	n.endpoints = append(n.endpoints, e)
+	return nil
+}
+
+func (n *rootLinkNode) ReleaseEndpoint(e clablinks.Endpoint) error {
+	for i, owned := range n.endpoints {
+		if owned != e {
+			continue
+		}
+
+		n.endpoints = append(n.endpoints[:i], n.endpoints[i+1:]...)
+		return nil
+	}
+
+	return fmt.Errorf("node %q does not own endpoint %q", n.shortName, e.GetIfaceName())
+}
+
 func (*rootLinkNode) GetLinkEndpointType() clablinks.LinkEndpointType {
 	return clablinks.LinkEndpointTypeHost
 }
@@ -184,7 +236,10 @@ func (n *rootLinkNode) Delete(ctx context.Context) error {
 
 // DeployOptions contains options for deploying a lab.
 type DeployOptions struct {
-	TopoPath       string
+	TopoPath string
+	// LabName is the API-authorized lab name. It is required and overrides the
+	// name from the topology so deployment cannot switch to an unchecked lab.
+	LabName        string
 	Username       string
 	Reconfigure    bool
 	MaxWorkers     uint
@@ -310,6 +365,16 @@ type CloneTopologySourceResult struct {
 	TopologyPath string
 }
 
+type ResolveTopologySourceOptions struct {
+	SourcePath string
+	Username   string
+}
+
+type ResolveTopologySourceResult struct {
+	TopologyPath string
+	LabName      string
+}
+
 type RuntimeImageSummary struct {
 	ID          string
 	ShortID     string
@@ -368,10 +433,79 @@ func (s *Service) CloneTopologySource(opts CloneTopologySourceOptions) (*CloneTo
 	}, nil
 }
 
+// ResolveTopologySource materializes a topology source and returns its effective lab name after
+// template, environment, and git-variable expansion.
+func (s *Service) ResolveTopologySource(
+	opts ResolveTopologySourceOptions,
+) (*ResolveTopologySourceResult, error) {
+	sourcePath := strings.TrimSpace(opts.SourcePath)
+	if sourcePath == "" {
+		return nil, fmt.Errorf("topology source is required")
+	}
+	if strings.TrimSpace(opts.Username) == "" {
+		return nil, fmt.Errorf("username is required")
+	}
+
+	topologyPath := sourcePath
+	if s.isGitURL(sourcePath) {
+		cloned, err := s.CloneTopologySource(CloneTopologySourceOptions{
+			SourceURL: sourcePath,
+			Username:  opts.Username,
+		})
+		if err != nil {
+			return nil, err
+		}
+		topologyPath = cloned.TopologyPath
+	}
+
+	clab, err := newContainerLabForOwner(
+		opts.Username,
+		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{
+			Timeout: defaultTimeout,
+		}),
+		clabcore.WithTopoPath(topologyPath, nil),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load topology: %w", err)
+	}
+
+	labName := strings.TrimSpace(clab.Config.Name)
+	if labName == "" {
+		return nil, fmt.Errorf("topology name is required")
+	}
+
+	return &ResolveTopologySourceResult{
+		TopologyPath: clab.TopoPaths.TopologyFilenameAbsPath(),
+		LabName:      labName,
+	}, nil
+}
+
+func deployClabOptions(topoPath, labName string, opts DeployOptions) []clabcore.ClabOption {
+	clabOpts := []clabcore.ClabOption{
+		clabcore.WithTimeout(defaultTimeout),
+		clabcore.WithTopoPath(topoPath, nil),
+		clabcore.WithTopologyName(labName),
+		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{
+			Timeout: defaultTimeout,
+		}),
+	}
+
+	if len(opts.NodeFilter) > 0 {
+		clabOpts = append(clabOpts, clabcore.WithNodeFilter(opts.NodeFilter))
+	}
+
+	return clabOpts
+}
+
 // Deploy deploys a lab using the containerlab library.
 func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime.GenericContainer, error) {
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
+
+	labName := strings.TrimSpace(opts.LabName)
+	if labName == "" {
+		return nil, fmt.Errorf("authorized lab name is required")
+	}
 
 	// Prepare clab working directory
 	workDir, err := s.prepareWorkDir(opts.Username)
@@ -402,19 +536,6 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 		}
 	}()
 
-	// Build clab options
-	clabOpts := []clabcore.ClabOption{
-		clabcore.WithTimeout(defaultTimeout),
-		clabcore.WithTopoPath(topoPath, nil),
-		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{
-			Timeout: defaultTimeout,
-		}),
-	}
-
-	if len(opts.NodeFilter) > 0 {
-		clabOpts = append(clabOpts, clabcore.WithNodeFilter(opts.NodeFilter))
-	}
-
 	log.Debug("Creating containerlab instance",
 		"topoPath", opts.TopoPath,
 		"username", opts.Username,
@@ -422,7 +543,10 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 	)
 
 	// Create containerlab instance
-	clab, err := newContainerLabForOwner(opts.Username, clabOpts...)
+	clab, err := newContainerLabForOwner(
+		opts.Username,
+		deployClabOptions(topoPath, labName, opts)...,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create containerlab instance: %w", err)
 	}
@@ -457,8 +581,10 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 		restoreOwnerEnv := setProcessOwnerEnv(opts.Username)
 		defer restoreOwnerEnv()
 
-		var deployErr error
-		containers, deployErr = clab.Deploy(ctx, deployOpts)
+		deployResult, deployErr := clab.Deploy(ctx, deployOpts)
+		if deployResult != nil {
+			containers = deployResult.Containers
+		}
 		return deployErr
 	}()
 	if err != nil {
@@ -1858,7 +1984,7 @@ func (s *Service) SetNetem(ctx context.Context, opts NetemSetOptions) error {
 }
 
 func resolveNetemLink(iface string) (netlink.Link, error) {
-	netemIfLink, err := netlink.LinkByName(clablinks.SanitizeInterfaceName(iface))
+	netemIfLink, err := netlink.LinkByName(clabutils.SanitizeInterfaceName(iface))
 	if err == nil {
 		return netemIfLink, nil
 	}

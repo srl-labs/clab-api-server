@@ -22,6 +22,34 @@ import (
 	"github.com/srl-labs/clab-api-server/internal/models"
 )
 
+type deployTopologySourceResolver interface {
+	ResolveTopologySource(
+		clab.ResolveTopologySourceOptions,
+	) (*clab.ResolveTopologySourceResult, error)
+}
+
+func resolveURLDeploySource(
+	resolver deployTopologySourceResolver,
+	username, sourceURL, labNameOverride string,
+) (topologyPath, labName string, err error) {
+	resolved, err := resolver.ResolveTopologySource(clab.ResolveTopologySourceOptions{
+		SourcePath: sourceURL,
+		Username:   username,
+	})
+	if err != nil {
+		return "", "", err
+	}
+	if resolved == nil || strings.TrimSpace(resolved.TopologyPath) == "" {
+		return "", "", fmt.Errorf("topology source resolved without a local topology path")
+	}
+
+	if labNameOverride != "" {
+		return resolved.TopologyPath, labNameOverride, nil
+	}
+
+	return resolved.TopologyPath, resolved.LabName, nil
+}
+
 // @Summary Deploy lab
 // @Description Deploys a containerlab topology.
 // @Description
@@ -100,6 +128,12 @@ func DeployLabHandler(c *gin.Context) {
 		return
 	}
 
+	svc := GetClabService()
+	if svc == nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Containerlab service not initialized"})
+		return
+	}
+
 	var effectiveLabName string
 	var originalLabName string
 	var topoPathForClab string
@@ -113,12 +147,23 @@ func DeployLabHandler(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid topologySourceUrl format"})
 			return
 		}
-		topoPathForClab = req.TopologySourceUrl
-
-		if labNameOverride != "" {
-			effectiveLabName = labNameOverride
-		} else {
-			effectiveLabName = "<determined_by_clab_from_url>"
+		topoPathForClab, effectiveLabName, err = resolveURLDeploySource(
+			svc,
+			username,
+			req.TopologySourceUrl,
+			labNameOverride,
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+				Error: "Failed to resolve topology source: " + err.Error(),
+			})
+			return
+		}
+		if !isValidLabName(effectiveLabName) {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{
+				Error: "Invalid characters in topology name.",
+			})
+			return
 		}
 	} else {
 		log.Infof("DeployLab user '%s': Deploying from provided topology content.", username)
@@ -159,32 +204,28 @@ func DeployLabHandler(c *gin.Context) {
 	}
 
 	// --- Pre-Deployment Check ---
-	if effectiveLabName != "<determined_by_clab_from_url>" {
-		releaseLabOperation, ok := beginLabOperationOrConflict(c, effectiveLabName, "deploy")
-		if !ok {
-			return
-		}
-		defer releaseLabOperation()
+	releaseLabOperation, ok := beginLabOperationOrConflict(c, effectiveLabName, "deploy")
+	if !ok {
+		return
+	}
+	defer releaseLabOperation()
+
+	labInfo, exists, checkErr := getLabInfo(ctx, username, effectiveLabName)
+	if checkErr != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Error checking lab '%s' status: %s", effectiveLabName, checkErr.Error())})
+		return
 	}
 
-	if effectiveLabName != "<determined_by_clab_from_url>" {
-		labInfo, exists, checkErr := getLabInfo(ctx, username, effectiveLabName)
-		if checkErr != nil {
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Error checking lab '%s' status: %s", effectiveLabName, checkErr.Error())})
+	if exists {
+		if !reconfigure {
+			c.JSON(http.StatusConflict, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' already exists. Use 'reconfigure=true' to overwrite.", effectiveLabName)})
 			return
 		}
-
-		if exists {
-			if !reconfigure {
-				c.JSON(http.StatusConflict, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' already exists. Use 'reconfigure=true' to overwrite.", effectiveLabName)})
-				return
-			}
-			if !isSuperuser(username) && labInfo.Owner != username {
-				c.JSON(http.StatusForbidden, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' is owned by '%s'. Permission denied.", effectiveLabName, labInfo.Owner)})
-				return
-			}
-			log.Infof("DeployLab user '%s': Lab '%s' exists, reconfigure=true, proceeding.", username, effectiveLabName)
+		if !isSuperuser(username) && labInfo.Owner != username {
+			c.JSON(http.StatusForbidden, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' is owned by '%s'. Permission denied.", effectiveLabName, labInfo.Owner)})
+			return
 		}
+		log.Infof("DeployLab user '%s': Lab '%s' exists, reconfigure=true, proceeding.", username, effectiveLabName)
 	}
 
 	// --- Save Topology Content (if applicable) ---
@@ -215,13 +256,6 @@ func DeployLabHandler(c *gin.Context) {
 		log.Infof("Saved topology for user '%s' lab '%s' to '%s'", username, originalLabName, targetFilePath)
 	}
 
-	// --- Deploy using library ---
-	svc := GetClabService()
-	if svc == nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Containerlab service not initialized"})
-		return
-	}
-
 	var nodeFilterSlice []string
 	if nodeFilter != "" {
 		nodeFilterSlice = strings.Split(nodeFilter, ",")
@@ -229,6 +263,7 @@ func DeployLabHandler(c *gin.Context) {
 
 	deployOpts := clab.DeployOptions{
 		TopoPath:       topoPathForClab,
+		LabName:        effectiveLabName,
 		Username:       username,
 		Reconfigure:    reconfigure,
 		MaxWorkers:     uint(maxWorkers),
@@ -427,6 +462,7 @@ func DeployLabArchiveHandler(c *gin.Context) {
 
 	deployOpts := clab.DeployOptions{
 		TopoPath:       topoPathForClab,
+		LabName:        labName,
 		Username:       username,
 		Reconfigure:    reconfigure,
 		MaxWorkers:     uint(maxWorkers),
@@ -728,6 +764,7 @@ func RedeployLabHandler(c *gin.Context) {
 
 	deployOpts := clab.DeployOptions{
 		TopoPath:       originalTopoPath,
+		LabName:        labName,
 		Username:       targetOwner,
 		Reconfigure:    true,
 		MaxWorkers:     uint(maxWorkers),

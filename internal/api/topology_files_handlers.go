@@ -506,6 +506,7 @@ func DeployTopologyHandler(c *gin.Context) {
 
 	deployOptions := clab.DeployOptions{
 		TopoPath:       topologyPath,
+		LabName:        labName,
 		Username:       username,
 		Reconfigure:    reconfigure,
 		MaxWorkers:     uint(maxWorkers),
