@@ -147,6 +147,58 @@ func (n *rootLinkNode) AddEndpoint(e clablinks.Endpoint) error {
 	return nil
 }
 
+func (n *rootLinkNode) AdoptEndpoint(e clablinks.Endpoint) error {
+	if e == nil {
+		return fmt.Errorf("node %q cannot adopt a nil endpoint", n.shortName)
+	}
+
+	owner := e.GetNode()
+	if owner == nil {
+		return fmt.Errorf(
+			"node %q cannot adopt endpoint %q without an owner",
+			n.shortName,
+			e.GetIfaceName(),
+		)
+	}
+	if owner.GetShortName() != n.shortName {
+		return fmt.Errorf(
+			"node %q cannot adopt endpoint %q owned by %q",
+			n.shortName,
+			e.GetIfaceName(),
+			owner.GetShortName(),
+		)
+	}
+
+	for _, owned := range n.endpoints {
+		if owned == e {
+			return nil
+		}
+		if owned.GetIfaceName() == e.GetIfaceName() {
+			return fmt.Errorf(
+				"node %q already tracks interface %q",
+				n.shortName,
+				e.GetIfaceName(),
+			)
+		}
+	}
+
+	n.endpoints = append(n.endpoints, e)
+	return nil
+}
+
+func (n *rootLinkNode) ReleaseEndpoint(e clablinks.Endpoint) error {
+	for i, owned := range n.endpoints {
+		if owned != e {
+			continue
+		}
+
+		n.endpoints = append(n.endpoints[:i], n.endpoints[i+1:]...)
+		return nil
+	}
+
+	return fmt.Errorf("node %q does not own endpoint %q", n.shortName, e.GetIfaceName())
+}
+
 func (*rootLinkNode) GetLinkEndpointType() clablinks.LinkEndpointType {
 	return clablinks.LinkEndpointTypeHost
 }
@@ -457,8 +509,10 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 		restoreOwnerEnv := setProcessOwnerEnv(opts.Username)
 		defer restoreOwnerEnv()
 
-		var deployErr error
-		containers, deployErr = clab.Deploy(ctx, deployOpts)
+		deployResult, deployErr := clab.Deploy(ctx, deployOpts)
+		if deployResult != nil {
+			containers = deployResult.Containers
+		}
 		return deployErr
 	}()
 	if err != nil {
@@ -1858,7 +1912,7 @@ func (s *Service) SetNetem(ctx context.Context, opts NetemSetOptions) error {
 }
 
 func resolveNetemLink(iface string) (netlink.Link, error) {
-	netemIfLink, err := netlink.LinkByName(clablinks.SanitizeInterfaceName(iface))
+	netemIfLink, err := netlink.LinkByName(clabutils.SanitizeInterfaceName(iface))
 	if err == nil {
 		return netemIfLink, nil
 	}
