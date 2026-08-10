@@ -232,6 +232,7 @@ func GenerateTopologyHandler(c *gin.Context) {
 
 		containers, deployErr := svc.Deploy(ctx, clab.DeployOptions{
 			TopoPath:    targetFilePath,
+			LabName:     req.Name,
 			Username:    username,
 			Reconfigure: true,
 			MaxWorkers:  uint(req.MaxWorkers),

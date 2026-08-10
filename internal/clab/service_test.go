@@ -1,14 +1,91 @@
 package clab
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/user"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	gotc "github.com/florianl/go-tc"
 	clabcore "github.com/srl-labs/containerlab/core"
 )
+
+func TestResolveTopologySourceUsesContainerlabRendering(t *testing.T) {
+	current, err := user.Current()
+	if err != nil {
+		t.Fatalf("get current user: %v", err)
+	}
+
+	t.Setenv("CLAB_API_SERVER_TEST_TOPOLOGY_NAME", "resolved-lab")
+	topologyPath := filepath.Join(t.TempDir(), "test.clab.yml")
+	topology := `name: ${CLAB_API_SERVER_TEST_TOPOLOGY_NAME}
+topology:
+  nodes:
+    node1:
+      kind: linux
+      image: alpine:3
+`
+	if err := os.WriteFile(topologyPath, []byte(topology), 0600); err != nil {
+		t.Fatalf("write topology: %v", err)
+	}
+
+	got, err := NewService().ResolveTopologySource(ResolveTopologySourceOptions{
+		SourcePath: topologyPath,
+		Username:   current.Username,
+	})
+	if err != nil {
+		t.Fatalf("ResolveTopologySource error: %v", err)
+	}
+	if got.LabName != "resolved-lab" {
+		t.Fatalf("resolved topology name = %q, want resolved-lab", got.LabName)
+	}
+	if got.TopologyPath != topologyPath {
+		t.Fatalf("resolved topology path = %q, want %q", got.TopologyPath, topologyPath)
+	}
+}
+
+func TestDeployClabOptionsForceAuthorizedLabName(t *testing.T) {
+	current, err := user.Current()
+	if err != nil {
+		t.Fatalf("get current user: %v", err)
+	}
+
+	topologyPath := filepath.Join(t.TempDir(), "test.clab.yml")
+	topology := `name: unchecked
+topology:
+  nodes:
+    node1:
+      kind: linux
+      image: alpine:3
+`
+	if err := os.WriteFile(topologyPath, []byte(topology), 0600); err != nil {
+		t.Fatalf("write topology: %v", err)
+	}
+
+	clab, err := newContainerLabForOwner(
+		current.Username,
+		deployClabOptions(topologyPath, "authorized", DeployOptions{})...,
+	)
+	if err != nil {
+		t.Fatalf("create containerlab: %v", err)
+	}
+	if clab.Config.Name != "authorized" {
+		t.Fatalf("containerlab topology name = %q, want authorized", clab.Config.Name)
+	}
+}
+
+func TestDeployRequiresAuthorizedLabName(t *testing.T) {
+	_, err := NewService().Deploy(context.Background(), DeployOptions{})
+	if err == nil {
+		t.Fatal("Deploy unexpectedly accepted an empty authorized lab name")
+	}
+	if !strings.Contains(err.Error(), "authorized lab name is required") {
+		t.Fatalf("Deploy error = %q, want missing authorized lab name error", err)
+	}
+}
 
 func TestNewContainerLabForOwnerSetsOwnerEnvDuringInit(t *testing.T) {
 	restoreTestEnv := preserveEnv("SUDO_USER", "USER", "SUDO_UID", "SUDO_GID")
