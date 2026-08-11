@@ -2,11 +2,13 @@ package capture
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync"
@@ -162,13 +164,43 @@ services:
 }
 
 func TestBuildPacketflixURI(t *testing.T) {
-	uri := buildPacketflixURI("localhost", 5001, "clab-lab-srl1", []string{"e1-1", "e1-2"})
+	uri := buildPacketflixURI("localhost", 5001, "clab-lab-srl1", []string{"e1-1", "e1-2"}, 0)
 
 	if !strings.HasPrefix(uri, "packetflix:ws://localhost:5001/capture?") {
 		t.Fatalf("unexpected prefix: %s", uri)
 	}
 	if !strings.Contains(uri, "nif=e1-1%2Fe1-2") {
 		t.Fatalf("expected encoded nif list in URI: %s", uri)
+	}
+}
+
+func TestBuildPacketflixURIForHostInterface(t *testing.T) {
+	netnsID, err := currentNetworkNamespaceID()
+	if err != nil {
+		t.Fatalf("failed resolving test network namespace: %v", err)
+	}
+	uri, err := buildPacketflixURIForSpec("localhost", 5001, ContainerCaptureSpec{
+		ContainerName:        "clab-lab-sros1",
+		InterfaceNames:       []string{"clab-s-12345678"},
+		HostNetworkNamespace: true,
+	})
+	if err != nil {
+		t.Fatalf("failed building host capture URI: %v", err)
+	}
+
+	parsed, err := url.Parse(strings.TrimPrefix(uri, "packetflix:"))
+	if err != nil {
+		t.Fatalf("failed parsing URI: %v", err)
+	}
+	var target map[string]any
+	if err := json.Unmarshal([]byte(parsed.Query().Get("container")), &target); err != nil {
+		t.Fatalf("failed parsing capture target: %v", err)
+	}
+	if target["netns"] != float64(netnsID) {
+		t.Fatalf("unexpected host netns: %#v", target["netns"])
+	}
+	if _, exists := target["name"]; exists {
+		t.Fatalf("host capture target must not include a Docker container name: %#v", target)
 	}
 }
 
