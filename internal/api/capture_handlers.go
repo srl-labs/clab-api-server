@@ -100,14 +100,18 @@ func buildCaptureSpecs(
 		})
 	}
 
-	containers, ok := listCaptureLabContainers(c, labName)
+	containers, interfacesByContainer, ok := listCaptureLabContainers(c, labName)
 	if !ok {
 		return nil, false
 	}
 
 	specs := make([]capture.ContainerCaptureSpec, 0, len(targets))
-	indexByContainer := make(map[string]int, len(targets))
-	seenInterfacesByContainer := make(map[string]map[string]struct{}, len(targets))
+	type captureSpecKey struct {
+		containerName string
+		hostNetns     bool
+	}
+	indexByTarget := make(map[captureSpecKey]int, len(targets))
+	seenInterfacesByTarget := make(map[captureSpecKey]map[string]struct{}, len(targets))
 
 	for _, target := range normalizedTargets {
 		containerInfo, ok := resolveCaptureContainer(c, username, labName, target.ContainerName, containers)
@@ -116,9 +120,14 @@ func buildCaptureSpecs(
 		}
 
 		containerName := containerInfo.Name
-		ifaceName := target.InterfaceName
+		ifaceName, hostNetns := resolveCaptureInterface(
+			interfacesByContainer,
+			containerName,
+			target.InterfaceName,
+		)
+		specKey := captureSpecKey{containerName: containerName, hostNetns: hostNetns}
 
-		specIdx, exists := indexByContainer[containerName]
+		specIdx, exists := indexByTarget[specKey]
 		if !exists {
 			if containerInfo.LabName != labName {
 				c.JSON(http.StatusBadRequest, models.ErrorResponse{
@@ -128,19 +137,20 @@ func buildCaptureSpecs(
 			}
 
 			specs = append(specs, capture.ContainerCaptureSpec{
-				ContainerName:  containerName,
-				InterfaceNames: []string{},
-				LabDirectory:   resolveLabDirectory(containerInfo),
+				ContainerName:        containerName,
+				InterfaceNames:       []string{},
+				LabDirectory:         resolveLabDirectory(containerInfo),
+				HostNetworkNamespace: hostNetns,
 			})
 			specIdx = len(specs) - 1
-			indexByContainer[containerName] = specIdx
-			seenInterfacesByContainer[containerName] = map[string]struct{}{}
+			indexByTarget[specKey] = specIdx
+			seenInterfacesByTarget[specKey] = map[string]struct{}{}
 		}
 
-		if _, duplicate := seenInterfacesByContainer[containerName][ifaceName]; duplicate {
+		if _, duplicate := seenInterfacesByTarget[specKey][ifaceName]; duplicate {
 			continue
 		}
-		seenInterfacesByContainer[containerName][ifaceName] = struct{}{}
+		seenInterfacesByTarget[specKey][ifaceName] = struct{}{}
 		specs[specIdx].InterfaceNames = append(specs[specIdx].InterfaceNames, ifaceName)
 	}
 
@@ -164,12 +174,15 @@ func isResolvableContainerReference(name string) bool {
 	return !strings.ContainsAny(name, " \t\r\n/\\")
 }
 
-func listCaptureLabContainers(c *gin.Context, labName string) ([]models.ClabContainerInfo, bool) {
+func listCaptureLabContainers(
+	c *gin.Context,
+	labName string,
+) ([]models.ClabContainerInfo, map[string][]models.InterfaceInfo, bool) {
 	svc := GetClabService()
 	if svc == nil {
 		err := fmt.Errorf("containerlab service not initialized")
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
-		return nil, false
+		return nil, nil, false
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -181,11 +194,11 @@ func listCaptureLabContainers(c *gin.Context, labName string) ([]models.ClabCont
 		if strings.Contains(errMsg, "no containerlab labs found") || strings.Contains(errMsg, "no containers found") {
 			notFound := fmt.Errorf("lab '%s' not found", labName)
 			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: notFound.Error()})
-			return nil, false
+			return nil, nil, false
 		}
 		wrapped := fmt.Errorf("failed to inspect lab '%s' for capture targets: %w", labName, err)
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: wrapped.Error()})
-		return nil, false
+		return nil, nil, false
 	}
 
 	infos := make([]models.ClabContainerInfo, 0, len(containers))
@@ -195,9 +208,45 @@ func listCaptureLabContainers(c *gin.Context, labName string) ([]models.ClabCont
 	if len(infos) == 0 {
 		err := fmt.Errorf("lab '%s' not found", labName)
 		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
-		return nil, false
+		return nil, nil, false
 	}
-	return infos, true
+
+	containerInterfaces, err := svc.ListContainersInterfaces(ctx, containers)
+	if err != nil {
+		wrapped := fmt.Errorf("failed to inspect lab '%s' interfaces for capture targets: %w", labName, err)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: wrapped.Error()})
+		return nil, nil, false
+	}
+
+	interfacesByContainer := make(map[string][]models.InterfaceInfo, len(containerInterfaces))
+	for _, nodeInterfaces := range clab.ContainersInterfacesToInspectOutput(containerInterfaces) {
+		interfacesByContainer[nodeInterfaces.NodeName] = nodeInterfaces.Interfaces
+	}
+
+	return infos, interfacesByContainer, true
+}
+
+func resolveCaptureInterface(
+	interfacesByContainer map[string][]models.InterfaceInfo,
+	containerName string,
+	requestedName string,
+) (string, bool) {
+	interfaces := interfacesByContainer[containerName]
+	for _, iface := range interfaces {
+		if iface.Name == requestedName {
+			return iface.Name, strings.HasPrefix(iface.Name, "clab-s-")
+		}
+	}
+	for _, iface := range interfaces {
+		if iface.Alias == requestedName {
+			return iface.Name, strings.HasPrefix(iface.Name, "clab-s-")
+		}
+	}
+
+	// Only switch to the host namespace for an interface returned by
+	// containerlab for this container. A caller-provided clab-s-* name must not
+	// be allowed to select an unrelated host interface.
+	return requestedName, false
 }
 
 func resolveCaptureContainer(
