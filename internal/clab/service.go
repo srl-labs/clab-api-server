@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"net"
 	"os"
@@ -426,8 +427,24 @@ func (s *Service) CloneTopologySource(opts CloneTopologySourceOptions) (*CloneTo
 		return nil, err
 	}
 
+	repoDir := filepath.Join(workDir, repo.GetName())
+
+	// The clone runs as root, so hand it over or the user cannot edit or remove it.
+	if uid, gid, idErr := lookupUserIDs(opts.Username); idErr != nil {
+		log.Warn("Failed to resolve user for cloned topology ownership",
+			"user", opts.Username,
+			"error", idErr,
+		)
+	} else if chownErr := chownTree(repoDir, uid, gid); chownErr != nil {
+		log.Warn("Failed to set ownership on cloned topology",
+			"dir", repoDir,
+			"user", opts.Username,
+			"error", chownErr,
+		)
+	}
+
 	return &CloneTopologySourceResult{
-		RepoDir:      filepath.Join(workDir, repo.GetName()),
+		RepoDir:      repoDir,
 		RepoName:     repo.GetName(),
 		TopologyPath: topoPath,
 	}, nil
@@ -2437,6 +2454,32 @@ func (s *Service) generateTopologyConfig(
 	return yaml.Marshal(config)
 }
 
+// lookupUserIDs resolves a username to its numeric uid/gid.
+func lookupUserIDs(username string) (uid, gid int, err error) {
+	usr, err := user.Lookup(username)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to lookup user: %w", err)
+	}
+	if uid, err = strconv.Atoi(usr.Uid); err != nil {
+		return 0, 0, fmt.Errorf("failed to parse uid for %q: %w", username, err)
+	}
+	if gid, err = strconv.Atoi(usr.Gid); err != nil {
+		return 0, 0, fmt.Errorf("failed to parse gid for %q: %w", username, err)
+	}
+	return uid, gid, nil
+}
+
+// chownTree transfers ownership of path and everything below it to uid:gid.
+// Symlinks are changed rather than followed, so a link cannot retarget the chown.
+func chownTree(path string, uid, gid int) error {
+	return filepath.WalkDir(path, func(p string, _ fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		return os.Lchown(p, uid, gid)
+	})
+}
+
 // prepareWorkDir prepares the working directory for a user.
 func (s *Service) prepareWorkDir(username string) (string, error) {
 	usr, err := user.Lookup(username)
@@ -2450,9 +2493,8 @@ func (s *Service) prepareWorkDir(username string) (string, error) {
 	}
 
 	// Try to set ownership of the .clab directory to the actual user
-	uid, uidErr := strconv.Atoi(usr.Uid)
-	gid, gidErr := strconv.Atoi(usr.Gid)
-	if uidErr == nil && gidErr == nil {
+	uid, gid, idErr := lookupUserIDs(username)
+	if idErr == nil {
 		if chownErr := os.Chown(clabDir, uid, gid); chownErr != nil {
 			log.Warn("Failed to set ownership on .clab directory",
 				"dir", clabDir,
