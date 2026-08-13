@@ -296,6 +296,11 @@ type SaveOptions struct {
 	NodeFilter []string
 }
 
+type nodeConfigSaver interface {
+	GetShortName() string
+	SaveConfig(context.Context) (*clabnodes.SaveConfigResult, error)
+}
+
 // InspectOptions contains options for inspecting labs.
 type InspectOptions struct {
 	LabName  string
@@ -590,6 +595,9 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 	if err != nil {
 		return nil, fmt.Errorf("deployment failed: %w", err)
 	}
+	if err := syncLabHostsFiles(labName, containers); err != nil {
+		return nil, fmt.Errorf("deployment completed but host name resolution setup failed: %w", err)
+	}
 
 	log.Info("Lab deployed successfully",
 		"username", opts.Username,
@@ -657,6 +665,7 @@ func (s *Service) Apply(ctx context.Context, opts ApplyOptions) (*clabcore.Apply
 	)
 
 	var result *clabcore.ApplyResult
+	var containers []clabruntime.GenericContainer
 	err = func() error {
 		containerlabInitMu.Lock()
 		defer containerlabInitMu.Unlock()
@@ -666,6 +675,11 @@ func (s *Service) Apply(ctx context.Context, opts ApplyOptions) (*clabcore.Apply
 
 		var applyErr error
 		result, applyErr = clab.Apply(ctx, applyOpts)
+		if applyErr != nil || opts.DryRun {
+			return applyErr
+		}
+
+		containers, applyErr = clab.ListContainers(ctx, clabcore.WithListLabName(clab.Config.Name))
 		return applyErr
 	}()
 	if err != nil {
@@ -673,6 +687,11 @@ func (s *Service) Apply(ctx context.Context, opts ApplyOptions) (*clabcore.Apply
 	}
 	if result != nil && strings.TrimSpace(result.LabName) == "" {
 		result.LabName = clab.Config.Name
+	}
+	if !opts.DryRun {
+		if err := syncLabHostsFiles(clab.Config.Name, containers); err != nil {
+			return nil, fmt.Errorf("apply completed but host name resolution setup failed: %w", err)
+		}
 	}
 
 	return result, nil
@@ -769,6 +788,9 @@ func (s *Service) Destroy(ctx context.Context, opts DestroyOptions) error {
 	// Destroy the lab
 	if err := clab.Destroy(ctx, destroyOpts...); err != nil {
 		return fmt.Errorf("destroy failed: %w", err)
+	}
+	if err := removeLabHostsFiles(clab.Config.Name); err != nil {
+		return fmt.Errorf("lab destroyed but host name resolution cleanup failed: %w", err)
 	}
 
 	log.Info("Lab destroyed successfully",
@@ -1342,8 +1364,25 @@ func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) error {
 		"topoPath", opts.TopoPath,
 	)
 
-	// Save config for each node
-	if err := clab.Save(ctx); err != nil {
+	containers, err := clab.ListContainers(ctx, clabcore.WithListLabName(clab.Config.Name))
+	if err != nil {
+		return fmt.Errorf("failed to resolve lab containers: %w", err)
+	}
+	if err := syncLabHostsFiles(clab.Config.Name, containers); err != nil {
+		return fmt.Errorf("failed to prepare host name resolution: %w", err)
+	}
+
+	if clab.Config.Mgmt != nil {
+		if err := clablinks.SetMgmtNetUnderlyingBridge(clab.Config.Mgmt.Bridge); err != nil {
+			return fmt.Errorf("failed to configure management bridge: %w", err)
+		}
+	}
+
+	savers := make([]nodeConfigSaver, 0, len(clab.Nodes))
+	for _, node := range clab.Nodes {
+		savers = append(savers, node)
+	}
+	if err := saveNodeConfigs(ctx, savers); err != nil {
 		return fmt.Errorf("save failed: %w", err)
 	}
 
@@ -1352,6 +1391,31 @@ func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) error {
 	)
 
 	return nil
+}
+
+func saveNodeConfigs(ctx context.Context, nodes []nodeConfigSaver) error {
+	var wg sync.WaitGroup
+	errorsCh := make(chan error, len(nodes))
+
+	for _, node := range nodes {
+		wg.Add(1)
+		go func(node nodeConfigSaver) {
+			defer wg.Done()
+			if _, err := node.SaveConfig(ctx); err != nil {
+				errorsCh <- fmt.Errorf("node %q: %w", node.GetShortName(), err)
+			}
+		}(node)
+	}
+
+	wg.Wait()
+	close(errorsCh)
+
+	var saveErrors []error
+	for err := range errorsCh {
+		saveErrors = append(saveErrors, err)
+	}
+
+	return errors.Join(saveErrors...)
 }
 
 // CACreateOptions contains options for creating a CA.

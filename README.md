@@ -165,7 +165,7 @@ docker run -d \
   ghcr.io/srl-labs/clab-api-server/clab-api-server:latest
 ```
 > [!NOTE]
-> Volume mounts enable Docker management, networking features, Linux PAM authentication, and user file storage. No containerlab binary is required - it's integrated as a Go library.
+> Volume mounts enable Docker management, networking features, Linux PAM authentication, and user file storage. Host PID mode also lets the API server keep the lab host's `/etc/hosts` entries synchronized. No containerlab binary is required - it's integrated as a Go library.
 
 This Docker example uses the default managed lab storage: each authenticated user's `~/.clab` directory from the mounted `/home`. To use a different root, add both `CLAB_LABS_ROOT` and a matching volume mount:
 
@@ -223,6 +223,7 @@ sudo systemctl status clab-api-server
 | `SUPERUSER_GROUP` | `clab_admins` | Linux group for elevated privileges |
 | `CLAB_RUNTIME` | `docker` | Container runtime used by Containerlab |
 | `CLAB_LABS_ROOT` | unset | Optional absolute root for managed lab workspaces. When set, users store labs under `$CLAB_LABS_ROOT/<username>/`; otherwise labs use `<home>/.clab/`. |
+| `CLAB_HOSTS_FILE` | unset | Optional absolute host-visible hosts file to synchronize. The container entrypoint detects `/proc/1/root/etc/hosts` automatically when running with host PID mode. |
 | `LOG_LEVEL` | `info` | Log verbosity (`debug`, `info`, `warn`, `error`) |
 | `CORS_ALLOWED_ORIGINS` | | Comma-separated browser origin allowlist (for standalone UI) |
 | `GIN_MODE` | `release` | Web framework mode (`debug` or `release`) |
