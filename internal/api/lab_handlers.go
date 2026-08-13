@@ -1112,7 +1112,7 @@ func SaveLabConfigHandler(c *gin.Context) {
 	log.Infof("SaveLabConfig user '%s': Config saved successfully for lab '%s'.", username, labName)
 	c.JSON(http.StatusOK, models.SaveConfigResponse{
 		Message: fmt.Sprintf("Configuration save command executed successfully for lab '%s'.", labName),
-		Output:  "Configuration saved via library",
+		Output:  "Configuration saved",
 	})
 }
 

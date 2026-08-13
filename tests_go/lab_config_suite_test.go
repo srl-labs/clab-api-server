@@ -2,9 +2,12 @@
 package tests_go
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"net/netip"
 	"testing"
 
 	"github.com/stretchr/testify/suite"
@@ -62,6 +65,19 @@ func (s *LabConfigSuite) TestInspectLabInterfaces() {
 func (s *LabConfigSuite) TestSaveLabConfig() {
 	labName, userHeaders := s.setupEphemeralLab()
 	defer s.cleanupLab(labName, true)
+
+	container := s.firstContainerInLab(labName, userHeaders)
+	wantPrefix, err := netip.ParsePrefix(container.IPv4Address)
+	s.Require().NoError(err, "Invalid container IPv4 address %q", container.IPv4Address)
+
+	// The API server is commonly containerized. Resolve the node from the test runner
+	// (the lab host) to ensure deployment did not update only the API container's hosts file.
+	resolveCtx, cancel := context.WithTimeout(context.Background(), s.cfg.RequestTimeout)
+	defer cancel()
+	resolvedAddresses, err := net.DefaultResolver.LookupHost(resolveCtx, container.Name)
+	s.Require().NoError(err, "Lab host cannot resolve container %q", container.Name)
+	s.Require().Contains(resolvedAddresses, wantPrefix.Addr().String(),
+		"Container %q did not resolve to its management address", container.Name)
 
 	s.logTest("Saving configuration for lab '%s'", labName)
 
