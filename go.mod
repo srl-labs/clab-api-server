@@ -20,7 +20,7 @@ require (
 	github.com/msteinert/pam v1.2.0
 	github.com/shirou/gopsutil/v4 v4.26.7
 	github.com/spf13/viper v1.21.0
-	github.com/srl-labs/containerlab v0.78.0
+	github.com/srl-labs/containerlab v0.78.2
 	github.com/stretchr/testify v1.11.1
 	github.com/swaggo/files v1.0.1
 	github.com/swaggo/gin-swagger v1.6.1
