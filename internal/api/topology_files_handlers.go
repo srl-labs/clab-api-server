@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
 	clabgit "github.com/srl-labs/containerlab/git"
 	"gopkg.in/yaml.v3"
@@ -360,6 +361,13 @@ func ImportTopologyFromURLHandler(c *gin.Context) {
 	} else if statErr != nil && !os.IsNotExist(statErr) {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to stat annotations file: %s", statErr.Error())})
 		return
+	}
+
+	// Drop the staging clone; left in the lab root it is listed as a lab of its own.
+	if sourceDir != targetDir && filepath.Dir(sourceDir) == filepath.Dir(targetDir) {
+		if rmErr := os.RemoveAll(sourceDir); rmErr != nil {
+			log.Warnf("Failed to remove staging clone %s: %v", sourceDir, rmErr)
+		}
 	}
 
 	topology := models.TopologyEntry{
