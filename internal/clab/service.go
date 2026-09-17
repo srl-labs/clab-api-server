@@ -79,6 +79,13 @@ func drainSpecialLinkNodes() {
 			_ = n.ReleaseEndpoint(ep)
 		}
 	}
+	// Deploy, destroy, exec and save also rename the mgmt-net node to the lab's management
+	// bridge (links.SetMgmtNetUnderlyingBridge) and never rename it back. The next request
+	// registers the node under that name (CLab.getLinkNodes keys special nodes by short name),
+	// where it shadows a topology bridge node of the same name: a link to that bridge resolves
+	// to the special node, whose side nothing deploys, and the veth is left half-made without
+	// an error. Give it back the name a fresh process starts with.
+	_ = clablinks.SetMgmtNetUnderlyingBridge("mgmt-net")
 }
 
 func newContainerLab(opts ...clabcore.ClabOption) (*clabcore.CLab, error) {
