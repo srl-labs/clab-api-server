@@ -303,9 +303,22 @@ func ImportTopologyFromURLHandler(c *gin.Context) {
 		return
 	}
 
+	// Imports must never reuse an existing lab as a disposable staging clone.
+	stagingDir, err := os.MkdirTemp("", "clab-topology-import-")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to create staging directory: %s", err.Error())})
+		return
+	}
+	defer func() {
+		if rmErr := os.RemoveAll(stagingDir); rmErr != nil {
+			log.Warnf("Failed to remove topology import staging directory %s: %v", stagingDir, rmErr)
+		}
+	}()
+
 	cloned, err := svc.CloneTopologySource(clab.CloneTopologySourceOptions{
 		SourceURL: topologySourceURL,
 		Username:  username,
+		WorkDir:   stagingDir,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to clone topology source: %s", err.Error())})
@@ -361,13 +374,6 @@ func ImportTopologyFromURLHandler(c *gin.Context) {
 	} else if statErr != nil && !os.IsNotExist(statErr) {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to stat annotations file: %s", statErr.Error())})
 		return
-	}
-
-	// Drop the staging clone; left in the lab root it is listed as a lab of its own.
-	if sourceDir != targetDir && filepath.Dir(sourceDir) == filepath.Dir(targetDir) {
-		if rmErr := os.RemoveAll(sourceDir); rmErr != nil {
-			log.Warnf("Failed to remove staging clone %s: %v", sourceDir, rmErr)
-		}
 	}
 
 	topology := models.TopologyEntry{

@@ -358,6 +358,9 @@ type FcliRunOptions struct {
 type CloneTopologySourceOptions struct {
 	SourceURL string
 	Username  string
+	// WorkDir is the clone's parent directory. Empty uses the user's lab directory.
+	// Callers supplying a temporary directory are responsible for its cleanup.
+	WorkDir string
 }
 
 type CloneTopologySourceResult struct {
@@ -407,9 +410,17 @@ func (s *Service) CloneTopologySource(opts CloneTopologySourceOptions) (*CloneTo
 		return nil, fmt.Errorf("username is required")
 	}
 
-	workDir, err := s.prepareWorkDir(opts.Username)
+	workDir := opts.WorkDir
+	if workDir == "" {
+		var err error
+		workDir, err = s.prepareWorkDir(opts.Username)
+		if err != nil {
+			return nil, fmt.Errorf("failed to prepare working directory: %w", err)
+		}
+	}
+	workDir, err := filepath.Abs(workDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to prepare working directory: %w", err)
+		return nil, fmt.Errorf("failed to resolve working directory: %w", err)
 	}
 
 	normalizedURL := sourceURL
@@ -2515,6 +2526,14 @@ func (s *Service) ensureTimeout(ctx context.Context) (context.Context, context.C
 	return ctx, func() {}
 }
 
+// gitRepoInDirectory supplies an explicit clone destination to containerlab's Git helper.
+type gitRepoInDirectory struct {
+	clabgit.GitRepo
+	dir string
+}
+
+func (r gitRepoInDirectory) GetName() string { return r.dir }
+
 // processGitTopoFile handles GitHub/GitLab URLs by cloning the repo and returning
 // the local path to the topology file. This mirrors the CLI behavior.
 func (s *Service) processGitTopoFile(topo, workDir string) (string, error) {
@@ -2528,17 +2547,13 @@ func (s *Service) processGitTopoFile(topo, workDir string) (string, error) {
 		return "", fmt.Errorf("failed to parse git URL: %w", err)
 	}
 
-	// Change to workdir so the repo is cloned there
-	originalDir, _ := os.Getwd()
-	if chErr := os.Chdir(workDir); chErr != nil {
-		return "", fmt.Errorf("failed to change to work directory for git clone: %w", chErr)
+	repoDir, err := filepath.Abs(filepath.Join(workDir, repo.GetName()))
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve clone directory: %w", err)
 	}
-	defer func() {
-		_ = os.Chdir(originalDir)
-	}()
 
-	// Instantiate the git implementation
-	gitImpl := clabgit.NewGoGit(repo)
+	// Use an absolute destination so concurrent clones do not change each other's cwd.
+	gitImpl := clabgit.NewGoGit(gitRepoInDirectory{GitRepo: repo, dir: repoDir})
 
 	// Clone the repo
 	log.Debug("Cloning git repository", "url", topo, "workDir", workDir)
@@ -2547,12 +2562,12 @@ func (s *Service) processGitTopoFile(topo, workDir string) (string, error) {
 	}
 
 	// Adjust permissions for the checked out repo
-	if err := clabutils.SetUIDAndGID(repo.GetName()); err != nil {
+	if err := clabutils.SetUIDAndGID(repoDir); err != nil {
 		log.Warn("Error adjusting repository permissions, continuing anyways", "error", err)
 	}
 
 	// Find the topology file in the cloned repo
-	repoPath := filepath.Join(workDir, repo.GetName())
+	repoPath := repoDir
 
 	// If a specific path was provided in the URL, use it
 	if len(repo.GetPath()) > 0 {
