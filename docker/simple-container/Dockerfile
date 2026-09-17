@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 # Set noninteractive frontend for apt-get
 ENV DEBIAN_FRONTEND=noninteractive
