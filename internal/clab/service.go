@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -623,7 +624,7 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 	if err != nil {
 		return nil, fmt.Errorf("deployment failed: %w", err)
 	}
-	if err := syncLabHostsFiles(labName, containers); err != nil {
+	if err := syncLabHostsFiles(ctx, clab); err != nil {
 		return nil, fmt.Errorf("deployment completed but host name resolution setup failed: %w", err)
 	}
 
@@ -693,7 +694,6 @@ func (s *Service) Apply(ctx context.Context, opts ApplyOptions) (*clabcore.Apply
 	)
 
 	var result *clabcore.ApplyResult
-	var containers []clabruntime.GenericContainer
 	err = func() error {
 		containerlabInitMu.Lock()
 		defer containerlabInitMu.Unlock()
@@ -703,11 +703,6 @@ func (s *Service) Apply(ctx context.Context, opts ApplyOptions) (*clabcore.Apply
 
 		var applyErr error
 		result, applyErr = clab.Apply(ctx, applyOpts)
-		if applyErr != nil || opts.DryRun {
-			return applyErr
-		}
-
-		containers, applyErr = clab.ListContainers(ctx, clabcore.WithListLabName(clab.Config.Name))
 		return applyErr
 	}()
 	if err != nil {
@@ -717,7 +712,7 @@ func (s *Service) Apply(ctx context.Context, opts ApplyOptions) (*clabcore.Apply
 		result.LabName = clab.Config.Name
 	}
 	if !opts.DryRun {
-		if err := syncLabHostsFiles(clab.Config.Name, containers); err != nil {
+		if err := syncLabHostsFiles(ctx, clab); err != nil {
 			return nil, fmt.Errorf("apply completed but host name resolution setup failed: %w", err)
 		}
 	}
@@ -1378,10 +1373,6 @@ func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) error {
 		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{Timeout: defaultTimeout}),
 	}
 
-	if len(opts.NodeFilter) > 0 {
-		clabOpts = append(clabOpts, clabcore.WithNodeFilter(opts.NodeFilter))
-	}
-
 	clab, err := newContainerLab(clabOpts...)
 	if err != nil {
 		return fmt.Errorf("failed to create containerlab instance: %w", err)
@@ -1392,11 +1383,12 @@ func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) error {
 		"topoPath", opts.TopoPath,
 	)
 
-	containers, err := clab.ListContainers(ctx, clabcore.WithListLabName(clab.Config.Name))
+	savers, err := selectNodeConfigSavers(clab.Nodes, opts.NodeFilter)
 	if err != nil {
-		return fmt.Errorf("failed to resolve lab containers: %w", err)
+		return err
 	}
-	if err := syncLabHostsFiles(clab.Config.Name, containers); err != nil {
+	// Refresh the whole lab's entries even when only selected nodes are saved.
+	if err := syncLabHostsFiles(ctx, clab); err != nil {
 		return fmt.Errorf("failed to prepare host name resolution: %w", err)
 	}
 
@@ -1406,10 +1398,6 @@ func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) error {
 		}
 	}
 
-	savers := make([]nodeConfigSaver, 0, len(clab.Nodes))
-	for _, node := range clab.Nodes {
-		savers = append(savers, node)
-	}
 	if err := saveNodeConfigs(ctx, savers); err != nil {
 		return fmt.Errorf("save failed: %w", err)
 	}
@@ -1419,6 +1407,21 @@ func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) error {
 	)
 
 	return nil
+}
+
+func selectNodeConfigSavers(nodes map[string]clabnodes.Node, nodeFilter []string) ([]nodeConfigSaver, error) {
+	for _, name := range nodeFilter {
+		if _, ok := nodes[name]; !ok {
+			return nil, fmt.Errorf("node %q is not present in the topology", name)
+		}
+	}
+	var savers []nodeConfigSaver
+	for name, node := range nodes {
+		if len(nodeFilter) == 0 || slices.Contains(nodeFilter, name) {
+			savers = append(savers, node)
+		}
+	}
+	return savers, nil
 }
 
 func saveNodeConfigs(ctx context.Context, nodes []nodeConfigSaver) error {

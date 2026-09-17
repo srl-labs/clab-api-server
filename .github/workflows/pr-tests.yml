@@ -229,6 +229,31 @@ jobs:
             sudo kill "$(cat server.pid)" || true
           fi
 
+      - name: Test containerized saves
+        run: |
+          set -euo pipefail
+          cp dist/clab-api-server dist/clab-api-server-linux-amd64
+          docker build --build-arg TARGETARCH=amd64 \
+            -t clab-api-server-ci:save -f docker/simple-container/Dockerfile .
+          trap 'docker logs clab-api-server-save-test; docker rm -f clab-api-server-save-test' EXIT
+          docker run -d --name clab-api-server-save-test \
+            --privileged --network host --pid host \
+            -e API_PORT=18090 -e API_SERVER_HOST=127.0.0.1 \
+            -e TLS_ENABLE=false -e JWT_SECRET="$(openssl rand -hex 32)" \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v /var/run/netns:/var/run/netns \
+            -v /etc/passwd:/etc/passwd:ro \
+            -v /etc/shadow:/etc/shadow:ro \
+            -v /etc/group:/etc/group:ro \
+            -v /etc/gshadow:/etc/gshadow:ro \
+            -v /home:/home \
+            clab-api-server-ci:save
+          timeout 60 bash -c 'until curl -fsS http://127.0.0.1:18090/health >/dev/null; do sleep 2; done'
+          # JWT issue timestamps have one-second precision; avoid the startup second.
+          sleep 1
+          API_URL=http://127.0.0.1:18090 GOTEST_LAB_NAME_PREFIX=container-save \
+            go test -count=1 -v ./tests_go -run '^TestLabConfigSuite/TestSaveLabConfig'
+
       - name: Dump API server logs
         if: always()
         run: |

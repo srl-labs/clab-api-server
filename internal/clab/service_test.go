@@ -15,9 +15,36 @@ import (
 )
 
 type fakeNodeConfigSaver struct {
+	clabnodes.Node
 	name   string
 	err    error
 	called bool
+}
+
+func TestSelectNodeConfigSaversKeepsFullLab(t *testing.T) {
+	leaf1 := &fakeNodeConfigSaver{name: "leaf1"}
+	leaf2 := &fakeNodeConfigSaver{name: "leaf2"}
+	nodes := map[string]clabnodes.Node{"leaf1": leaf1, "leaf2": leaf2}
+	savers, err := selectNodeConfigSavers(nodes, []string{"leaf1", "leaf1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := saveNodeConfigs(context.Background(), savers); err != nil {
+		t.Fatal(err)
+	}
+	if len(savers) != 1 || !leaf1.called || leaf2.called {
+		t.Fatalf("filtered save: savers=%d, leaf1=%t, leaf2=%t", len(savers), leaf1.called, leaf2.called)
+	}
+	if len(nodes) != 2 || nodes["leaf2"] != leaf2 {
+		t.Fatal("selecting nodes removed a node needed for full lab hostname synchronization")
+	}
+	if _, err := selectNodeConfigSavers(nodes, []string{"missing"}); err == nil {
+		t.Fatal("expected an error for an unknown node")
+	}
+	savers, err = selectNodeConfigSavers(nodes, nil)
+	if err != nil || len(savers) != 2 {
+		t.Fatalf("unfiltered save: savers=%d, err=%v", len(savers), err)
+	}
 }
 
 func (n *fakeNodeConfigSaver) GetShortName() string {

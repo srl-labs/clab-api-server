@@ -8,6 +8,9 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/suite"
@@ -101,6 +104,40 @@ func (s *LabConfigSuite) TestSaveLabConfig() {
 	if !s.T().Failed() {
 		s.logSuccess("Successfully saved configuration for lab '%s'", labName)
 	}
+}
+
+func (s *LabConfigSuite) TestSaveLabConfigWithNodeFilter() {
+	labName, userHeaders := s.setupEphemeralLab()
+	defer s.cleanupLab(labName, true)
+
+	labURL := fmt.Sprintf("%s/api/v1/labs/%s", s.cfg.APIURL, labName)
+	body, status, err := s.doRequest("GET", labURL, userHeaders, nil, s.cfg.RequestTimeout)
+	s.Require().NoError(err)
+	s.Require().Equal(http.StatusOK, status, string(body))
+	var containers []ClabContainerInfo
+	s.Require().NoError(json.Unmarshal(body, &containers))
+	s.Require().GreaterOrEqual(len(containers), 2, "Filtered save requires at least two lab nodes")
+	s.Require().NotEmpty(containers[0].NodeName)
+
+	saveURL := labURL + "/save?nodeFilter=" + url.QueryEscape(containers[0].NodeName)
+	body, status, err = s.doRequest("POST", saveURL, userHeaders, nil, s.cfg.RequestTimeout)
+	s.Require().NoError(err)
+	s.Require().Equal(http.StatusOK, status, string(body))
+
+	// Read the file directly so resolver caching cannot hide deleted entries.
+	hosts, err := os.ReadFile("/etc/hosts")
+	s.Require().NoError(err)
+	for _, container := range containers {
+		s.Require().Contains(strings.Fields(string(hosts)), container.Name,
+			"Filtered save removed a lab hostname")
+	}
+
+	body, status, err = s.destroyLab(userHeaders, labName, true, s.cfg.CleanupTimeout)
+	s.Require().NoError(err)
+	s.Require().Equal(http.StatusOK, status, string(body))
+	hosts, err = os.ReadFile("/etc/hosts")
+	s.Require().NoError(err)
+	s.Require().NotContains(string(hosts), "###### CLAB-"+labName+"-START ######")
 }
 
 func (s *LabConfigSuite) TestAccessLabInterfacesSuperuser() {

@@ -2,48 +2,64 @@ package clab
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
-	clabconstants "github.com/srl-labs/containerlab/constants"
-	clabruntime "github.com/srl-labs/containerlab/runtime"
+	clabcore "github.com/srl-labs/containerlab/core"
+	clabnodes "github.com/srl-labs/containerlab/nodes"
 	clabtypes "github.com/srl-labs/containerlab/types"
 	"golang.org/x/sys/unix"
 
 	"github.com/srl-labs/clab-api-server/internal/config"
 )
 
-const (
-	localHostsFile     = "/etc/hosts"
-	localHostsLockFile = "/run/lock/clab-hosts.lock"
-)
+const localHostsFile = "/etc/hosts"
 
 var hostsFileMu sync.Mutex
 
-func syncLabHostsFiles(labName string, containers []clabruntime.GenericContainer) error {
-	if err := replaceLabHostsEntries(
-		localHostsFile,
-		localHostsLockFile,
-		labName,
-		containers,
-	); err != nil {
+// collectLabHostsEntries uses node-specific entries, including logical aliases for
+// distributed nodes whose management container has a different name.
+func collectLabHostsEntries(ctx context.Context, nodes map[string]clabnodes.Node) (clabtypes.HostEntries, error) {
+	var entries clabtypes.HostEntries
+	for _, name := range slices.Sorted(maps.Keys(nodes)) {
+		nodeEntries, err := nodes[name].GetHostsEntries(ctx)
+		if errors.Is(err, clabnodes.ErrContainersNotFound) {
+			// A topology can include nodes that have not been deployed yet.
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("getting hosts entries for node %q: %w", name, err)
+		}
+		entries.Merge(nodeEntries)
+	}
+	return entries, nil
+}
+
+func syncLabHostsFiles(ctx context.Context, lab *clabcore.CLab) error {
+	entries, err := collectLabHostsEntries(ctx, lab.Nodes)
+	if err != nil {
+		return err
+	}
+	return syncHostsFiles(localHostsFile, strings.TrimSpace(config.AppConfig.ClabHostsFile), lab.Config.Name, entries)
+}
+
+func syncHostsFiles(localPath, externalPath, labName string, entries clabtypes.HostEntries) error {
+	if err := replaceLabHostsEntries(localPath, hostsLockPath(localPath), labName, entries); err != nil {
 		return fmt.Errorf("updating local hosts file: %w", err)
 	}
 
-	externalPath := strings.TrimSpace(config.AppConfig.ClabHostsFile)
-	if externalPath == "" || sameFile(localHostsFile, externalPath) {
+	if externalPath == "" || sameFile(localPath, externalPath) {
 		return nil
 	}
 
-	if err := replaceLabHostsEntries(
-		externalPath,
-		hostsLockPath(externalPath),
-		labName,
-		containers,
-	); err != nil {
+	if err := replaceLabHostsEntries(externalPath, hostsLockPath(externalPath), labName, entries); err != nil {
 		return fmt.Errorf("updating configured hosts file %q: %w", externalPath, err)
 	}
 
@@ -83,9 +99,9 @@ func replaceLabHostsEntries(
 	hostsPath,
 	lockPath,
 	labName string,
-	containers []clabruntime.GenericContainer,
+	entries clabtypes.HostEntries,
 ) error {
-	block := buildLabHostsBlock(labName, containers)
+	block := buildLabHostsBlock(labName, entries)
 	return updateLabHostsEntries(hostsPath, lockPath, labName, block)
 }
 
@@ -186,38 +202,7 @@ func replaceMarkedBlock(current []byte, labName string, replacement []byte) ([]b
 	return []byte(output.String()), nil
 }
 
-func buildLabHostsBlock(labName string, containers []clabruntime.GenericContainer) []byte {
-	entries := make(clabtypes.HostEntries, 0, len(containers)*2)
-	for i := range containers {
-		container := &containers[i]
-		if len(container.Names) == 0 {
-			continue
-		}
-		if containerLab := container.Labels[clabconstants.Containerlab]; containerLab != "" && containerLab != labName {
-			continue
-		}
-
-		containerID := container.ID
-		if containerID == "" {
-			containerID = container.ShortID
-		}
-		description := fmt.Sprintf("Kind: %s", container.Labels[clabconstants.NodeKind])
-		if container.NetworkSettings.IPv4addr != "" {
-			entries = append(entries, clabtypes.NewHostEntry(
-				container.NetworkSettings.IPv4addr,
-				container.Names[0],
-				clabtypes.IpVersionV4,
-			).SetContainerID(containerID).SetDescription(description))
-		}
-		if container.NetworkSettings.IPv6addr != "" {
-			entries = append(entries, clabtypes.NewHostEntry(
-				container.NetworkSettings.IPv6addr,
-				container.Names[0],
-				clabtypes.IpVersionV6,
-			).SetContainerID(containerID).SetDescription(description))
-		}
-	}
-
+func buildLabHostsBlock(labName string, entries clabtypes.HostEntries) []byte {
 	var block strings.Builder
 	fmt.Fprintf(&block, "###### CLAB-%s-START ######\n", labName)
 	block.WriteString(entries.ToHostsConfig(clabtypes.IpVersionV4))

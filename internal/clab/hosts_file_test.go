@@ -1,14 +1,127 @@
 package clab
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
-	clabconstants "github.com/srl-labs/containerlab/constants"
+	clabcore "github.com/srl-labs/containerlab/core"
+	clabnodes "github.com/srl-labs/containerlab/nodes"
 	clabruntime "github.com/srl-labs/containerlab/runtime"
+	clabtypes "github.com/srl-labs/containerlab/types"
 )
+
+type hostsTestRuntime struct {
+	clabruntime.ContainerRuntime
+	containers []clabruntime.GenericContainer
+}
+
+func (r *hostsTestRuntime) ListContainers(_ context.Context, filters []*clabtypes.GenericFilter) ([]clabruntime.GenericContainer, error) {
+	var result []clabruntime.GenericContainer
+	for _, container := range r.containers {
+		if len(filters) == 1 && filters[0].FilterType == "name" && slices.Contains(container.Names, filters[0].Match) {
+			result = append(result, container)
+		}
+	}
+	return result, nil
+}
+
+func TestSyncHostsFilesPreservesDistributedSROSAliases(t *testing.T) {
+	dir := t.TempDir()
+	topoPath := filepath.Join(dir, "demo.clab.yml")
+	topology := `name: demo
+topology:
+  nodes:
+    sros:
+      kind: nokia_srsim
+      image: example.invalid/srsim:test
+      type: sr-7
+      components:
+        - slot: A
+          type: cpm5
+        - slot: 1
+          type: iom4-e
+`
+	if err := os.WriteFile(topoPath, []byte(topology), 0600); err != nil {
+		t.Fatal(err)
+	}
+	lab, err := newContainerLab(clabcore.WithTopoPath(topoPath, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Exercise Containerlab's actual SR OS hostname generation without booting a VM.
+	lab.Nodes["sros"].WithRuntime(&hostsTestRuntime{containers: []clabruntime.GenericContainer{{
+		Names: []string{"clab-demo-sros-1"},
+		ID:    "1234567890abcdef",
+		NetworkSettings: clabruntime.GenericMgmtIPs{
+			IPv4addr: "172.20.20.2",
+			IPv6addr: "3fff:172:20:20::2",
+		},
+	}, {
+		Names: []string{"clab-demo-sros-a"},
+		ID:    "abcdef1234567890",
+	}}})
+	entries, err := collectLabHostsEntries(context.Background(), lab.Nodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localPath := filepath.Join(dir, "local-hosts")
+	externalPath := filepath.Join(dir, "host-hosts")
+	for _, path := range []string{localPath, externalPath} {
+		if err := os.WriteFile(path, []byte("127.0.0.1 localhost\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := syncHostsFiles(localPath, externalPath, "demo", entries); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{localPath, externalPath} {
+		assertHostsContains(t, path,
+			"127.0.0.1 localhost",
+			"172.20.20.2\tclab-demo-sros-a ",
+			"172.20.20.2\tclab-demo-sros ",
+			"3fff:172:20:20::2\tclab-demo-sros-a ",
+			"3fff:172:20:20::2\tclab-demo-sros ",
+		)
+	}
+}
+
+type hostsTestNode struct {
+	clabnodes.Node
+	entries clabtypes.HostEntries
+	err     error
+}
+
+func (n *hostsTestNode) GetHostsEntries(context.Context) (clabtypes.HostEntries, error) {
+	return n.entries, n.err
+}
+
+func TestCollectLabHostsEntriesSkipsUndeployedNodes(t *testing.T) {
+	entries, err := collectLabHostsEntries(context.Background(), map[string]clabnodes.Node{
+		"missing": &hostsTestNode{err: fmt.Errorf("missing: %w", clabnodes.ErrContainersNotFound)},
+		"running": &hostsTestNode{entries: clabtypes.HostEntries{
+			clabtypes.NewHostEntry("192.0.2.1", "running", clabtypes.IpVersionV4),
+		}},
+	})
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("collectLabHostsEntries = %v, %v; want one running node entry", entries, err)
+	}
+}
+
+func TestCollectLabHostsEntriesReturnsRuntimeErrors(t *testing.T) {
+	wantErr := errors.New("runtime unavailable")
+	_, err := collectLabHostsEntries(context.Background(), map[string]clabnodes.Node{
+		"leaf1": &hostsTestNode{err: wantErr},
+	})
+	if !errors.Is(err, wantErr) || !strings.Contains(err.Error(), "leaf1") {
+		t.Fatalf("collectLabHostsEntries error = %v, want leaf1 runtime error", err)
+	}
+}
 
 func TestReplaceLabHostsEntriesWritesReplacesAndRemovesBlock(t *testing.T) {
 	tempDir := t.TempDir()
@@ -22,18 +135,13 @@ func TestReplaceLabHostsEntriesWritesReplacesAndRemovesBlock(t *testing.T) {
 		t.Fatalf("seed hosts file: %v", err)
 	}
 
-	containers := []clabruntime.GenericContainer{
-		{
-			Names:  []string{"clab-demo-leaf1"},
-			ID:     "1234567890abcdef",
-			Labels: map[string]string{clabconstants.Containerlab: "demo", clabconstants.NodeKind: "cisco_n9kv"},
-			NetworkSettings: clabruntime.GenericMgmtIPs{
-				IPv4addr: "172.20.20.2",
-				IPv6addr: "3fff:172:20:20::2",
-			},
-		},
+	entries := clabtypes.HostEntries{
+		clabtypes.NewHostEntry("172.20.20.2", "clab-demo-leaf1", clabtypes.IpVersionV4).
+			SetContainerID("1234567890abcdef").SetDescription("Kind: cisco_n9kv"),
+		clabtypes.NewHostEntry("3fff:172:20:20::2", "clab-demo-leaf1", clabtypes.IpVersionV6).
+			SetContainerID("1234567890abcdef").SetDescription("Kind: cisco_n9kv"),
 	}
-	if err := replaceLabHostsEntries(hostsPath, lockPath, "demo", containers); err != nil {
+	if err := replaceLabHostsEntries(hostsPath, lockPath, "demo", entries); err != nil {
 		t.Fatalf("write lab hosts entries: %v", err)
 	}
 
@@ -44,8 +152,8 @@ func TestReplaceLabHostsEntriesWritesReplacesAndRemovesBlock(t *testing.T) {
 		"###### CLAB-other-START ######",
 	)
 
-	containers[0].NetworkSettings.IPv4addr = "172.20.20.9"
-	if err := replaceLabHostsEntries(hostsPath, lockPath, "demo", containers); err != nil {
+	entries[0] = clabtypes.NewHostEntry("172.20.20.9", "clab-demo-leaf1", clabtypes.IpVersionV4)
+	if err := replaceLabHostsEntries(hostsPath, lockPath, "demo", entries); err != nil {
 		t.Fatalf("replace lab hosts entries: %v", err)
 	}
 	content := readHostsFile(t, hostsPath)
