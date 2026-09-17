@@ -58,9 +58,34 @@ func NewService() *Service {
 
 var containerlabInitMu sync.Mutex
 
+// drainSpecialLinkNodes empties the endpoint lists of containerlab's process-wide "host"
+// and "mgmt-net" pseudo nodes (links.GetHostLinkNode(), links.GetMgmtBrLinkNode(): sync.Once
+// singletons). Every CLab built in this process appends the host-side endpoints of its
+// links to them (the vx-<node>_<iface> and ve-<node>_<iface> interfaces of vxlan-stitch
+// links, host and macvlan links) and only ever releases the endpoints it recorded itself,
+// while a failed apply releases nothing. The CLI never notices because each run is a new
+// process; a long-lived server sees "duplicate endpoint host:..." and "root network namespace
+// endpoint ... defined by multiple nodes [host, host]" on later requests, for any topology.
+// Starting every request from empty lists gives it the state a fresh CLI process has.
+// Callers hold containerlabInitMu, which also serializes Deploy and Apply, so no other
+// request is between its parse and its host-endpoint deploy while we drain.
+func drainSpecialLinkNodes() {
+	for _, n := range []clablinks.Node{clablinks.GetHostLinkNode(), clablinks.GetMgmtBrLinkNode()} {
+		if n == nil {
+			continue
+		}
+		// copy first: ReleaseEndpoint shrinks the slice we would be ranging over
+		for _, ep := range append([]clablinks.Endpoint(nil), n.GetEndpoints()...) {
+			_ = n.ReleaseEndpoint(ep)
+		}
+	}
+}
+
 func newContainerLab(opts ...clabcore.ClabOption) (*clabcore.CLab, error) {
 	containerlabInitMu.Lock()
 	defer containerlabInitMu.Unlock()
+
+	drainSpecialLinkNodes()
 
 	return clabcore.NewContainerLab(opts...)
 }
@@ -68,6 +93,8 @@ func newContainerLab(opts ...clabcore.ClabOption) (*clabcore.CLab, error) {
 func newContainerLabForOwner(owner string, opts ...clabcore.ClabOption) (*clabcore.CLab, error) {
 	containerlabInitMu.Lock()
 	defer containerlabInitMu.Unlock()
+
+	drainSpecialLinkNodes()
 
 	restoreOwnerEnv := setProcessOwnerEnv(owner)
 	defer restoreOwnerEnv()
