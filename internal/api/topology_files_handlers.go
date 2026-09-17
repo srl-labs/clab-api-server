@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
 	clabgit "github.com/srl-labs/containerlab/git"
 	"gopkg.in/yaml.v3"
@@ -302,9 +303,22 @@ func ImportTopologyFromURLHandler(c *gin.Context) {
 		return
 	}
 
+	// Imports must never reuse an existing lab as a disposable staging clone.
+	stagingDir, err := os.MkdirTemp("", "clab-topology-import-")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to create staging directory: %s", err.Error())})
+		return
+	}
+	defer func() {
+		if rmErr := os.RemoveAll(stagingDir); rmErr != nil {
+			log.Warnf("Failed to remove topology import staging directory %s: %v", stagingDir, rmErr)
+		}
+	}()
+
 	cloned, err := svc.CloneTopologySource(clab.CloneTopologySourceOptions{
 		SourceURL: topologySourceURL,
 		Username:  username,
+		WorkDir:   stagingDir,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to clone topology source: %s", err.Error())})

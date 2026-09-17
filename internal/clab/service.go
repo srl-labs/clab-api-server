@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"net"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -296,6 +298,11 @@ type SaveOptions struct {
 	NodeFilter []string
 }
 
+type nodeConfigSaver interface {
+	GetShortName() string
+	SaveConfig(context.Context) (*clabnodes.SaveConfigResult, error)
+}
+
 // InspectOptions contains options for inspecting labs.
 type InspectOptions struct {
 	LabName  string
@@ -357,6 +364,9 @@ type FcliRunOptions struct {
 type CloneTopologySourceOptions struct {
 	SourceURL string
 	Username  string
+	// WorkDir is the clone's parent directory. Empty uses the user's lab directory.
+	// Callers supplying a temporary directory are responsible for its cleanup.
+	WorkDir string
 }
 
 type CloneTopologySourceResult struct {
@@ -406,9 +416,17 @@ func (s *Service) CloneTopologySource(opts CloneTopologySourceOptions) (*CloneTo
 		return nil, fmt.Errorf("username is required")
 	}
 
-	workDir, err := s.prepareWorkDir(opts.Username)
+	workDir := opts.WorkDir
+	if workDir == "" {
+		var err error
+		workDir, err = s.prepareWorkDir(opts.Username)
+		if err != nil {
+			return nil, fmt.Errorf("failed to prepare working directory: %w", err)
+		}
+	}
+	workDir, err := filepath.Abs(workDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to prepare working directory: %w", err)
+		return nil, fmt.Errorf("failed to resolve working directory: %w", err)
 	}
 
 	normalizedURL := sourceURL
@@ -426,8 +444,24 @@ func (s *Service) CloneTopologySource(opts CloneTopologySourceOptions) (*CloneTo
 		return nil, err
 	}
 
+	repoDir := filepath.Join(workDir, repo.GetName())
+
+	// The clone runs as root, so hand it over or the user cannot edit or remove it.
+	if uid, gid, idErr := lookupUserIDs(opts.Username); idErr != nil {
+		log.Warn("Failed to resolve user for cloned topology ownership",
+			"user", opts.Username,
+			"error", idErr,
+		)
+	} else if chownErr := chownTree(repoDir, uid, gid); chownErr != nil {
+		log.Warn("Failed to set ownership on cloned topology",
+			"dir", repoDir,
+			"user", opts.Username,
+			"error", chownErr,
+		)
+	}
+
 	return &CloneTopologySourceResult{
-		RepoDir:      filepath.Join(workDir, repo.GetName()),
+		RepoDir:      repoDir,
 		RepoName:     repo.GetName(),
 		TopologyPath: topoPath,
 	}, nil
@@ -590,6 +624,9 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 	if err != nil {
 		return nil, fmt.Errorf("deployment failed: %w", err)
 	}
+	if err := syncLabHostsFiles(ctx, clab); err != nil {
+		return nil, fmt.Errorf("deployment completed but host name resolution setup failed: %w", err)
+	}
 
 	log.Info("Lab deployed successfully",
 		"username", opts.Username,
@@ -673,6 +710,11 @@ func (s *Service) Apply(ctx context.Context, opts ApplyOptions) (*clabcore.Apply
 	}
 	if result != nil && strings.TrimSpace(result.LabName) == "" {
 		result.LabName = clab.Config.Name
+	}
+	if !opts.DryRun {
+		if err := syncLabHostsFiles(ctx, clab); err != nil {
+			return nil, fmt.Errorf("apply completed but host name resolution setup failed: %w", err)
+		}
 	}
 
 	return result, nil
@@ -769,6 +811,9 @@ func (s *Service) Destroy(ctx context.Context, opts DestroyOptions) error {
 	// Destroy the lab
 	if err := clab.Destroy(ctx, destroyOpts...); err != nil {
 		return fmt.Errorf("destroy failed: %w", err)
+	}
+	if err := removeLabHostsFiles(clab.Config.Name); err != nil {
+		return fmt.Errorf("lab destroyed but host name resolution cleanup failed: %w", err)
 	}
 
 	log.Info("Lab destroyed successfully",
@@ -1328,10 +1373,6 @@ func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) error {
 		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{Timeout: defaultTimeout}),
 	}
 
-	if len(opts.NodeFilter) > 0 {
-		clabOpts = append(clabOpts, clabcore.WithNodeFilter(opts.NodeFilter))
-	}
-
 	clab, err := newContainerLab(clabOpts...)
 	if err != nil {
 		return fmt.Errorf("failed to create containerlab instance: %w", err)
@@ -1342,8 +1383,22 @@ func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) error {
 		"topoPath", opts.TopoPath,
 	)
 
-	// Save config for each node
-	if err := clab.Save(ctx); err != nil {
+	savers, err := selectNodeConfigSavers(clab.Nodes, opts.NodeFilter)
+	if err != nil {
+		return err
+	}
+	// Refresh the whole lab's entries even when only selected nodes are saved.
+	if err := syncLabHostsFiles(ctx, clab); err != nil {
+		return fmt.Errorf("failed to prepare host name resolution: %w", err)
+	}
+
+	if clab.Config.Mgmt != nil {
+		if err := clablinks.SetMgmtNetUnderlyingBridge(clab.Config.Mgmt.Bridge); err != nil {
+			return fmt.Errorf("failed to configure management bridge: %w", err)
+		}
+	}
+
+	if err := saveNodeConfigs(ctx, savers); err != nil {
 		return fmt.Errorf("save failed: %w", err)
 	}
 
@@ -1352,6 +1407,46 @@ func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) error {
 	)
 
 	return nil
+}
+
+func selectNodeConfigSavers(nodes map[string]clabnodes.Node, nodeFilter []string) ([]nodeConfigSaver, error) {
+	for _, name := range nodeFilter {
+		if _, ok := nodes[name]; !ok {
+			return nil, fmt.Errorf("node %q is not present in the topology", name)
+		}
+	}
+	var savers []nodeConfigSaver
+	for name, node := range nodes {
+		if len(nodeFilter) == 0 || slices.Contains(nodeFilter, name) {
+			savers = append(savers, node)
+		}
+	}
+	return savers, nil
+}
+
+func saveNodeConfigs(ctx context.Context, nodes []nodeConfigSaver) error {
+	var wg sync.WaitGroup
+	errorsCh := make(chan error, len(nodes))
+
+	for _, node := range nodes {
+		wg.Add(1)
+		go func(node nodeConfigSaver) {
+			defer wg.Done()
+			if _, err := node.SaveConfig(ctx); err != nil {
+				errorsCh <- fmt.Errorf("node %q: %w", node.GetShortName(), err)
+			}
+		}(node)
+	}
+
+	wg.Wait()
+	close(errorsCh)
+
+	var saveErrors []error
+	for err := range errorsCh {
+		saveErrors = append(saveErrors, err)
+	}
+
+	return errors.Join(saveErrors...)
 }
 
 // CACreateOptions contains options for creating a CA.
@@ -2437,6 +2532,32 @@ func (s *Service) generateTopologyConfig(
 	return yaml.Marshal(config)
 }
 
+// lookupUserIDs resolves a username to its numeric uid/gid.
+func lookupUserIDs(username string) (uid, gid int, err error) {
+	usr, err := user.Lookup(username)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to lookup user: %w", err)
+	}
+	if uid, err = strconv.Atoi(usr.Uid); err != nil {
+		return 0, 0, fmt.Errorf("failed to parse uid for %q: %w", username, err)
+	}
+	if gid, err = strconv.Atoi(usr.Gid); err != nil {
+		return 0, 0, fmt.Errorf("failed to parse gid for %q: %w", username, err)
+	}
+	return uid, gid, nil
+}
+
+// chownTree transfers ownership of path and everything below it to uid:gid.
+// Symlinks are changed rather than followed, so a link cannot retarget the chown.
+func chownTree(path string, uid, gid int) error {
+	return filepath.WalkDir(path, func(p string, _ fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		return os.Lchown(p, uid, gid)
+	})
+}
+
 // prepareWorkDir prepares the working directory for a user.
 func (s *Service) prepareWorkDir(username string) (string, error) {
 	usr, err := user.Lookup(username)
@@ -2450,9 +2571,8 @@ func (s *Service) prepareWorkDir(username string) (string, error) {
 	}
 
 	// Try to set ownership of the .clab directory to the actual user
-	uid, uidErr := strconv.Atoi(usr.Uid)
-	gid, gidErr := strconv.Atoi(usr.Gid)
-	if uidErr == nil && gidErr == nil {
+	uid, gid, idErr := lookupUserIDs(username)
+	if idErr == nil {
 		if chownErr := os.Chown(clabDir, uid, gid); chownErr != nil {
 			log.Warn("Failed to set ownership on .clab directory",
 				"dir", clabDir,
@@ -2473,6 +2593,14 @@ func (s *Service) ensureTimeout(ctx context.Context) (context.Context, context.C
 	return ctx, func() {}
 }
 
+// gitRepoInDirectory supplies an explicit clone destination to containerlab's Git helper.
+type gitRepoInDirectory struct {
+	clabgit.GitRepo
+	dir string
+}
+
+func (r gitRepoInDirectory) GetName() string { return r.dir }
+
 // processGitTopoFile handles GitHub/GitLab URLs by cloning the repo and returning
 // the local path to the topology file. This mirrors the CLI behavior.
 func (s *Service) processGitTopoFile(topo, workDir string) (string, error) {
@@ -2486,17 +2614,13 @@ func (s *Service) processGitTopoFile(topo, workDir string) (string, error) {
 		return "", fmt.Errorf("failed to parse git URL: %w", err)
 	}
 
-	// Change to workdir so the repo is cloned there
-	originalDir, _ := os.Getwd()
-	if chErr := os.Chdir(workDir); chErr != nil {
-		return "", fmt.Errorf("failed to change to work directory for git clone: %w", chErr)
+	repoDir, err := filepath.Abs(filepath.Join(workDir, repo.GetName()))
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve clone directory: %w", err)
 	}
-	defer func() {
-		_ = os.Chdir(originalDir)
-	}()
 
-	// Instantiate the git implementation
-	gitImpl := clabgit.NewGoGit(repo)
+	// Use an absolute destination so concurrent clones do not change each other's cwd.
+	gitImpl := clabgit.NewGoGit(gitRepoInDirectory{GitRepo: repo, dir: repoDir})
 
 	// Clone the repo
 	log.Debug("Cloning git repository", "url", topo, "workDir", workDir)
@@ -2505,12 +2629,12 @@ func (s *Service) processGitTopoFile(topo, workDir string) (string, error) {
 	}
 
 	// Adjust permissions for the checked out repo
-	if err := clabutils.SetUIDAndGID(repo.GetName()); err != nil {
+	if err := clabutils.SetUIDAndGID(repoDir); err != nil {
 		log.Warn("Error adjusting repository permissions, continuing anyways", "error", err)
 	}
 
 	// Find the topology file in the cloned repo
-	repoPath := filepath.Join(workDir, repo.GetName())
+	repoPath := repoDir
 
 	// If a specific path was provided in the URL, use it
 	if len(repo.GetPath()) > 0 {
