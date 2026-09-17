@@ -177,7 +177,7 @@ func isResolvableContainerReference(name string) bool {
 func listCaptureLabContainers(
 	c *gin.Context,
 	labName string,
-) ([]models.ClabContainerInfo, map[string][]models.InterfaceInfo, bool) {
+) ([]models.ClabContainerInfo, map[string][]clab.CaptureInterface, bool) {
 	svc := GetClabService()
 	if svc == nil {
 		err := fmt.Errorf("containerlab service not initialized")
@@ -218,34 +218,29 @@ func listCaptureLabContainers(
 		return nil, nil, false
 	}
 
-	interfacesByContainer := make(map[string][]models.InterfaceInfo, len(containerInterfaces))
-	for _, nodeInterfaces := range clab.ContainersInterfacesToInspectOutput(containerInterfaces) {
-		interfacesByContainer[nodeInterfaces.NodeName] = nodeInterfaces.Interfaces
-	}
+	interfacesByContainer := clab.CaptureInterfacesByContainer(containers, containerInterfaces)
 
 	return infos, interfacesByContainer, true
 }
 
 func resolveCaptureInterface(
-	interfacesByContainer map[string][]models.InterfaceInfo,
+	interfacesByContainer map[string][]clab.CaptureInterface,
 	containerName string,
 	requestedName string,
 ) (string, bool) {
 	interfaces := interfacesByContainer[containerName]
 	for _, iface := range interfaces {
 		if iface.Name == requestedName {
-			return iface.Name, strings.HasPrefix(iface.Name, "clab-s-")
+			return iface.Name, iface.HostNetworkNamespace
 		}
 	}
 	for _, iface := range interfaces {
 		if iface.Alias == requestedName {
-			return iface.Name, strings.HasPrefix(iface.Name, "clab-s-")
+			return iface.Name, iface.HostNetworkNamespace
 		}
 	}
 
-	// Only switch to the host namespace for an interface returned by
-	// containerlab for this container. A caller-provided clab-s-* name must not
-	// be allowed to select an unrelated host interface.
+	// Unresolved names stay in the container namespace.
 	return requestedName, false
 }
 

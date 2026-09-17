@@ -3,13 +3,13 @@ package api
 import (
 	"testing"
 
-	"github.com/srl-labs/clab-api-server/internal/models"
+	"github.com/srl-labs/clab-api-server/internal/clab"
 )
 
 func TestResolveCaptureInterfacePrefersStitchPeerByAlias(t *testing.T) {
-	interfaces := map[string][]models.InterfaceInfo{
+	interfaces := map[string][]clab.CaptureInterface{
 		"clab-demo-sros1": {
-			{Name: "clab-s-12345678", Alias: "1/1/c1/1"},
+			{Name: "clab-s-12345678", Alias: "1/1/c1/1", HostNetworkNamespace: true},
 		},
 	}
 
@@ -23,7 +23,7 @@ func TestResolveCaptureInterfacePrefersStitchPeerByAlias(t *testing.T) {
 }
 
 func TestResolveCaptureInterfaceKeepsContainerInterface(t *testing.T) {
-	interfaces := map[string][]models.InterfaceInfo{
+	interfaces := map[string][]clab.CaptureInterface{
 		"clab-demo-srl1": {
 			{Name: "eth1", Alias: "e1-1"},
 		},
@@ -40,7 +40,7 @@ func TestResolveCaptureInterfaceKeepsContainerInterface(t *testing.T) {
 
 func TestResolveCaptureInterfaceDoesNotTrustUnknownStitchName(t *testing.T) {
 	name, hostNetns := resolveCaptureInterface(
-		map[string][]models.InterfaceInfo{},
+		map[string][]clab.CaptureInterface{},
 		"clab-demo-node1",
 		"clab-s-deadbeef",
 	)
@@ -50,5 +50,19 @@ func TestResolveCaptureInterfaceDoesNotTrustUnknownStitchName(t *testing.T) {
 	}
 	if hostNetns {
 		t.Fatal("unknown stitch interface must not select the host network namespace")
+	}
+}
+
+func TestResolveCaptureInterfaceKeepsUnverifiedStitchNameInContainer(t *testing.T) {
+	interfaces := map[string][]clab.CaptureInterface{
+		"clab-demo-node1": {
+			{Name: "clab-s-12345678", Alias: "eth1"},
+		},
+	}
+	for _, requested := range []string{"clab-s-12345678", "eth1"} {
+		name, hostNetns := resolveCaptureInterface(interfaces, "clab-demo-node1", requested)
+		if name != "clab-s-12345678" || hostNetns {
+			t.Fatalf("resolve %q = (%q, %v), want container-scoped interface", requested, name, hostNetns)
+		}
 	}
 }
