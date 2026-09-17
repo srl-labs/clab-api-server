@@ -45,6 +45,9 @@ func TestLoadConfigDefaultsEnableTLSAutoCert(t *testing.T) {
 	if AppConfig.ClabLabsRoot != "" {
 		t.Fatalf("expected CLAB_LABS_ROOT default to be empty, got %q", AppConfig.ClabLabsRoot)
 	}
+	if AppConfig.ClabHostsFile != "" {
+		t.Fatalf("expected CLAB_HOSTS_FILE default to be empty, got %q", AppConfig.ClabHostsFile)
+	}
 }
 
 func TestLoadConfigTerminalMaxSessionsPerUserOverride(t *testing.T) {
@@ -132,5 +135,49 @@ func TestLoadConfigRejectsTildeClabLabsRoot(t *testing.T) {
 	viper.Reset()
 	if err := LoadConfig(".env"); err == nil {
 		t.Fatal("expected LoadConfig to reject tilde CLAB_LABS_ROOT")
+	}
+}
+
+func TestLoadConfigClabHostsFileOverride(t *testing.T) {
+	originalWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatalf("chdir temp dir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(originalWd)
+		viper.Reset()
+	})
+
+	t.Setenv("CLAB_HOSTS_FILE", "/proc/1/root/etc/../etc/hosts")
+	viper.Reset()
+	if err := LoadConfig(".env"); err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+
+	if AppConfig.ClabHostsFile != "/proc/1/root/etc/hosts" {
+		t.Fatalf("expected CLAB_HOSTS_FILE to be cleaned, got %q", AppConfig.ClabHostsFile)
+	}
+}
+
+func TestLoadConfigRejectsRelativeClabHostsFile(t *testing.T) {
+	originalWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatalf("chdir temp dir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(originalWd)
+		viper.Reset()
+	})
+
+	t.Setenv("CLAB_HOSTS_FILE", "relative/hosts")
+	viper.Reset()
+	if err := LoadConfig(".env"); err == nil {
+		t.Fatal("expected LoadConfig to reject relative CLAB_HOSTS_FILE")
 	}
 }

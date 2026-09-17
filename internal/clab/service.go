@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -295,6 +296,11 @@ type SaveOptions struct {
 	TopoPath   string
 	Username   string
 	NodeFilter []string
+}
+
+type nodeConfigSaver interface {
+	GetShortName() string
+	SaveConfig(context.Context) (*clabnodes.SaveConfigResult, error)
 }
 
 // InspectOptions contains options for inspecting labs.
@@ -618,6 +624,9 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 	if err != nil {
 		return nil, fmt.Errorf("deployment failed: %w", err)
 	}
+	if err := syncLabHostsFiles(ctx, clab); err != nil {
+		return nil, fmt.Errorf("deployment completed but host name resolution setup failed: %w", err)
+	}
 
 	log.Info("Lab deployed successfully",
 		"username", opts.Username,
@@ -701,6 +710,11 @@ func (s *Service) Apply(ctx context.Context, opts ApplyOptions) (*clabcore.Apply
 	}
 	if result != nil && strings.TrimSpace(result.LabName) == "" {
 		result.LabName = clab.Config.Name
+	}
+	if !opts.DryRun {
+		if err := syncLabHostsFiles(ctx, clab); err != nil {
+			return nil, fmt.Errorf("apply completed but host name resolution setup failed: %w", err)
+		}
 	}
 
 	return result, nil
@@ -797,6 +811,9 @@ func (s *Service) Destroy(ctx context.Context, opts DestroyOptions) error {
 	// Destroy the lab
 	if err := clab.Destroy(ctx, destroyOpts...); err != nil {
 		return fmt.Errorf("destroy failed: %w", err)
+	}
+	if err := removeLabHostsFiles(clab.Config.Name); err != nil {
+		return fmt.Errorf("lab destroyed but host name resolution cleanup failed: %w", err)
 	}
 
 	log.Info("Lab destroyed successfully",
@@ -1356,10 +1373,6 @@ func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) error {
 		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{Timeout: defaultTimeout}),
 	}
 
-	if len(opts.NodeFilter) > 0 {
-		clabOpts = append(clabOpts, clabcore.WithNodeFilter(opts.NodeFilter))
-	}
-
 	clab, err := newContainerLab(clabOpts...)
 	if err != nil {
 		return fmt.Errorf("failed to create containerlab instance: %w", err)
@@ -1370,8 +1383,22 @@ func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) error {
 		"topoPath", opts.TopoPath,
 	)
 
-	// Save config for each node
-	if err := clab.Save(ctx); err != nil {
+	savers, err := selectNodeConfigSavers(clab.Nodes, opts.NodeFilter)
+	if err != nil {
+		return err
+	}
+	// Refresh the whole lab's entries even when only selected nodes are saved.
+	if err := syncLabHostsFiles(ctx, clab); err != nil {
+		return fmt.Errorf("failed to prepare host name resolution: %w", err)
+	}
+
+	if clab.Config.Mgmt != nil {
+		if err := clablinks.SetMgmtNetUnderlyingBridge(clab.Config.Mgmt.Bridge); err != nil {
+			return fmt.Errorf("failed to configure management bridge: %w", err)
+		}
+	}
+
+	if err := saveNodeConfigs(ctx, savers); err != nil {
 		return fmt.Errorf("save failed: %w", err)
 	}
 
@@ -1380,6 +1407,46 @@ func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) error {
 	)
 
 	return nil
+}
+
+func selectNodeConfigSavers(nodes map[string]clabnodes.Node, nodeFilter []string) ([]nodeConfigSaver, error) {
+	for _, name := range nodeFilter {
+		if _, ok := nodes[name]; !ok {
+			return nil, fmt.Errorf("node %q is not present in the topology", name)
+		}
+	}
+	var savers []nodeConfigSaver
+	for name, node := range nodes {
+		if len(nodeFilter) == 0 || slices.Contains(nodeFilter, name) {
+			savers = append(savers, node)
+		}
+	}
+	return savers, nil
+}
+
+func saveNodeConfigs(ctx context.Context, nodes []nodeConfigSaver) error {
+	var wg sync.WaitGroup
+	errorsCh := make(chan error, len(nodes))
+
+	for _, node := range nodes {
+		wg.Add(1)
+		go func(node nodeConfigSaver) {
+			defer wg.Done()
+			if _, err := node.SaveConfig(ctx); err != nil {
+				errorsCh <- fmt.Errorf("node %q: %w", node.GetShortName(), err)
+			}
+		}(node)
+	}
+
+	wg.Wait()
+	close(errorsCh)
+
+	var saveErrors []error
+	for err := range errorsCh {
+		saveErrors = append(saveErrors, err)
+	}
+
+	return errors.Join(saveErrors...)
 }
 
 // CACreateOptions contains options for creating a CA.

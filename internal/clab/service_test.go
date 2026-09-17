@@ -11,7 +11,50 @@ import (
 
 	gotc "github.com/florianl/go-tc"
 	clabcore "github.com/srl-labs/containerlab/core"
+	clabnodes "github.com/srl-labs/containerlab/nodes"
 )
+
+type fakeNodeConfigSaver struct {
+	clabnodes.Node
+	name   string
+	err    error
+	called bool
+}
+
+func TestSelectNodeConfigSaversKeepsFullLab(t *testing.T) {
+	leaf1 := &fakeNodeConfigSaver{name: "leaf1"}
+	leaf2 := &fakeNodeConfigSaver{name: "leaf2"}
+	nodes := map[string]clabnodes.Node{"leaf1": leaf1, "leaf2": leaf2}
+	savers, err := selectNodeConfigSavers(nodes, []string{"leaf1", "leaf1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := saveNodeConfigs(context.Background(), savers); err != nil {
+		t.Fatal(err)
+	}
+	if len(savers) != 1 || !leaf1.called || leaf2.called {
+		t.Fatalf("filtered save: savers=%d, leaf1=%t, leaf2=%t", len(savers), leaf1.called, leaf2.called)
+	}
+	if len(nodes) != 2 || nodes["leaf2"] != leaf2 {
+		t.Fatal("selecting nodes removed a node needed for full lab hostname synchronization")
+	}
+	if _, err := selectNodeConfigSavers(nodes, []string{"missing"}); err == nil {
+		t.Fatal("expected an error for an unknown node")
+	}
+	savers, err = selectNodeConfigSavers(nodes, nil)
+	if err != nil || len(savers) != 2 {
+		t.Fatalf("unfiltered save: savers=%d, err=%v", len(savers), err)
+	}
+}
+
+func (n *fakeNodeConfigSaver) GetShortName() string {
+	return n.name
+}
+
+func (n *fakeNodeConfigSaver) SaveConfig(context.Context) (*clabnodes.SaveConfigResult, error) {
+	n.called = true
+	return nil, n.err
+}
 
 func TestResolveTopologySourceUsesContainerlabRendering(t *testing.T) {
 	current, err := user.Current()
@@ -192,6 +235,34 @@ func TestSetProcessOwnerEnvSetsSudoIDsForExistingUser(t *testing.T) {
 	}
 	if got := os.Getenv("SUDO_GID"); got != current.Gid {
 		t.Fatalf("SUDO_GID = %q, want %q", got, current.Gid)
+	}
+}
+
+func TestSaveNodeConfigsReturnsAllNodeErrors(t *testing.T) {
+	leaf1 := &fakeNodeConfigSaver{name: "leaf1", err: errors.New("connection refused")}
+	leaf2 := &fakeNodeConfigSaver{name: "leaf2", err: errors.New("authentication failed")}
+
+	err := saveNodeConfigs(context.Background(), []nodeConfigSaver{leaf1, leaf2})
+	if err == nil {
+		t.Fatal("saveNodeConfigs unexpectedly returned nil")
+	}
+	for _, want := range []string{"leaf1", "connection refused", "leaf2", "authentication failed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("saveNodeConfigs error = %q, want it to contain %q", err, want)
+		}
+	}
+	if !leaf1.called || !leaf2.called {
+		t.Fatalf("expected every node save to run, called leaf1=%t leaf2=%t", leaf1.called, leaf2.called)
+	}
+}
+
+func TestSaveNodeConfigsReturnsNilWhenAllNodesSucceed(t *testing.T) {
+	node := &fakeNodeConfigSaver{name: "leaf1"}
+	if err := saveNodeConfigs(context.Background(), []nodeConfigSaver{node}); err != nil {
+		t.Fatalf("saveNodeConfigs returned error: %v", err)
+	}
+	if !node.called {
+		t.Fatal("expected node save to run")
 	}
 }
 
