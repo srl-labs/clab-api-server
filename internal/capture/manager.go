@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -57,9 +58,10 @@ type ManagerConfig struct {
 }
 
 type ContainerCaptureSpec struct {
-	ContainerName  string
-	InterfaceNames []string
-	LabDirectory   string
+	ContainerName        string
+	InterfaceNames       []string
+	LabDirectory         string
+	HostNetworkNamespace bool
 }
 
 type PacketflixURI struct {
@@ -339,7 +341,10 @@ func (m *Manager) BuildPacketflixURIs(
 		if len(spec.InterfaceNames) == 0 {
 			continue
 		}
-		uri := buildPacketflixURI(bracketed, m.cfg.PacketflixPort, spec.ContainerName, spec.InterfaceNames)
+		uri, err := buildPacketflixURIForSpec(bracketed, m.cfg.PacketflixPort, spec)
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, PacketflixURI{
 			ContainerName:  spec.ContainerName,
 			InterfaceNames: append([]string(nil), spec.InterfaceNames...),
@@ -393,12 +398,15 @@ func (m *Manager) CreateWiresharkSessions(
 			return nil, err
 		}
 
-		packetflix := buildPacketflixURI(
+		packetflix, err := buildPacketflixURIForSpec(
 			packetflixHost,
 			m.cfg.PacketflixPort,
-			spec.ContainerName,
-			spec.InterfaceNames,
+			spec,
 		)
+		if err != nil {
+			m.cleanupCreatedSessions(ctx, created)
+			return nil, err
+		}
 
 		sessionID := randomSessionID()
 		containerName := buildWiresharkContainerName(
@@ -1038,11 +1046,16 @@ func buildPacketflixURI(
 	packetflixPort int,
 	containerName string,
 	interfaceNames []string,
+	netnsID uint64,
 ) string {
 	containerPayload := map[string]any{
 		"network-interfaces": interfaceNames,
-		"name":               containerName,
-		"type":               "docker",
+	}
+	if netnsID != 0 {
+		containerPayload["netns"] = netnsID
+	} else {
+		containerPayload["name"] = containerName
+		containerPayload["type"] = "docker"
 	}
 	containerJSON, _ := json.Marshal(containerPayload)
 	containerQuery := urlEncode(string(containerJSON))
@@ -1054,6 +1067,43 @@ func buildPacketflixURI(
 		containerQuery,
 		nif,
 	)
+}
+
+func buildPacketflixURIForSpec(
+	host string,
+	packetflixPort int,
+	spec ContainerCaptureSpec,
+) (string, error) {
+	var netnsID uint64
+	if spec.HostNetworkNamespace {
+		var err error
+		netnsID, err = currentNetworkNamespaceID()
+		if err != nil {
+			return "", fmt.Errorf("failed resolving host network namespace: %w", err)
+		}
+	}
+
+	return buildPacketflixURI(
+		host,
+		packetflixPort,
+		spec.ContainerName,
+		spec.InterfaceNames,
+		netnsID,
+	), nil
+}
+
+func currentNetworkNamespaceID() (uint64, error) {
+	target, err := os.Readlink("/proc/self/ns/net")
+	if err != nil {
+		return 0, err
+	}
+
+	const prefix = "net:["
+	if !strings.HasPrefix(target, prefix) || !strings.HasSuffix(target, "]") {
+		return 0, fmt.Errorf("unexpected network namespace link %q", target)
+	}
+
+	return strconv.ParseUint(strings.TrimSuffix(strings.TrimPrefix(target, prefix), "]"), 10, 64)
 }
 
 func wiresharkPacketflixHost(runtime string, hasEdgeSharkNetwork bool) string {
