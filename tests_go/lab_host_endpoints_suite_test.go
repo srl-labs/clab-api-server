@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -86,6 +87,7 @@ func (s *LabHostEndpointsSuite) TestPlainDeployAfterFailedHostLinkParse() {
 	body, code, err := s.createLab(headers, bad, topo, false, s.cfg.DeployTimeout)
 	s.Require().NoError(err)
 	s.Require().NotEqual(http.StatusOK, code, "clashing host links must be rejected: %s", string(body))
+	s.Require().Contains(string(body), "duplicate endpoint", "must fail on the conflicting host link")
 
 	s.logTest("a plain lab '%s' must still deploy afterwards", good)
 	topo = strings.ReplaceAll(s.cfg.SimpleTopologyContent, "{lab_name}", good)
@@ -143,4 +145,103 @@ func (s *LabHostEndpointsSuite) TestBridgeLinkAfterMgmtBridgeLab() {
 		}
 	}
 	s.logSuccess("bridge link formed on both deploys")
+}
+
+func (s *LabHostEndpointsSuite) TestConcurrentFailedAndPlainDeploys() {
+	headers := s.getAuthHeaders(s.login(s.cfg.SuperuserUser, s.cfg.SuperuserPass))
+	type deployResult struct {
+		bad  bool
+		body []byte
+		code int
+		err  error
+	}
+	start := make(chan struct{})
+	results := make(chan deployResult, 6)
+	for i := 0; i < 3; i++ {
+		for _, bad := range []bool{true, false} {
+			labName := fmt.Sprintf("%s-concurrent-%s", s.cfg.LabNamePrefix, s.randomSuffix(6))
+			topo := s.cfg.SimpleTopologyContent
+			if bad {
+				topo = clashingHostLinkTopology
+			}
+			topo = strings.ReplaceAll(topo, "{lab_name}", labName)
+			// Register cleanup even for a supposedly invalid lab, in case it deploys.
+			defer s.cleanupLab(labName, true)
+			go func() {
+				<-start
+				body, code, err := s.createLab(headers, labName, topo, false, s.cfg.DeployTimeout)
+				results <- deployResult{bad: bad, body: body, code: code, err: err}
+			}()
+		}
+	}
+	close(start)
+	// Drain every result before making fatal assertions or starting cleanup.
+	for i := 0; i < cap(results); i++ {
+		result := <-results
+		s.Assert().NoError(result.err)
+		if result.bad {
+			s.Assert().NotEqual(http.StatusOK, result.code, "%s", result.body)
+			s.Assert().Contains(string(result.body), "duplicate endpoint")
+		} else {
+			s.Assert().Equal(http.StatusOK, result.code, "%s", result.body)
+		}
+	}
+}
+
+func (s *LabHostEndpointsSuite) TestVxlanDestroyWhileListingLabs() {
+	headers := s.getAuthHeaders(s.login(s.cfg.SuperuserUser, s.cfg.SuperuserPass))
+	labName := fmt.Sprintf("%s-list-%s", s.cfg.LabNamePrefix, s.randomSuffix(5))
+	node := "n" + labName[strings.LastIndex(labName, "-")+1:]
+	deleteURL := fmt.Sprintf("%s/api/v1/tools/vxlan?prefix=vx-%s_eth1", s.cfg.APIURL, node)
+	// The exact interface prefix also cleans up a leaked tunnel if the test fails.
+	defer func() {
+		s.cleanupLab(labName, true)
+		_, _, _ = s.doRequest(http.MethodDelete, deleteURL, headers, nil, s.cfg.RequestTimeout)
+	}()
+
+	for i := 0; i < 3; i++ {
+		code, body := s.deployVxlan(headers, labName)
+		s.Require().Equal(http.StatusOK, code, "%s", body)
+		stop := make(chan struct{})
+		started := make(chan struct{}, 2)
+		listErrors := make(chan error, 2)
+		var workers sync.WaitGroup
+		for j := 0; j < 2; j++ {
+			workers.Go(func() {
+				started <- struct{}{}
+				for {
+					select {
+					case <-stop:
+						return
+					default:
+					}
+					body, code, err := s.doRequest(http.MethodGet, s.cfg.APIURL+"/api/v1/labs", headers, nil, s.cfg.RequestTimeout)
+					if err != nil || code != http.StatusOK {
+						listErrors <- fmt.Errorf("list during destroy: status=%d error=%v body=%s", code, err, body)
+						return
+					}
+				}
+			})
+		}
+		<-started
+		<-started
+		resp, code, err := s.destroyLab(headers, labName, true, s.cfg.CleanupTimeout)
+		close(stop)
+		workers.Wait()
+		close(listErrors)
+		s.Require().NoError(err)
+		s.Require().Equal(http.StatusOK, code, "%s", resp)
+		for err := range listErrors {
+			s.Assert().NoError(err)
+		}
+		resp, code, err = s.doRequest(http.MethodDelete, deleteURL, headers, nil, s.cfg.RequestTimeout)
+		s.Require().NoError(err)
+		if code == http.StatusInternalServerError {
+			// The current containerlab lookup reports a missing prefix as an error.
+			s.Require().Contains(string(resp), "no links found by specified prefix vx-"+node+"_eth1")
+		} else {
+			s.Require().Equal(http.StatusOK, code, "%s", resp)
+			s.Require().Contains(string(resp), "No VxLAN interfaces found", "destroy leaked a host VXLAN interface: %s", resp)
+		}
+	}
 }
