@@ -1117,6 +1117,7 @@ definitions:
   models.TopologyEntry:
     properties:
       annotationsFileName:
+        description: Sidecar path relative to the managed workspace root.
         type: string
       deploymentState:
         description: undeployed (runtime state is derived from events stream)
@@ -1126,6 +1127,7 @@ definitions:
       labName:
         type: string
       yamlFileName:
+        description: Topology path relative to the managed workspace root.
         type: string
     type: object
   models.TopologyFileRenameRequest:
@@ -2045,8 +2047,8 @@ paths:
         name: labName
         required: true
         type: string
-      - description: Relative topology file path inside lab directory (defaults to
-          running topology path or <labName>.clab.yml)
+      - description: Workspace-relative or legacy lab-relative topology path (defaults
+          to running topology path or <labName>.clab.yml)
         in: query
         name: path
         type: string
@@ -2229,8 +2231,8 @@ paths:
         name: labName
         required: true
         type: string
-      - description: Relative topology file path inside lab directory (defaults to
-          <labName>.clab.yml)
+      - description: Workspace-relative or legacy lab-relative topology path (defaults
+          to <labName>.clab.yml)
         in: query
         name: path
         type: string
@@ -3297,7 +3299,8 @@ paths:
         name: labName
         required: true
         type: string
-      - description: Relative topology YAML or annotations path inside lab directory
+      - description: Workspace-relative or legacy lab-relative topology YAML or annotations
+          path
         in: query
         name: path
         required: true
@@ -3336,7 +3339,8 @@ paths:
         name: labName
         required: true
         type: string
-      - description: Relative file path inside lab directory
+      - description: Workspace-relative path from the topology listing, or legacy
+          lab-relative path
         in: query
         name: path
         required: true
@@ -3374,7 +3378,8 @@ paths:
         name: labName
         required: true
         type: string
-      - description: Relative file path inside lab directory
+      - description: Workspace-relative path from the topology listing, or legacy
+          lab-relative path
         in: query
         name: path
         required: true
@@ -3415,7 +3420,8 @@ paths:
         name: labName
         required: true
         type: string
-      - description: Relative file path inside lab directory
+      - description: Workspace-relative path from the topology listing, or legacy
+          lab-relative path
         in: query
         name: path
         required: true
@@ -3447,7 +3453,8 @@ paths:
         name: labName
         required: true
         type: string
-      - description: Relative file path inside lab directory
+      - description: Workspace-relative path from the topology listing, or legacy
+          lab-relative path
         in: query
         name: path
         required: true
@@ -3761,8 +3768,10 @@ paths:
       - Labs
   /api/v1/labs/topology/files:
     get:
-      description: Returns editable topology entries from the authenticated user's
-        lab directory.
+      description: Recursively discovers editable *.clab.yml and *.clab.yaml files
+        in the authenticated user's lab workspace. YAML and annotation paths are relative
+        to the workspace root. Hidden directories, dependency caches, containerlab
+        runtime directories, and symbolic links are excluded.
       produces:
       - application/json
       responses:
