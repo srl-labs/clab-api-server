@@ -260,8 +260,7 @@ func getLabInfo(ctx context.Context, username string, labName string) (info *mod
 	return &labContainers[0], true, nil // Lab exists
 }
 
-// ensureLabOwnerLabels re-applies the desired owner label to all containers in a lab.
-// verifyLabOwnership checks if a lab exists and is owned by the user.
+// verifyLabOwnership checks access to an owned or shared lab, including superusers.
 // Returns the original topology path (if found) and nil error on success.
 // Sends appropriate HTTP error response and returns non-nil error on failure.
 func verifyLabOwnership(c *gin.Context, username, labName string) (string, error) {
@@ -299,7 +298,7 @@ func verifyLabOwnership(c *gin.Context, username, labName string) (string, error
 		return originalTopoPath, nil // Superuser confirmed
 	}
 
-	if actualOwner != username {
+	if !canAccessLab(username, labInfo) {
 		log.Warnf("Ownership check failed for user '%s': Attempted to access lab '%s' but it is owned by '%s'. Access denied.", username, labName, actualOwner)
 		// Use 404 for security (don't reveal existence if not owned)
 		errResp := fmt.Errorf("lab '%s' not found or not owned by user", labName)
@@ -364,7 +363,7 @@ func verifyContainerOwnership(c *gin.Context, username, containerName string) (*
 	}
 
 	// Check ownership if not superuser
-	if !isSuperuser(username) && foundContainer.Owner != username {
+	if !canAccessLab(username, foundContainer) {
 		log.Warnf("Container ownership check failed for user '%s': Attempted to access container '%s' but it is owned by '%s'. Access denied.", username, containerName, foundContainer.Owner)
 		err := fmt.Errorf("container '%s' not found or not owned by user", containerName)
 		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()}) // 404 for security

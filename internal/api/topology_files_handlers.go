@@ -43,6 +43,7 @@ func resolveDefaultTopologyDocPath(username, labName, docType string) (string, s
 
 // @Summary List editable lab topology files
 // @Description Recursively discovers editable *.clab.yml and *.clab.yaml files in the authenticated user's lab workspace. YAML and annotation paths are relative to the workspace root. Hidden directories, dependency caches, containerlab runtime directories, and symbolic links are excluded.
+// @Description Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce json
@@ -64,6 +65,24 @@ func ListTopologiesHandler(c *gin.Context) {
 	if listErr != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: listErr.Error()})
 		return
+	}
+	if sharedRoot := sharedLabsRoot(); sharedRoot != "" {
+		sharedEntries, err := listTopologyEntries(sharedRoot)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
+			return
+		}
+		for _, entry := range sharedEntries {
+			entry.YamlFileName = sharedWorkspaceName + "/" + entry.YamlFileName
+			entry.AnnotationsFileName = sharedWorkspaceName + "/" + entry.AnnotationsFileName
+			entries = append(entries, entry)
+		}
+		sort.Slice(entries, func(i, j int) bool {
+			if entries[i].LabName == entries[j].LabName {
+				return entries[i].YamlFileName < entries[j].YamlFileName
+			}
+			return entries[i].LabName < entries[j].LabName
+		})
 	}
 
 	c.JSON(http.StatusOK, entries)
@@ -399,6 +418,7 @@ func ImportTopologyFromURLHandler(c *gin.Context) {
 // @Description - `path` defaults to `<labName>.clab.yml` when omitted.
 // @Description - `stream=true` returns `application/x-ndjson` lifecycle events.
 // @Description - `includeLogs=true` includes captured lifecycle logs in the JSON response.
+// @Description Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce json
@@ -498,7 +518,7 @@ func DeployTopologyHandler(c *gin.Context) {
 			c.JSON(http.StatusConflict, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' already exists. Use 'reconfigure=true' to overwrite.", labName)})
 			return
 		}
-		if !isSuperuser(username) && labInfo.Owner != username {
+		if !canAccessLab(username, labInfo) {
 			c.JSON(http.StatusForbidden, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' is owned by '%s'. Permission denied.", labName, labInfo.Owner)})
 			return
 		}
@@ -518,10 +538,21 @@ func DeployTopologyHandler(c *gin.Context) {
 	deployCtx, deployCancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
 	defer deployCancel()
 
+	targetOwner := username
+	if exists && isSharedLabPath(labInfo.AbsLabPath) {
+		if filepath.Clean(topologyPath) != filepath.Clean(labInfo.AbsLabPath) {
+			c.JSON(http.StatusConflict, models.ErrorResponse{Error: "Reconfigure a shared lab using its existing shared topology path"})
+			return
+		}
+		if labInfo.Owner != "" {
+			targetOwner = labInfo.Owner
+		}
+	}
+
 	deployOptions := clab.DeployOptions{
 		TopoPath:       topologyPath,
 		LabName:        labName,
-		Username:       username,
+		Username:       targetOwner,
 		Reconfigure:    reconfigure,
 		MaxWorkers:     uint(maxWorkers),
 		ExportTemplate: exportTemplate,
@@ -593,6 +624,7 @@ func DeployTopologyHandler(c *gin.Context) {
 // @Description - `dryRun=true` returns the apply plan without changing the lab.
 // @Description - `stream=true` returns `application/x-ndjson` lifecycle events.
 // @Description - `includeLogs=true` includes captured lifecycle logs in the JSON response.
+// @Description Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce json
@@ -664,7 +696,7 @@ func ApplyTopologyHandler(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Error checking lab '%s' status: missing lab information", labName)})
 			return
 		}
-		if !isSuperuser(username) && labInfo.Owner != username {
+		if !canAccessLab(username, labInfo) {
 			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("lab '%s' not found or not owned by user", labName)})
 			return
 		}
@@ -699,6 +731,11 @@ func ApplyTopologyHandler(c *gin.Context) {
 			return
 		}
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to stat topology file: %s", statErr.Error())})
+		return
+	}
+
+	if exists && isSharedLabPath(labInfo.AbsLabPath) && filepath.Clean(topologyPath) != filepath.Clean(labInfo.AbsLabPath) {
+		c.JSON(http.StatusConflict, models.ErrorResponse{Error: "Apply a shared lab using its existing shared topology path"})
 		return
 	}
 
@@ -769,6 +806,7 @@ func ApplyTopologyHandler(c *gin.Context) {
 
 // @Summary Read lab topology file
 // @Description Reads a file from within the specified lab directory using a scoped relative path.
+// @Description Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce plain
@@ -784,6 +822,11 @@ func GetTopologyFileHandler(c *gin.Context) {
 	username := c.GetString("username")
 	labName := c.Param("labName")
 	relPath := c.Query("path")
+	if isSharedWorkspacePath(relPath) {
+		writeTopologyRevisionHeader(c, username, labName, relPath)
+		getWorkspaceFile(c, "text/plain; charset=utf-8")
+		return
+	}
 
 	absPath, _, _, _, err := resolveTopologyFilePath(username, labName, relPath)
 	if err != nil {
@@ -807,6 +850,7 @@ func GetTopologyFileHandler(c *gin.Context) {
 
 // @Summary Check lab topology file existence
 // @Description Checks whether a file exists inside the specified lab directory.
+// @Description Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
 // @Tags Labs
 // @Security BearerAuth
 // @Param labName path string true "Lab name"
@@ -821,6 +865,11 @@ func HeadTopologyFileHandler(c *gin.Context) {
 	username := c.GetString("username")
 	labName := c.Param("labName")
 	relPath := c.Query("path")
+	if isSharedWorkspacePath(relPath) {
+		writeTopologyRevisionHeader(c, username, labName, relPath)
+		getWorkspaceFile(c, "text/plain; charset=utf-8")
+		return
+	}
 
 	absPath, _, _, _, err := resolveTopologyFilePath(username, labName, relPath)
 	if err != nil {
@@ -843,6 +892,7 @@ func HeadTopologyFileHandler(c *gin.Context) {
 
 // @Summary Write lab topology file
 // @Description Writes a file inside the specified lab directory using a scoped relative path.
+// @Description Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
 // @Tags Labs
 // @Security BearerAuth
 // @Accept plain
@@ -859,6 +909,10 @@ func PutTopologyFileHandler(c *gin.Context) {
 	username := c.GetString("username")
 	labName := c.Param("labName")
 	relPath := c.Query("path")
+	if isSharedWorkspacePath(relPath) {
+		PutWorkspaceFileHandler(c)
+		return
+	}
 
 	absPath, labDir, uid, gid, err := resolveTopologyFilePath(username, labName, relPath)
 	if err != nil {
@@ -888,6 +942,7 @@ func PutTopologyFileHandler(c *gin.Context) {
 
 // @Summary Delete lab topology file
 // @Description Deletes a file inside the specified lab directory using a scoped relative path.
+// @Description Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce json
@@ -902,6 +957,10 @@ func DeleteTopologyFileHandler(c *gin.Context) {
 	username := c.GetString("username")
 	labName := c.Param("labName")
 	relPath := c.Query("path")
+	if isSharedWorkspacePath(relPath) {
+		DeleteWorkspaceFileHandler(c)
+		return
+	}
 
 	absPath, _, _, _, err := resolveTopologyFilePath(username, labName, relPath)
 	if err != nil {
@@ -919,6 +978,7 @@ func DeleteTopologyFileHandler(c *gin.Context) {
 
 // @Summary Rename lab topology file
 // @Description Renames or moves a file inside the specified lab directory using scoped relative paths.
+// @Description Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
 // @Tags Labs
 // @Security BearerAuth
 // @Accept json
@@ -937,6 +997,11 @@ func RenameTopologyFileHandler(c *gin.Context) {
 	var req models.TopologyFileRenameRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid request body: " + err.Error()})
+		return
+	}
+
+	if isSharedWorkspacePath(req.OldPath) || isSharedWorkspacePath(req.NewPath) {
+		renameWorkspaceFile(c, username, models.WorkspaceFileRenameRequest{OldPath: req.OldPath, NewPath: req.NewPath})
 		return
 	}
 
@@ -1135,6 +1200,9 @@ func resolveTopologyFilePath(username, labName, relPath string) (absolutePath, l
 	if !isValidLabName(labName) {
 		return "", "", -1, -1, fmt.Errorf("invalid lab name")
 	}
+	if isSharedWorkspacePath(relPath) {
+		return resolveSharedTopologyPath(username, relPath)
+	}
 
 	trimmed := strings.TrimSpace(relPath)
 	if trimmed == "" {
@@ -1142,6 +1210,9 @@ func resolveTopologyFilePath(username, labName, relPath string) (absolutePath, l
 	}
 
 	cleanPath := filepath.Clean(trimmed)
+	if isSharedWorkspacePath(filepath.ToSlash(cleanPath)) {
+		return "", "", -1, -1, fmt.Errorf("shared paths must start with @shared/")
+	}
 	if cleanPath == "." || cleanPath == ".." || strings.HasPrefix(cleanPath, ".."+string(filepath.Separator)) || filepath.IsAbs(cleanPath) {
 		return "", "", -1, -1, fmt.Errorf("invalid file path")
 	}

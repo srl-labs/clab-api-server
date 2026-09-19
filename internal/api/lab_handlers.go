@@ -221,8 +221,12 @@ func DeployLabHandler(c *gin.Context) {
 			c.JSON(http.StatusConflict, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' already exists. Use 'reconfigure=true' to overwrite.", effectiveLabName)})
 			return
 		}
-		if !isSuperuser(username) && labInfo.Owner != username {
+		if !canAccessLab(username, labInfo) {
 			c.JSON(http.StatusForbidden, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' is owned by '%s'. Permission denied.", effectiveLabName, labInfo.Owner)})
+			return
+		}
+		if isSharedLabPath(labInfo.AbsLabPath) {
+			c.JSON(http.StatusConflict, models.ErrorResponse{Error: "Reconfigure shared labs through the on-disk deploy endpoint using their @shared/ path"})
 			return
 		}
 		log.Infof("DeployLab user '%s': Lab '%s' exists, reconfigure=true, proceeding.", username, effectiveLabName)
@@ -369,8 +373,12 @@ func DeployLabArchiveHandler(c *gin.Context) {
 			c.JSON(http.StatusConflict, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' already exists. Use 'reconfigure=true' to overwrite.", labName)})
 			return
 		}
-		if !isSuperuser(username) && labInfo.Owner != username {
+		if !canAccessLab(username, labInfo) {
 			c.JSON(http.StatusForbidden, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' is owned by '%s'. Permission denied.", labName, labInfo.Owner)})
+			return
+		}
+		if isSharedLabPath(labInfo.AbsLabPath) {
+			c.JSON(http.StatusConflict, models.ErrorResponse{Error: "Reconfigure shared labs through the on-disk deploy endpoint using their @shared/ path"})
 			return
 		}
 		if err := os.RemoveAll(targetDir); err != nil {
@@ -486,7 +494,7 @@ func DeployLabArchiveHandler(c *gin.Context) {
 }
 
 // @Summary Destroy lab
-// @Description Destroys a lab by name after verifying ownership.
+// @Description Destroys a lab by name after verifying access to an owned or shared lab, or superuser access.
 // @Description
 // @Description **Notes**
 // @Description - `stream=true` returns `application/x-ndjson` lifecycle events.
@@ -496,7 +504,7 @@ func DeployLabArchiveHandler(c *gin.Context) {
 // @Produce json
 // @Param labName path string true "Name of the lab to destroy"
 // @Param cleanup query boolean false "Remove containerlab lab artifacts after destroy"
-// @Param purgeLabDir query boolean false "Purge topology parent directory for managed lab paths (~/.clab or CLAB_LABS_ROOT)"
+// @Param purgeLabDir query boolean false "Purge topology parent directory below the personal or shared workspace root"
 // @Param graceful query boolean false "Attempt graceful shutdown"
 // @Param gracefulTimeout query string false "Override graceful shutdown timeout when graceful=true (for example 5s or 2m)"
 // @Param keepMgmtNet query boolean false "Keep the management network"
@@ -599,6 +607,24 @@ func DestroyLabHandler(c *gin.Context) {
 		}
 
 		targetDir := filepath.Dir(originalTopoPath)
+
+		if isSharedLabPath(originalTopoPath) {
+			// A root-level topology must never purge the shared workspace itself.
+			rel, err := filepath.Rel(sharedLabsRoot(), targetDir)
+			if err != nil || rel == "." {
+				return
+			}
+			root, err := openWorkspaceRoot(sharedLabsRoot())
+			if err != nil {
+				log.Warnf("Failed to open shared labs root for cleanup: %v", err)
+				return
+			}
+			defer root.Close()
+			if err := root.RemoveAll(rel); err != nil {
+				log.Warnf("Failed to purge shared lab directory '%s': %v", targetDir, err)
+			}
+			return
+		}
 
 		expectedBase, baseErr := getUserLabsBaseDirectory(purgeBaseUser)
 		if baseErr != nil {
@@ -991,7 +1017,7 @@ func InspectInterfacesHandler(c *gin.Context) {
 // @Description Returns details for all running labs.
 // @Description
 // @Description **Notes**
-// @Description - Results are filtered by owner unless the caller is a superuser.
+// @Description - Regular users see their own labs and labs in CLAB_SHARED_LABS_ROOT. Superusers see all labs.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce json
@@ -1036,7 +1062,7 @@ func ListLabsHandler(c *gin.Context) {
 	finalResult := make(models.ClabInspectOutput)
 	for labName, labContainers := range fullResult {
 		for _, cont := range labContainers {
-			if cont.Owner == username {
+			if cont.Owner == username || isSharedLabPath(cont.AbsLabPath) {
 				finalResult[labName] = labContainers
 				break
 			}

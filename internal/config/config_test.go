@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/spf13/viper"
@@ -179,5 +180,46 @@ func TestLoadConfigRejectsRelativeClabHostsFile(t *testing.T) {
 	viper.Reset()
 	if err := LoadConfig(".env"); err == nil {
 		t.Fatal("expected LoadConfig to reject relative CLAB_HOSTS_FILE")
+	}
+}
+
+func TestLoadConfigSharedLabsRoot(t *testing.T) {
+	for _, tc := range []struct {
+		name, root, privateRoot, want string
+		invalid                       bool
+	}{
+		{name: "disabled"},
+		{name: "absolute", root: "/srv/shared/../shared", want: "/srv/shared"},
+		{name: "relative", root: "shared/labs", invalid: true},
+		{name: "tilde", root: "~/shared", invalid: true},
+		{name: "filesystem root", root: "/", invalid: true},
+		{name: "private root", root: "/srv/labs", privateRoot: "/srv/labs", invalid: true},
+		{name: "private ancestor", root: "/srv", privateRoot: "/srv/labs", invalid: true},
+		{name: "separate", root: "/srv/shared", privateRoot: "/srv/labs", want: "/srv/shared"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			previous := AppConfig
+			viper.Reset()
+			t.Cleanup(func() { viper.Reset(); AppConfig = previous })
+			t.Setenv("CLAB_SHARED_LABS_ROOT", tc.root)
+			t.Setenv("CLAB_LABS_ROOT", tc.privateRoot)
+			path := filepath.Join(t.TempDir(), ".env")
+			if err := os.WriteFile(path, nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			err := LoadConfig(path)
+			if tc.invalid {
+				if err == nil {
+					t.Fatal("expected invalid shared root to be rejected")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if AppConfig.ClabSharedLabsRoot != tc.want {
+				t.Fatalf("shared root = %q, want %q", AppConfig.ClabSharedLabsRoot, tc.want)
+			}
+		})
 	}
 }

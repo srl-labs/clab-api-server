@@ -68,7 +68,21 @@ func resolveWorkspacePath(username, rawPath string, allowRoot bool) (absolutePat
 		return "", "", "", -1, -1, err
 	}
 
-	relativePath, err = cleanWorkspacePath(rawPath, allowRoot)
+	if isSharedWorkspacePath(rawPath) {
+		rootPath = sharedLabsRoot()
+		if rootPath == "" {
+			return "", "", "", -1, -1, fmt.Errorf("shared labs are not configured")
+		}
+		// Shared files belong to the server account. API collaborators must not
+		// change the shared root's owner on each write.
+		uid, gid = -1, -1
+		relativePath, err = sharedWorkspaceRelativePath(rawPath, allowRoot)
+	} else {
+		relativePath, err = cleanWorkspacePath(rawPath, allowRoot)
+		if err == nil && isSharedWorkspacePath(filepath.ToSlash(relativePath)) {
+			err = fmt.Errorf("shared paths must start with @shared/")
+		}
+	}
 	if err != nil {
 		return "", "", "", -1, -1, err
 	}
@@ -93,6 +107,9 @@ func ensureWorkspaceRoot(rootPath string, uid, gid int) error {
 		if !info.IsDir() {
 			return fmt.Errorf("workspace path is not a directory")
 		}
+	}
+	if rootPath == sharedLabsRoot() {
+		return os.MkdirAll(rootPath, 0750)
 	}
 	return ensureUserLabsBaseDirectory(rootPath, uid, gid)
 }
@@ -233,6 +250,7 @@ func listWorkspaceEntriesInRoot(root *os.Root, dirPath string) ([]models.Workspa
 
 // @Summary List lab workspace files
 // @Description Lists files and folders inside the authenticated user's editable lab workspace root.
+// @Description Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce json
@@ -254,7 +272,7 @@ func ListWorkspaceTreeHandler(c *gin.Context) {
 	root, rootErr := openWorkspaceRoot(rootPath)
 	if rootErr != nil {
 		if os.IsNotExist(rootErr) && relativePath == "" {
-			c.JSON(http.StatusOK, []models.WorkspaceFileEntry{})
+			c.JSON(http.StatusOK, sharedWorkspaceEntries(rootPath, relativePath, []models.WorkspaceFileEntry{}))
 			return
 		}
 		if os.IsNotExist(rootErr) {
@@ -293,11 +311,12 @@ func ListWorkspaceTreeHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: listErr.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, entries)
+	c.JSON(http.StatusOK, sharedWorkspaceEntries(rootPath, relativePath, entries))
 }
 
 // @Summary Read lab workspace file
 // @Description Reads a text or binary file from the authenticated user's editable lab workspace root.
+// @Description Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce plain
@@ -309,6 +328,10 @@ func ListWorkspaceTreeHandler(c *gin.Context) {
 // @Failure 500 {object} models.ErrorResponse "Internal server error"
 // @Router /api/v1/labs/workspace/file [get]
 func GetWorkspaceFileHandler(c *gin.Context) {
+	getWorkspaceFile(c, "application/octet-stream")
+}
+
+func getWorkspaceFile(c *gin.Context, contentType string) {
 	username := c.GetString("username")
 	_, rootPath, relativePath, _, _, err := resolveWorkspacePath(username, c.Query("path"), false)
 	if err != nil {
@@ -355,11 +378,16 @@ func GetWorkspaceFileHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Path is not a file"})
 		return
 	}
-	c.DataFromReader(http.StatusOK, info.Size(), "application/octet-stream", file, nil)
+	if c.Request.Method == http.MethodHead {
+		c.Status(http.StatusOK)
+		return
+	}
+	c.DataFromReader(http.StatusOK, info.Size(), contentType, file, nil)
 }
 
 // @Summary Write lab workspace file
 // @Description Writes a file inside the authenticated user's editable lab workspace root.
+// @Description Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
 // @Tags Labs
 // @Security BearerAuth
 // @Accept plain
@@ -425,6 +453,7 @@ func PutWorkspaceFileHandler(c *gin.Context) {
 
 // @Summary Delete lab workspace file
 // @Description Deletes a file or directory inside the authenticated user's editable lab workspace root. Directories with children require recursive=true.
+// @Description Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce json
@@ -493,6 +522,7 @@ func DeleteWorkspaceFileHandler(c *gin.Context) {
 
 // @Summary Rename lab workspace file
 // @Description Renames or moves a file inside the authenticated user's editable lab workspace root.
+// @Description Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
 // @Tags Labs
 // @Security BearerAuth
 // @Accept json
@@ -510,15 +540,22 @@ func RenameWorkspaceFileHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid request body: " + err.Error()})
 		return
 	}
+	renameWorkspaceFile(c, username, req)
+}
 
+func renameWorkspaceFile(c *gin.Context, username string, req models.WorkspaceFileRenameRequest) {
 	_, rootPath, oldRelativePath, _, _, oldErr := resolveWorkspacePath(username, req.OldPath, false)
 	if oldErr != nil {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: oldErr.Error()})
 		return
 	}
-	_, _, newRelativePath, uid, gid, newErr := resolveWorkspacePath(username, req.NewPath, false)
+	_, newRootPath, newRelativePath, uid, gid, newErr := resolveWorkspacePath(username, req.NewPath, false)
 	if newErr != nil {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: newErr.Error()})
+		return
+	}
+	if rootPath != newRootPath {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Cannot move files between personal and shared workspaces"})
 		return
 	}
 	if err := ensureWorkspaceRoot(rootPath, uid, gid); err != nil {
@@ -571,6 +608,7 @@ func RenameWorkspaceFileHandler(c *gin.Context) {
 
 // @Summary Create lab workspace directory
 // @Description Creates a directory inside the authenticated user's editable lab workspace root.
+// @Description Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
 // @Tags Labs
 // @Security BearerAuth
 // @Accept json

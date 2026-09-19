@@ -209,7 +209,7 @@ jobs:
 
       - name: Start API server
         run: |
-          sudo bash -c "cd '$PWD' && env API_SERVER_HOST=127.0.0.1 ./dist/clab-api-server -env-file .env > server.log 2>&1 & echo \$! > server.pid"
+          sudo bash -c "cd '$PWD' && env API_SERVER_HOST=127.0.0.1 CLAB_SHARED_LABS_ROOT=/tmp/clab-shared-labs-ci ./dist/clab-api-server -env-file .env > server.log 2>&1 & echo \$! > server.pid"
           sudo chown "$USER:$USER" server.log server.pid
           sleep 5
 
@@ -220,6 +220,7 @@ jobs:
       - name: Run Task tests
         env:
           GOTEST_LOG_LEVEL: debug
+          GOTEST_SHARED_LABS: 'true'
         run: task test
 
       - name: Stop API server

@@ -112,7 +112,7 @@ func resolveLabTopologyDocPaths(c *gin.Context, docType string) (*labTopologyDoc
 		return paths, nil
 	}
 
-	if !isSuperuser(username) && labInfo.Owner != username {
+	if !canAccessLab(username, labInfo) {
 		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("lab '%s' not found or not owned by user", labName)})
 		return nil, fmt.Errorf("lab '%s' not found or not owned by user", labName)
 	}
@@ -127,6 +127,16 @@ func resolveLabTopologyDocPaths(c *gin.Context, docType string) (*labTopologyDoc
 		if docType == "annotations" {
 			paths.runningDoc += ".annotations.json"
 		}
+	}
+	if isSharedLabPath(labInfo.AbsLabPath) {
+		if err := validateSharedPath(paths.runningDoc); err != nil {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: err.Error()})
+			return nil, err
+		}
+		// Collaborators edit the shared source, including a new annotations file.
+		// Never fall back to a private copy in the deploying user's workspace.
+		paths.localDoc = paths.runningDoc
+		return paths, nil
 	}
 
 	ownerLocalDoc, _, _, _, ownerPathErr := resolveDefaultTopologyDocPath(paths.ownerUsername, labName, docType)
@@ -146,7 +156,7 @@ func readLabTopologyDoc(c *gin.Context, docType string) {
 	}
 
 	if paths.deployed && strings.TrimSpace(paths.runningDoc) != "" {
-		content, readErr := os.ReadFile(paths.runningDoc)
+		content, readErr := readLabTopologyDocFile(paths.runningDoc)
 		if readErr == nil {
 			c.Data(http.StatusOK, "text/plain; charset=utf-8", content)
 			return
@@ -157,7 +167,7 @@ func readLabTopologyDoc(c *gin.Context, docType string) {
 		}
 	}
 
-	content, readErr := os.ReadFile(paths.localDoc)
+	content, readErr := readLabTopologyDocFile(paths.localDoc)
 	if readErr != nil {
 		if os.IsNotExist(readErr) {
 			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: "File not found"})
@@ -170,7 +180,35 @@ func readLabTopologyDoc(c *gin.Context, docType string) {
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", content)
 }
 
+func readLabTopologyDocFile(absPath string) ([]byte, error) {
+	if sharedRootContains(absPath) {
+		root, err := openWorkspaceRoot(sharedLabsRoot())
+		if err != nil {
+			return nil, err
+		}
+		defer root.Close()
+		rel, err := filepath.Rel(sharedLabsRoot(), absPath)
+		if err != nil {
+			return nil, err
+		}
+		return root.ReadFile(rel)
+	}
+	return os.ReadFile(absPath)
+}
+
 func writeLabTopologyDocFile(absPath, ownerUsername, labName string, body []byte) error {
+	if sharedRootContains(absPath) {
+		root, err := openWorkspaceRoot(sharedLabsRoot())
+		if err != nil {
+			return err
+		}
+		defer root.Close()
+		rel, err := filepath.Rel(sharedLabsRoot(), absPath)
+		if err != nil {
+			return err
+		}
+		return root.WriteFile(rel, body, 0640)
+	}
 	targetDir := filepath.Dir(absPath)
 	if mkdirErr := os.MkdirAll(targetDir, 0750); mkdirErr != nil {
 		return fmt.Errorf("failed to ensure lab directory: %w", mkdirErr)
