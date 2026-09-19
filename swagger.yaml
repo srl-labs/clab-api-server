@@ -1738,7 +1738,7 @@ paths:
         Returns details for all running labs.
 
         **Notes**
-        - Results are filtered by owner unless the caller is a superuser.
+        - Regular users see their own labs and labs in CLAB_SHARED_LABS_ROOT. Superusers see all labs.
       produces:
       - application/json
       responses:
@@ -1837,7 +1837,7 @@ paths:
   /api/v1/labs/{labName}:
     delete:
       description: |-
-        Destroys a lab by name after verifying ownership.
+        Destroys a lab by name after verifying access to an owned or shared lab, or superuser access.
 
         **Notes**
         - `stream=true` returns `application/x-ndjson` lifecycle events.
@@ -1852,8 +1852,8 @@ paths:
         in: query
         name: cleanup
         type: boolean
-      - description: Purge topology parent directory for managed lab paths (~/.clab
-          or CLAB_LABS_ROOT)
+      - description: Purge topology parent directory below the personal or shared
+          workspace root
         in: query
         name: purgeLabDir
         type: boolean
@@ -2041,6 +2041,7 @@ paths:
         - `dryRun=true` returns the apply plan without changing the lab.
         - `stream=true` returns `application/x-ndjson` lifecycle events.
         - `includeLogs=true` includes captured lifecycle logs in the JSON response.
+        Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
       parameters:
       - description: Lab name
         in: path
@@ -2225,6 +2226,7 @@ paths:
         - `path` defaults to `<labName>.clab.yml` when omitted.
         - `stream=true` returns `application/x-ndjson` lifecycle events.
         - `includeLogs=true` includes captured lifecycle logs in the JSON response.
+        Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
       parameters:
       - description: Lab name
         in: path
@@ -3291,8 +3293,9 @@ paths:
       - Labs
   /api/v1/labs/{labName}/topology/events:
     get:
-      description: Streams topology YAML/annotations change events for a single lab
-        topology document pair as NDJSON.
+      description: |-
+        Streams topology YAML/annotations change events for a single lab topology document pair as NDJSON.
+        Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
       parameters:
       - description: Lab name
         in: path
@@ -3331,8 +3334,9 @@ paths:
       - Labs
   /api/v1/labs/{labName}/topology/file:
     delete:
-      description: Deletes a file inside the specified lab directory using a scoped
-        relative path.
+      description: |-
+        Deletes a file inside the specified lab directory using a scoped relative path.
+        Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
       parameters:
       - description: Lab name
         in: path
@@ -3370,8 +3374,9 @@ paths:
       tags:
       - Labs
     get:
-      description: Reads a file from within the specified lab directory using a scoped
-        relative path.
+      description: |-
+        Reads a file from within the specified lab directory using a scoped relative path.
+        Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
       parameters:
       - description: Lab name
         in: path
@@ -3413,7 +3418,9 @@ paths:
       tags:
       - Labs
     head:
-      description: Checks whether a file exists inside the specified lab directory.
+      description: |-
+        Checks whether a file exists inside the specified lab directory.
+        Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
       parameters:
       - description: Lab name
         in: path
@@ -3445,8 +3452,9 @@ paths:
     put:
       consumes:
       - text/plain
-      description: Writes a file inside the specified lab directory using a scoped
-        relative path.
+      description: |-
+        Writes a file inside the specified lab directory using a scoped relative path.
+        Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
       parameters:
       - description: Lab name
         in: path
@@ -3493,8 +3501,9 @@ paths:
     post:
       consumes:
       - application/json
-      description: Renames or moves a file inside the specified lab directory using
-        scoped relative paths.
+      description: |-
+        Renames or moves a file inside the specified lab directory using scoped relative paths.
+        Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
       parameters:
       - description: Lab name
         in: path
@@ -3768,10 +3777,9 @@ paths:
       - Labs
   /api/v1/labs/topology/files:
     get:
-      description: Recursively discovers editable *.clab.yml and *.clab.yaml files
-        in the authenticated user's lab workspace. YAML and annotation paths are relative
-        to the workspace root. Hidden directories, dependency caches, containerlab
-        runtime directories, and symbolic links are excluded.
+      description: |-
+        Recursively discovers editable *.clab.yml and *.clab.yaml files in the authenticated user's lab workspace. YAML and annotation paths are relative to the workspace root. Hidden directories, dependency caches, containerlab runtime directories, and symbolic links are excluded.
+        Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
       produces:
       - application/json
       responses:
@@ -3843,8 +3851,9 @@ paths:
     post:
       consumes:
       - application/json
-      description: Creates a directory inside the authenticated user's editable lab
-        workspace root.
+      description: |-
+        Creates a directory inside the authenticated user's editable lab workspace root.
+        Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
       parameters:
       - description: Directory path
         in: body
@@ -3878,8 +3887,9 @@ paths:
       - Labs
   /api/v1/labs/workspace/events:
     get:
-      description: Streams create/change/delete/rename events inside the authenticated
-        user's editable lab workspace root as NDJSON.
+      description: |-
+        Streams create/change/delete/rename events inside the authenticated user's editable lab workspace root as NDJSON.
+        Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
       produces:
       - application/x-ndjson
       responses:
@@ -3902,8 +3912,9 @@ paths:
       - Labs
   /api/v1/labs/workspace/file:
     delete:
-      description: Deletes a file or directory inside the authenticated user's editable
-        lab workspace root. Directories with children require recursive=true.
+      description: |-
+        Deletes a file or directory inside the authenticated user's editable lab workspace root. Directories with children require recursive=true.
+        Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
       parameters:
       - description: Relative file path inside the workspace root
         in: query
@@ -3939,8 +3950,9 @@ paths:
       tags:
       - Labs
     get:
-      description: Reads a text or binary file from the authenticated user's editable
-        lab workspace root.
+      description: |-
+        Reads a text or binary file from the authenticated user's editable lab workspace root.
+        Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
       parameters:
       - description: Relative file path inside the workspace root
         in: query
@@ -3978,8 +3990,9 @@ paths:
     put:
       consumes:
       - text/plain
-      description: Writes a file inside the authenticated user's editable lab workspace
-        root.
+      description: |-
+        Writes a file inside the authenticated user's editable lab workspace root.
+        Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
       parameters:
       - description: Relative file path inside the workspace root
         in: query
@@ -4020,8 +4033,9 @@ paths:
     post:
       consumes:
       - application/json
-      description: Renames or moves a file inside the authenticated user's editable
-        lab workspace root.
+      description: |-
+        Renames or moves a file inside the authenticated user's editable lab workspace root.
+        Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
       parameters:
       - description: Old and new relative file paths
         in: body
@@ -4055,8 +4069,9 @@ paths:
       - Labs
   /api/v1/labs/workspace/tree:
     get:
-      description: Lists files and folders inside the authenticated user's editable
-        lab workspace root.
+      description: |-
+        Lists files and folders inside the authenticated user's editable lab workspace root.
+        Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
       parameters:
       - description: Relative directory path inside the workspace root
         in: query
