@@ -65,6 +65,110 @@ func (s *TopologyFilesSuite) deleteTopologyFile(labName, relPath string) {
 	_, _, _ = s.doRequest("DELETE", s.topologyFileURL(labName, relPath), s.apiUserHeaders, nil, s.cfg.RequestTimeout)
 }
 
+func (s *TopologyFilesSuite) TestNestedRepositoryTopologies() {
+	repo := fmt.Sprintf("%s-monorepo-%s", s.cfg.LabNamePrefix, s.randomSuffix(5))
+	workspaceURL := s.cfg.APIURL + "/api/v1/labs/workspace"
+	defer func() {
+		_, _, _ = s.doRequest("DELETE", workspaceURL+"/file?recursive=true&path="+url.QueryEscape(repo), s.apiUserHeaders, nil, s.cfg.RequestTimeout)
+	}()
+	for _, dir := range []string{repo, repo + "/labs", repo + "/artifacts", repo + "/.git", repo + "/labs/clab-generated"} {
+		body, status, err := s.doRequest("POST", workspaceURL+"/directory", s.apiUserHeaders, bytes.NewBuffer(s.mustMarshal(map[string]string{"path": dir})), s.cfg.RequestTimeout)
+		s.Require().NoError(err)
+		s.Require().Equal(http.StatusOK, status, string(body))
+	}
+	writeWorkspaceFile := func(path, content string) {
+		s.T().Helper()
+		body, status, err := s.doRequest("PUT", workspaceURL+"/file?path="+url.QueryEscape(path), s.apiUserHeaders, bytes.NewBufferString(content), s.cfg.RequestTimeout)
+		s.Require().NoError(err)
+		s.Require().Equal(http.StatusOK, status, string(body))
+	}
+	writeWorkspaceFile(repo+"/artifacts/shared.txt", "shared repository artifact\n")
+	writeWorkspaceFile(repo+"/.git/hidden.clab.yml", "name: hidden\n")
+	writeWorkspaceFile(repo+"/labs/clab-generated/.state.clab.yaml", "name: hidden\n")
+	writeWorkspaceFile(repo+"/labs/clab-generated/copy.clab.yml", "name: hidden\n")
+
+	paths := []string{"labs/topology1.clab.yaml", "labs/topology2.clab.yml", "labs/topology3.clab.yaml", "topology4.clab.yml", "topology5.clab.yaml"}
+	expected := make(map[string]string, len(paths))
+	for i, path := range paths {
+		labName := fmt.Sprintf("%s-%d", repo, i+1)
+		content := strings.ReplaceAll(s.cfg.SimpleTopologyContent, "{lab_name}", labName)
+		writeWorkspaceFile(repo+"/"+path, content)
+		expected[repo+"/"+path] = labName
+	}
+	listURL := s.cfg.APIURL + "/api/v1/labs/topology/files"
+	body, status, err := s.doRequest("GET", listURL, s.apiUserHeaders, nil, s.cfg.RequestTimeout)
+	s.Require().NoError(err)
+	s.Require().Equal(http.StatusOK, status, string(body))
+	var entries []topologyEntry
+	s.Require().NoError(json.Unmarshal(body, &entries))
+	found := make(map[string]topologyEntry)
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.YamlFileName, repo+"/") {
+			continue
+		}
+		s.Require().Contains(expected, entry.YamlFileName)
+		s.Require().Equal(expected[entry.YamlFileName], entry.LabName)
+		s.Require().Equal(entry.YamlFileName+".annotations.json", entry.AnnotationsFileName)
+		s.Require().False(entry.HasAnnotations)
+		found[entry.YamlFileName] = entry
+	}
+	s.Require().Len(found, len(expected))
+
+	// Use the listing's paths for every document operation and deploy each of
+	// the three nested topologies while the others remain running.
+	for _, path := range paths[:3] {
+		entry := found[repo+"/"+path]
+		body, status, err = s.doRequest("GET", s.topologyFileURL(entry.LabName, entry.YamlFileName), s.apiUserHeaders, nil, s.cfg.RequestTimeout)
+		s.Require().NoError(err)
+		s.Require().Equal(http.StatusOK, status, string(body))
+		var topology map[string]interface{}
+		s.Require().NoError(json.Unmarshal(body, &topology))
+		nodes := topology["topology"].(map[string]interface{})["nodes"].(map[string]interface{})
+		nodes["srl1"].(map[string]interface{})["binds"] = []string{"../artifacts/shared.txt:/tmp/shared.txt:ro"}
+		body, status, err = s.doRequest("PUT", s.topologyFileURL(entry.LabName, entry.YamlFileName), s.apiUserHeaders, bytes.NewBuffer(s.mustMarshal(topology)), s.cfg.RequestTimeout)
+		s.Require().NoError(err)
+		s.Require().Equal(http.StatusOK, status, string(body))
+		annotations := `{"nodes":{"srl1":{"x":10,"y":20}}}`
+		body, status, err = s.doRequest("PUT", s.topologyFileURL(entry.LabName, entry.AnnotationsFileName), s.apiUserHeaders, bytes.NewBufferString(annotations), s.cfg.RequestTimeout)
+		s.Require().NoError(err)
+		s.Require().Equal(http.StatusOK, status, string(body))
+		body, status, err = s.doRequest("GET", workspaceURL+"/file?path="+url.QueryEscape(entry.AnnotationsFileName), s.apiUserHeaders, nil, s.cfg.RequestTimeout)
+		s.Require().NoError(err)
+		s.Require().Equal(http.StatusOK, status, string(body))
+		s.Require().JSONEq(annotations, string(body))
+
+		defer s.cleanupLab(entry.LabName, true)
+		deployURL := fmt.Sprintf("%s/api/v1/labs/%s/deploy?path=%s", s.cfg.APIURL, entry.LabName, url.QueryEscape(entry.YamlFileName))
+		body, status, err = s.doRequest("POST", deployURL, s.apiUserHeaders, nil, s.cfg.DeployTimeout)
+		s.Require().NoError(err)
+		s.Require().Equal(http.StatusOK, status, string(body))
+		var deployed ClabInspectOutput
+		s.Require().NoError(json.Unmarshal(body, &deployed))
+		s.Require().Contains(deployed, entry.LabName)
+		nodeName := "clab-" + entry.LabName + "-srl1"
+		execURL := fmt.Sprintf("%s/api/v1/labs/%s/exec?nodeFilter=%s", s.cfg.APIURL, entry.LabName, url.QueryEscape(nodeName))
+		body, status, err = s.doRequest("POST", execURL, s.apiUserHeaders, bytes.NewBuffer(s.mustMarshal(map[string]string{"command": "cat /tmp/shared.txt"})), s.cfg.RequestTimeout)
+		s.Require().NoError(err)
+		s.Require().Equal(http.StatusOK, status, string(body))
+		s.Require().Contains(string(body), "shared repository artifact")
+	}
+	body, status, err = s.doRequest("GET", listURL, s.apiUserHeaders, nil, s.cfg.RequestTimeout)
+	s.Require().NoError(err)
+	s.Require().Equal(http.StatusOK, status, string(body))
+	s.Require().NoError(json.Unmarshal(body, &entries))
+	listed := 0
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.YamlFileName, repo+"/") {
+			listed++
+			s.Require().Contains(expected, entry.YamlFileName, "Runtime copies must not be discovered")
+			if strings.Contains(entry.YamlFileName, "/labs/") {
+				s.Require().True(entry.HasAnnotations)
+			}
+		}
+	}
+	s.Require().Equal(len(expected), listed)
+}
+
 func (s *TopologyFilesSuite) TestTopologyFileLifecycleAndDeploy() {
 	labName := fmt.Sprintf("%s-topofile-%s", s.cfg.LabNamePrefix, s.randomSuffix(5))
 	topologyPath := labName + ".clab.yml"
@@ -91,7 +195,7 @@ func (s *TopologyFilesSuite) TestTopologyFileLifecycleAndDeploy() {
 	s.Require().NoError(json.Unmarshal(bodyBytes, &entries), "Failed to unmarshal topology file list. Body: %s", string(bodyBytes))
 	found := false
 	for _, entry := range entries {
-		if entry.LabName == labName && entry.YamlFileName == topologyPath {
+		if entry.LabName == labName && entry.YamlFileName == labName+"/"+topologyPath {
 			found = true
 			s.Require().Equal("undeployed", entry.DeploymentState)
 			break

@@ -42,7 +42,7 @@ func resolveDefaultTopologyDocPath(username, labName, docType string) (string, s
 }
 
 // @Summary List editable lab topology files
-// @Description Returns editable topology entries from the authenticated user's lab directory.
+// @Description Recursively discovers editable *.clab.yml and *.clab.yaml files in the authenticated user's lab workspace. YAML and annotation paths are relative to the workspace root. Hidden directories, dependency caches, containerlab runtime directories, and symbolic links are excluded.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce json
@@ -378,8 +378,8 @@ func ImportTopologyFromURLHandler(c *gin.Context) {
 
 	topology := models.TopologyEntry{
 		LabName:             labName,
-		YamlFileName:        fileName,
-		AnnotationsFileName: fileName + ".annotations.json",
+		YamlFileName:        filepath.ToSlash(filepath.Join(labName, fileName)),
+		AnnotationsFileName: filepath.ToSlash(filepath.Join(labName, fileName+".annotations.json")),
 		HasAnnotations:      hasAnnotations,
 		DeploymentState:     "undeployed",
 	}
@@ -403,7 +403,7 @@ func ImportTopologyFromURLHandler(c *gin.Context) {
 // @Security BearerAuth
 // @Produce json
 // @Param labName path string true "Lab name"
-// @Param path query string false "Relative topology file path inside lab directory (defaults to <labName>.clab.yml)"
+// @Param path query string false "Workspace-relative or legacy lab-relative topology path (defaults to <labName>.clab.yml)"
 // @Param reconfigure query boolean false "Allow overwriting an existing lab"
 // @Param maxWorkers query int false "Limit concurrent workers"
 // @Param exportTemplate query string false "Custom Go template file for topology data export"
@@ -597,7 +597,7 @@ func DeployTopologyHandler(c *gin.Context) {
 // @Security BearerAuth
 // @Produce json
 // @Param labName path string true "Lab name"
-// @Param path query string false "Relative topology file path inside lab directory (defaults to running topology path or <labName>.clab.yml)"
+// @Param path query string false "Workspace-relative or legacy lab-relative topology path (defaults to running topology path or <labName>.clab.yml)"
 // @Param dryRun query boolean false "Show apply actions without applying them"
 // @Param maxWorkers query int false "Limit concurrent workers for new nodes"
 // @Param exportTemplate query string false "Custom Go template file for topology data export"
@@ -773,7 +773,7 @@ func ApplyTopologyHandler(c *gin.Context) {
 // @Security BearerAuth
 // @Produce plain
 // @Param labName path string true "Lab name"
-// @Param path query string true "Relative file path inside lab directory"
+// @Param path query string true "Workspace-relative path from the topology listing, or legacy lab-relative path"
 // @Success 200 {string} string "File content"
 // @Failure 400 {object} models.ErrorResponse "Invalid path"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
@@ -810,7 +810,7 @@ func GetTopologyFileHandler(c *gin.Context) {
 // @Tags Labs
 // @Security BearerAuth
 // @Param labName path string true "Lab name"
-// @Param path query string true "Relative file path inside lab directory"
+// @Param path query string true "Workspace-relative path from the topology listing, or legacy lab-relative path"
 // @Success 200 "File exists"
 // @Failure 400 "Invalid path"
 // @Failure 401 "Unauthorized"
@@ -848,7 +848,7 @@ func HeadTopologyFileHandler(c *gin.Context) {
 // @Accept plain
 // @Produce json
 // @Param labName path string true "Lab name"
-// @Param path query string true "Relative file path inside lab directory"
+// @Param path query string true "Workspace-relative path from the topology listing, or legacy lab-relative path"
 // @Param content body string true "File content"
 // @Success 200 {object} models.SimpleSuccessResponse "Write success"
 // @Failure 400 {object} models.ErrorResponse "Invalid input"
@@ -892,7 +892,7 @@ func PutTopologyFileHandler(c *gin.Context) {
 // @Security BearerAuth
 // @Produce json
 // @Param labName path string true "Lab name"
-// @Param path query string true "Relative file path inside lab directory"
+// @Param path query string true "Workspace-relative path from the topology listing, or legacy lab-relative path"
 // @Success 200 {object} models.SimpleSuccessResponse "Delete success"
 // @Failure 400 {object} models.ErrorResponse "Invalid path"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
@@ -986,128 +986,105 @@ func RenameTopologyFileHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
+func isTopologyFileName(name string) bool {
+	lower := strings.ToLower(name)
+	return !strings.HasPrefix(name, ".") && (strings.HasSuffix(lower, ".clab.yml") || strings.HasSuffix(lower, ".clab.yaml"))
+}
+
+func skipTopologyDirectory(path, name string) bool {
+	if strings.HasPrefix(name, ".") || name == "node_modules" || name == "__pycache__" {
+		return true
+	}
+	// Containerlab writes state and exported topology data into its runtime
+	// directory. Do not mistake a repository named clab-* for runtime output.
+	for _, marker := range []string{".state.clab.yaml", "topology-data.json"} {
+		if info, err := os.Lstat(filepath.Join(path, marker)); err == nil && info.Mode().IsRegular() {
+			return true
+		}
+	}
+	return false
+}
+
+func discoveredTopologyLabName(baseDir, relativePath string, siblingCount int) string {
+	name := filepath.Base(relativePath)
+	dir := filepath.Dir(relativePath)
+	stem := name[:strings.LastIndex(strings.ToLower(name), ".clab.")]
+	if dir == "." {
+		return stem // Preserve flat workspace names.
+	}
+	if filepath.Dir(dir) == "." && isValidLabName(dir) && (siblingCount == 1 || stem == dir) {
+		return dir // Preserve existing one-directory-per-lab workspace names.
+	}
+
+	// Repository filenames need not match the lab's runtime name.
+	var topology struct {
+		Name string `yaml:"name"`
+	}
+	if content, err := os.ReadFile(filepath.Join(baseDir, relativePath)); err == nil {
+		if yaml.Unmarshal(content, &topology) == nil && isValidLabName(topology.Name) {
+			return topology.Name
+		}
+	}
+	// Keep incomplete/invalid YAML visible so it can be repaired in the editor.
+	return sanitizeImportedLabName(stem)
+}
+
 func listTopologyEntries(baseDir string) ([]models.TopologyEntry, error) {
 	entries := []models.TopologyEntry{}
-	entryByLab := map[string]models.TopologyEntry{}
-
-	dirEntries, err := os.ReadDir(baseDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return entries, nil
+	paths := []string{}
+	siblings := map[string]int{}
+	err := filepath.WalkDir(baseDir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if path == baseDir && !os.IsNotExist(walkErr) {
+				return walkErr
+			}
+			// An unreadable or concurrently removed subtree should not hide other labs.
+			return nil
 		}
+		if entry.IsDir() {
+			if path != baseDir && skipTopologyDirectory(path, entry.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !entry.Type().IsRegular() || !isTopologyFileName(entry.Name()) {
+			return nil
+		}
+		relativePath, err := filepath.Rel(baseDir, path)
+		if err != nil {
+			return err
+		}
+		paths = append(paths, relativePath)
+		siblings[filepath.Dir(relativePath)]++
+		return nil
+	})
+	if err != nil {
 		return nil, fmt.Errorf("failed to read labs directory: %w", err)
 	}
 
-	for _, entry := range dirEntries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		labName := entry.Name()
+	for _, relativePath := range paths {
+		labName := discoveredTopologyLabName(baseDir, relativePath, siblings[filepath.Dir(relativePath)])
 		if !isValidLabName(labName) {
 			continue
 		}
-
-		labDir := filepath.Join(baseDir, labName)
-		labDirEntries, readErr := os.ReadDir(labDir)
-		if readErr != nil {
-			continue
-		}
-
-		yamlCandidates := []string{}
-		for _, labEntry := range labDirEntries {
-			if labEntry.IsDir() {
-				continue
-			}
-			name := labEntry.Name()
-			lower := strings.ToLower(name)
-			if strings.HasSuffix(lower, ".clab.yml") || strings.HasSuffix(lower, ".clab.yaml") {
-				yamlCandidates = append(yamlCandidates, name)
-			}
-		}
-		if len(yamlCandidates) == 0 {
-			continue
-		}
-
-		sort.Strings(yamlCandidates)
-		yamlFileName := yamlCandidates[0]
-		preferredYml := labName + ".clab.yml"
-		preferredYaml := labName + ".clab.yaml"
-		for _, candidate := range yamlCandidates {
-			if candidate == preferredYml {
-				yamlFileName = candidate
-				break
-			}
-			if candidate == preferredYaml {
-				yamlFileName = candidate
-			}
-		}
-
-		annotationsFileName := yamlFileName + ".annotations.json"
-		annotationsPath := filepath.Join(labDir, annotationsFileName)
-
-		_, hasAnnotations := func() (os.FileInfo, bool) {
-			info, err := os.Stat(annotationsPath)
-			return info, err == nil
-		}()
-
-		topologyEntry := models.TopologyEntry{
+		yamlPath := filepath.ToSlash(relativePath)
+		annotationsPath := yamlPath + ".annotations.json"
+		info, statErr := os.Lstat(filepath.Join(baseDir, filepath.FromSlash(annotationsPath)))
+		entries = append(entries, models.TopologyEntry{
 			LabName:             labName,
-			YamlFileName:        yamlFileName,
-			AnnotationsFileName: annotationsFileName,
-			HasAnnotations:      hasAnnotations,
+			YamlFileName:        yamlPath,
+			AnnotationsFileName: annotationsPath,
+			HasAnnotations:      statErr == nil && info.Mode().IsRegular(),
 			DeploymentState:     "undeployed",
-		}
-		entries = append(entries, topologyEntry)
-		entryByLab[labName] = topologyEntry
-	}
-
-	for _, entry := range dirEntries {
-		if entry.IsDir() {
-			continue
-		}
-
-		name := entry.Name()
-		lower := strings.ToLower(name)
-		if !strings.HasSuffix(lower, ".clab.yml") && !strings.HasSuffix(lower, ".clab.yaml") {
-			continue
-		}
-
-		labName := name
-		if strings.HasSuffix(lower, ".clab.yml") {
-			labName = name[:len(name)-len(".clab.yml")]
-		} else if strings.HasSuffix(lower, ".clab.yaml") {
-			labName = name[:len(name)-len(".clab.yaml")]
-		}
-		if !isValidLabName(labName) {
-			continue
-		}
-		if _, exists := entryByLab[labName]; exists {
-			continue
-		}
-
-		annotationsFileName := name + ".annotations.json"
-		annotationsPath := filepath.Join(baseDir, annotationsFileName)
-		_, hasAnnotations := func() (os.FileInfo, bool) {
-			info, err := os.Stat(annotationsPath)
-			return info, err == nil
-		}()
-
-		topologyEntry := models.TopologyEntry{
-			LabName:             labName,
-			YamlFileName:        name,
-			AnnotationsFileName: annotationsFileName,
-			HasAnnotations:      hasAnnotations,
-			DeploymentState:     "undeployed",
-		}
-		entries = append(entries, topologyEntry)
-		entryByLab[labName] = topologyEntry
+		})
 	}
 
 	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].LabName == entries[j].LabName {
+			return entries[i].YamlFileName < entries[j].YamlFileName
+		}
 		return entries[i].LabName < entries[j].LabName
 	})
-
 	return entries, nil
 }
 
@@ -1175,6 +1152,14 @@ func resolveTopologyFilePath(username, labName, relPath string) (absolutePath, l
 	}
 
 	cleanLabDir := filepath.Clean(labDir)
+	baseDir := filepath.Dir(cleanLabDir)
+	if workspacePath, resolveErr := resolveWorkspaceTopologyPath(baseDir, cleanPath); resolveErr != nil {
+		return "", "", -1, -1, resolveErr
+	} else if workspacePath != "" {
+		// Keep labDir as the managed lab directory for legacy directory setup;
+		// workspace file parents already exist and retain their ownership.
+		return workspacePath, cleanLabDir, uid, gid, nil
+	}
 	absPath := filepath.Clean(filepath.Join(cleanLabDir, cleanPath))
 
 	// Canonical root fallback is only relevant for managed local lab directories.
@@ -1187,4 +1172,35 @@ func resolveTopologyFilePath(username, labName, relPath string) (absolutePath, l
 	}
 
 	return absPath, cleanLabDir, uid, gid, nil
+}
+
+// resolveWorkspaceTopologyPath recognizes paths returned by topology discovery.
+// A leading existing workspace directory distinguishes these from legacy paths
+// relative to <workspace>/<labName>. This also covers new annotations/temp files.
+func resolveWorkspaceTopologyPath(baseDir, cleanPath string) (string, error) {
+	parts := strings.Split(cleanPath, string(filepath.Separator))
+	if len(parts) < 2 {
+		return "", nil
+	}
+	current := baseDir
+	for i, part := range parts {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			if i == 0 {
+				return "", nil // Legacy lab-relative path.
+			}
+			return filepath.Join(baseDir, cleanPath), nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve workspace path: %w", err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("workspace topology paths must not contain symbolic links")
+		}
+		if i == 0 && !info.IsDir() {
+			return "", nil
+		}
+	}
+	return current, nil
 }

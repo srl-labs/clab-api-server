@@ -137,6 +137,10 @@ func TestImportTopologyPreservesExistingLab(t *testing.T) {
 
 			response := importTopology(t, router, sourceURL, "")
 			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+			var imported models.ImportTopologyFromURLResponse
+			require.NoError(t, json.Unmarshal(response.Body.Bytes(), &imported))
+			require.Equal(t, firstName+"/"+firstName+".clab.yml", imported.Topology.YamlFileName)
+			require.Equal(t, imported.Topology.YamlFileName+".annotations.json", imported.Topology.AnnotationsFileName)
 			firstTopology, err := os.ReadFile(filepath.Join(firstDir, firstName+".clab.yml"))
 			require.NoError(t, err)
 			require.Contains(t, string(firstTopology), "name: "+firstName)

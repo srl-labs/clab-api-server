@@ -288,14 +288,48 @@ curl -k -X POST https://localhost:8090/api/v1/labs \
 
 ## Standalone UI Endpoints
 
-The standalone `containerlab-gui` app uses these authenticated endpoints:
+The standalone UI uses these authenticated endpoints:
 
-- `GET /api/v1/topologies` - list editable topology files for the user
-- `GET|PUT /api/v1/topologies/{labName}/yaml` - read/write canonical topology YAML (`<lab>.clab.yml`)
-- `GET|PUT /api/v1/topologies/{labName}/annotations` - read/write canonical annotations JSON (`<lab>.clab.yml.annotations.json`)
-- `GET|PUT|DELETE|HEAD /api/v1/topologies/{labName}/file?path=<relativePath>` - scoped file operations inside the lab directory
-- `POST /api/v1/topologies/{labName}/file/rename` - scoped rename operation
-- `POST /api/v1/topologies/{labName}/deploy` - deploy an on-disk topology by lab name
+- `GET /api/v1/labs/topology/files` - recursively list editable topology files
+- `GET|PUT /api/v1/labs/{labName}/topology/yaml` - read/write the running lab topology or the canonical undeployed topology (`<lab>.clab.yml`)
+- `GET|PUT /api/v1/labs/{labName}/topology/annotations` - read/write the corresponding canonical annotations
+- `GET|PUT|DELETE|HEAD /api/v1/labs/{labName}/topology/file?path=<relativePath>` - file operations using paths returned by the listing
+- `POST /api/v1/labs/{labName}/topology/file/rename` - rename a file
+- `POST /api/v1/labs/{labName}/deploy?path=<relativePath>` - deploy a selected on-disk topology
+
+You can keep multiple topologies and shared artifacts in one Git repository under
+`~/.clab` (or `CLAB_LABS_ROOT/<username>`). Discovery includes every `*.clab.yml`
+and `*.clab.yaml` file in nested directories. For example, `repo/labs/topology1.clab.yaml`
+and `repo/labs/topology2.clab.yaml` appear as separate entries:
+
+```json
+{
+  "labName": "topology1",
+  "yamlFileName": "repo/labs/topology1.clab.yaml",
+  "annotationsFileName": "repo/labs/topology1.clab.yaml.annotations.json",
+  "hasAnnotations": false,
+  "deploymentState": "undeployed"
+}
+```
+
+`yamlFileName` and `annotationsFileName` are paths relative to the managed workspace
+root. Use the complete returned path to open, edit, deploy, or annotate that
+specific topology, including when different repositories use the same filename.
+For example, deploy the entry above with:
+
+```bash
+curl -k -X POST -H "Authorization: Bearer <token>" \
+  'https://localhost:8090/api/v1/labs/topology1/deploy?path=repo%2Flabs%2Ftopology1.clab.yaml'
+```
+
+Existing flat and one-directory-per-lab workspaces keep their lab names, and legacy
+lab-relative file requests still work. Explicit workspace paths take precedence
+when their first directory exists in the workspace. New repository entries use
+the YAML `name`, falling back to the filename when necessary. The path identifies
+the document; lab names must still be distinct to deploy labs simultaneously.
+Hidden files/directories (including `.git`), `node_modules`, `__pycache__`, symbolic
+links, and runtime directories containing `.state.clab.yaml` or `topology-data.json`
+are excluded from discovery. Repositories named `clab-*` remain discoverable.
 
 Enable browser access by setting `CORS_ALLOWED_ORIGINS` (for example `https://localhost:5173`).
 
