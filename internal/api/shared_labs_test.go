@@ -88,6 +88,7 @@ func TestSharedWorkspaceAndTopologyFiles(t *testing.T) {
 	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &entries))
 	require.Len(t, entries, 1)
 	require.Equal(t, path, entries[0].YamlFileName)
+	require.Equal(t, filepath.Join(sharedRoot, "demo/demo.clab.yml"), entries[0].AbsolutePath)
 
 	for _, route := range []string{endpoint, "/file" + workspacePathQuery(path)} {
 		response = performWorkspaceRequest(router, http.MethodGet, route, nil)

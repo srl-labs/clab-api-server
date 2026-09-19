@@ -1137,6 +1137,7 @@ func listTopologyEntries(baseDir string) ([]models.TopologyEntry, error) {
 		info, statErr := os.Lstat(filepath.Join(baseDir, filepath.FromSlash(annotationsPath)))
 		entries = append(entries, models.TopologyEntry{
 			LabName:             labName,
+			AbsolutePath:        filepath.Join(baseDir, relativePath),
 			YamlFileName:        yamlPath,
 			AnnotationsFileName: annotationsPath,
 			HasAnnotations:      statErr == nil && info.Mode().IsRegular(),

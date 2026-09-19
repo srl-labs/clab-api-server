@@ -236,8 +236,7 @@ func StreamEventsHandler(c *gin.Context) {
 				return
 			}
 			if !isSuperuserUser {
-				labName, ok := extractLabFromEventLine(line)
-				if !ok || !allowedLab(labName) {
+				if !canAccessEventLine(username, line, allowedLab) {
 					continue
 				}
 			}
@@ -248,6 +247,33 @@ func StreamEventsHandler(c *gin.Context) {
 	}
 }
 
+// Container events retain their trusted runtime labels after deletion. Checking
+// the live lab at that point can suppress destroy events or reuse a cached grant
+// for a different lab that later takes the same name.
+func canAccessEventLine(username, line string, allowedLab func(string) bool) bool {
+	var evt clabEventJSON
+	if err := json.Unmarshal([]byte(line), &evt); err != nil {
+		return false
+	}
+	lab := evt.Attributes["lab"]
+	if lab == "" {
+		lab = evt.Attributes["containerlab"]
+	}
+	if lab == "" {
+		return false
+	}
+	owner := evt.Attributes["clab-owner"]
+	path := evt.Attributes["clab-topo-file"]
+	if path == "" {
+		path = evt.Attributes["lab-path"]
+	}
+	if owner != "" && path != "" {
+		return owner == username || isSharedLabPath(path)
+	}
+	// Interface events and older runtimes may not include ownership labels.
+	return allowedLab(lab)
+}
+
 func parseBoolQuery(c *gin.Context, name string, defaultValue bool) (bool, error) {
 	raw := c.Query(name)
 	if raw == "" {
@@ -255,26 +281,3 @@ func parseBoolQuery(c *gin.Context, name string, defaultValue bool) (bool, error
 	}
 	return strconv.ParseBool(raw)
 }
-
-func extractLabFromEventLine(line string) (string, bool) {
-	return extractLabFromJSONLine(line)
-}
-
-func extractLabFromJSONLine(line string) (string, bool) {
-	var evt clabEventJSON
-	if err := json.Unmarshal([]byte(line), &evt); err != nil {
-		return "", false
-	}
-	if evt.Attributes == nil {
-		return "", false
-	}
-	if lab := evt.Attributes["lab"]; lab != "" {
-		return lab, true
-	}
-	if lab := evt.Attributes["containerlab"]; lab != "" {
-		return lab, true
-	}
-	return "", false
-}
-
-// Plain-text event parsing removed; NDJSON-only output is supported.

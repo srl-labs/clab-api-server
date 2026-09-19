@@ -349,7 +349,12 @@ access through the API does not require changing Linux users' group memberships.
 
 The folder appears as `@shared` in the workspace tree. Topology discovery includes
 shared files with paths such as `@shared/demo/demo.clab.yml`, including when the
-lab is undeployed. Create the directory and upload a topology through the existing
+lab is undeployed. Each discovered topology includes `absolutePath`, the exact
+source path reported by running containers as `absLabPath` and by events as
+`lab-path`. Clients should match this path to identify the source of a running
+lab, including when multiple files declare the same lab name. Continue using
+`yamlFileName` (including its `@shared/` prefix) for file and deploy requests.
+Create the directory and upload a topology through the existing
 workspace endpoints, then deploy the returned path:
 
 ```bash
