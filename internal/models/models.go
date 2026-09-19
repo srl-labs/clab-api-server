@@ -244,8 +244,9 @@ type SaveConfigResponse struct {
 // TopologyEntry describes an editable topology file exposed to the standalone UI.
 type TopologyEntry struct {
 	LabName             string `json:"labName"`
-	YamlFileName        string `json:"yamlFileName"`        // Topology path relative to the managed workspace root.
-	AnnotationsFileName string `json:"annotationsFileName"` // Sidecar path relative to the managed workspace root.
+	AbsolutePath        string `json:"absolutePath,omitempty"` // Exact source path for matching runtime lab paths; file operations use yamlFileName.
+	YamlFileName        string `json:"yamlFileName"`           // Topology path relative to the managed workspace root.
+	AnnotationsFileName string `json:"annotationsFileName"`    // Sidecar path relative to the managed workspace root.
 	HasAnnotations      bool   `json:"hasAnnotations"`
 	DeploymentState     string `json:"deploymentState"` // undeployed (runtime state is derived from events stream)
 }

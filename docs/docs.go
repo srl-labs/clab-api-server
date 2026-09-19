@@ -7563,6 +7563,10 @@ const docTemplate = `{
         "models.TopologyEntry": {
             "type": "object",
             "properties": {
+                "absolutePath": {
+                    "description": "Exact source path for matching runtime lab paths; file operations use yamlFileName.",
+                    "type": "string"
+                },
                 "annotationsFileName": {
                     "description": "Sidecar path relative to the managed workspace root.",
                     "type": "string"

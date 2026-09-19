@@ -62,6 +62,7 @@ func TestListTopologyEntriesRecursive(t *testing.T) {
 	}
 	require.Len(t, entries, len(expected))
 	for i, entry := range entries {
+		require.Equal(t, filepath.Join(root, filepath.FromSlash(entry.YamlFileName)), entry.AbsolutePath)
 		require.Equal(t, expected[entry.YamlFileName], entry.LabName, "%+v", entry)
 		require.Equal(t, entry.YamlFileName+".annotations.json", entry.AnnotationsFileName)
 		require.Equal(t, entry.YamlFileName == "repo/labs/topology1.clab.yaml", entry.HasAnnotations)
