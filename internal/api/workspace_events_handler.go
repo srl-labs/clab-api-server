@@ -107,6 +107,7 @@ func workspaceEventIsDuplicate(lastByKey map[string]time.Time, event models.Work
 
 // @Summary Stream lab workspace file events
 // @Description Streams create/change/delete/rename events inside the authenticated user's editable lab workspace root as NDJSON.
+// @Description Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce application/x-ndjson
@@ -137,6 +138,17 @@ func StreamWorkspaceEventsHandler(c *gin.Context) {
 	if err := addWorkspaceWatchDirs(watcher, watchedDirs, rootPath); err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("failed to watch workspace directory: %v", err)})
 		return
+	}
+	sharedRoot := sharedLabsRoot()
+	if sharedRoot != "" {
+		if err := ensureWorkspaceRoot(sharedRoot, -1, -1); err != nil {
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
+			return
+		}
+		if err := addWorkspaceWatchDirs(watcher, watchedDirs, sharedRoot); err != nil {
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
+			return
+		}
 	}
 
 	c.Writer.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
@@ -188,6 +200,11 @@ func StreamWorkspaceEventsHandler(c *gin.Context) {
 			}
 
 			workspaceEvent, ok := buildWorkspaceFileEvent(rootPath, event.Name, event.Op)
+			if sharedRoot != "" && pathIsInsideRoot(sharedRoot, event.Name) {
+				workspaceEvent, ok = buildWorkspaceFileEvent(sharedRoot, event.Name, event.Op)
+				workspaceEvent.Path = sharedWorkspaceName + "/" + workspaceEvent.Path
+				workspaceEvent.ParentPath = filepath.ToSlash(filepath.Join(sharedWorkspaceName, workspaceEvent.ParentPath))
+			}
 			if !ok || workspaceEventIsDuplicate(lastByKey, workspaceEvent) {
 				continue
 			}

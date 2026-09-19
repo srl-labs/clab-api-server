@@ -29,7 +29,7 @@ const (
 )
 
 type labOwnershipEntry struct {
-	owner     string
+	allowed   bool
 	expiresAt time.Time
 }
 
@@ -173,20 +173,20 @@ func StreamEventsHandler(c *gin.Context) {
 		}
 		now := time.Now()
 		if entry, ok := ownershipCache[lab]; ok && now.Before(entry.expiresAt) {
-			return entry.owner == username
+			return entry.allowed
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), labOwnershipLookupLimit)
 		defer cancel()
 		info, exists, lookupErr := getLabInfo(ctx, username, lab)
-		owner := ""
+		allowed := false
 		if lookupErr == nil && exists && info != nil {
-			owner = info.Owner
+			allowed = canAccessLab(username, info)
 		}
 		ownershipCache[lab] = labOwnershipEntry{
-			owner:     owner,
+			allowed:   allowed,
 			expiresAt: now.Add(labOwnershipCacheTTL),
 		}
-		return owner == username
+		return allowed
 	}
 
 	scanner := bufio.NewScanner(streamReader)

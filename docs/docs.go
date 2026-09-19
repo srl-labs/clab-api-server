@@ -590,7 +590,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns details for all running labs.\n\n**Notes**\n- Results are filtered by owner unless the caller is a superuser.",
+                "description": "Returns details for all running labs.\n\n**Notes**\n- Regular users see their own labs and labs in CLAB_SHARED_LABS_ROOT. Superusers see all labs.",
                 "produces": [
                     "application/json"
                 ],
@@ -846,7 +846,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Recursively discovers editable *.clab.yml and *.clab.yaml files in the authenticated user's lab workspace. YAML and annotation paths are relative to the workspace root. Hidden directories, dependency caches, containerlab runtime directories, and symbolic links are excluded.",
+                "description": "Recursively discovers editable *.clab.yml and *.clab.yaml files in the authenticated user's lab workspace. YAML and annotation paths are relative to the workspace root. Hidden directories, dependency caches, containerlab runtime directories, and symbolic links are excluded.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
                 "produces": [
                     "application/json"
                 ],
@@ -955,7 +955,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Creates a directory inside the authenticated user's editable lab workspace root.",
+                "description": "Creates a directory inside the authenticated user's editable lab workspace root.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1012,7 +1012,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Streams create/change/delete/rename events inside the authenticated user's editable lab workspace root as NDJSON.",
+                "description": "Streams create/change/delete/rename events inside the authenticated user's editable lab workspace root as NDJSON.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
                 "produces": [
                     "application/x-ndjson"
                 ],
@@ -1049,7 +1049,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Reads a text or binary file from the authenticated user's editable lab workspace root.",
+                "description": "Reads a text or binary file from the authenticated user's editable lab workspace root.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
                 "produces": [
                     "text/plain"
                 ],
@@ -1105,7 +1105,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Writes a file inside the authenticated user's editable lab workspace root.",
+                "description": "Writes a file inside the authenticated user's editable lab workspace root.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
                 "consumes": [
                     "text/plain"
                 ],
@@ -1167,7 +1167,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Deletes a file or directory inside the authenticated user's editable lab workspace root. Directories with children require recursive=true.",
+                "description": "Deletes a file or directory inside the authenticated user's editable lab workspace root. Directories with children require recursive=true.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
                 "produces": [
                     "application/json"
                 ],
@@ -1225,7 +1225,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Renames or moves a file inside the authenticated user's editable lab workspace root.",
+                "description": "Renames or moves a file inside the authenticated user's editable lab workspace root.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1282,7 +1282,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Lists files and folders inside the authenticated user's editable lab workspace root.",
+                "description": "Lists files and folders inside the authenticated user's editable lab workspace root.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
                 "produces": [
                     "application/json"
                 ],
@@ -1517,7 +1517,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Destroys a lab by name after verifying ownership.\n\n**Notes**\n- ` + "`" + `stream=true` + "`" + ` returns ` + "`" + `application/x-ndjson` + "`" + ` lifecycle events.\n- ` + "`" + `includeLogs=true` + "`" + ` includes captured lifecycle logs in the JSON response.",
+                "description": "Destroys a lab by name after verifying access to an owned or shared lab, or superuser access.\n\n**Notes**\n- ` + "`" + `stream=true` + "`" + ` returns ` + "`" + `application/x-ndjson` + "`" + ` lifecycle events.\n- ` + "`" + `includeLogs=true` + "`" + ` includes captured lifecycle logs in the JSON response.",
                 "produces": [
                     "application/json"
                 ],
@@ -1541,7 +1541,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "boolean",
-                        "description": "Purge topology parent directory for managed lab paths (~/.clab or CLAB_LABS_ROOT)",
+                        "description": "Purge topology parent directory below the personal or shared workspace root",
                         "name": "purgeLabDir",
                         "in": "query"
                     },
@@ -1623,7 +1623,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Applies an on-disk topology from the authenticated user's lab directory. If the lab is not running, containerlab apply deploys it; otherwise it reconciles supported topology changes in place.\n\n**Notes**\n- ` + "`" + `path` + "`" + ` defaults to the running lab topology path when the lab exists, otherwise ` + "`" + `\u003clabName\u003e.clab.yml` + "`" + `.\n- ` + "`" + `dryRun=true` + "`" + ` returns the apply plan without changing the lab.\n- ` + "`" + `stream=true` + "`" + ` returns ` + "`" + `application/x-ndjson` + "`" + ` lifecycle events.\n- ` + "`" + `includeLogs=true` + "`" + ` includes captured lifecycle logs in the JSON response.",
+                "description": "Applies an on-disk topology from the authenticated user's lab directory. If the lab is not running, containerlab apply deploys it; otherwise it reconciles supported topology changes in place.\n\n**Notes**\n- ` + "`" + `path` + "`" + ` defaults to the running lab topology path when the lab exists, otherwise ` + "`" + `\u003clabName\u003e.clab.yml` + "`" + `.\n- ` + "`" + `dryRun=true` + "`" + ` returns the apply plan without changing the lab.\n- ` + "`" + `stream=true` + "`" + ` returns ` + "`" + `application/x-ndjson` + "`" + ` lifecycle events.\n- ` + "`" + `includeLogs=true` + "`" + ` includes captured lifecycle logs in the JSON response.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
                 "produces": [
                     "application/json"
                 ],
@@ -1893,7 +1893,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Deploys an on-disk topology from the authenticated user's lab directory.\n\n**Notes**\n- ` + "`" + `path` + "`" + ` defaults to ` + "`" + `\u003clabName\u003e.clab.yml` + "`" + ` when omitted.\n- ` + "`" + `stream=true` + "`" + ` returns ` + "`" + `application/x-ndjson` + "`" + ` lifecycle events.\n- ` + "`" + `includeLogs=true` + "`" + ` includes captured lifecycle logs in the JSON response.",
+                "description": "Deploys an on-disk topology from the authenticated user's lab directory.\n\n**Notes**\n- ` + "`" + `path` + "`" + ` defaults to ` + "`" + `\u003clabName\u003e.clab.yml` + "`" + ` when omitted.\n- ` + "`" + `stream=true` + "`" + ` returns ` + "`" + `application/x-ndjson` + "`" + ` lifecycle events.\n- ` + "`" + `includeLogs=true` + "`" + ` includes captured lifecycle logs in the JSON response.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
                 "produces": [
                     "application/json"
                 ],
@@ -3475,7 +3475,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Streams topology YAML/annotations change events for a single lab topology document pair as NDJSON.",
+                "description": "Streams topology YAML/annotations change events for a single lab topology document pair as NDJSON.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
                 "produces": [
                     "application/x-ndjson"
                 ],
@@ -3534,7 +3534,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Reads a file from within the specified lab directory using a scoped relative path.",
+                "description": "Reads a file from within the specified lab directory using a scoped relative path.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
                 "produces": [
                     "text/plain"
                 ],
@@ -3597,7 +3597,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Writes a file inside the specified lab directory using a scoped relative path.",
+                "description": "Writes a file inside the specified lab directory using a scoped relative path.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
                 "consumes": [
                     "text/plain"
                 ],
@@ -3666,7 +3666,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Deletes a file inside the specified lab directory using a scoped relative path.",
+                "description": "Deletes a file inside the specified lab directory using a scoped relative path.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
                 "produces": [
                     "application/json"
                 ],
@@ -3723,7 +3723,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Checks whether a file exists inside the specified lab directory.",
+                "description": "Checks whether a file exists inside the specified lab directory.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
                 "tags": [
                     "Labs"
                 ],
@@ -3770,7 +3770,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Renames or moves a file inside the specified lab directory using scoped relative paths.",
+                "description": "Renames or moves a file inside the specified lab directory using scoped relative paths.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
                 "consumes": [
                     "application/json"
                 ],

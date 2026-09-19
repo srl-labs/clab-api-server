@@ -223,6 +223,7 @@ sudo systemctl status clab-api-server
 | `SUPERUSER_GROUP` | `clab_admins` | Linux group for elevated privileges |
 | `CLAB_RUNTIME` | `docker` | Container runtime used by Containerlab |
 | `CLAB_LABS_ROOT` | unset | Optional absolute root for managed lab workspaces. When set, users store labs under `$CLAB_LABS_ROOT/<username>/`; otherwise labs use `<home>/.clab/`. |
+| `CLAB_SHARED_LABS_ROOT` | unset | Optional absolute folder shared by all authenticated API users, exposed as `@shared/` in workspace and topology file paths. |
 | `CLAB_HOSTS_FILE` | unset | Optional absolute host-visible hosts file to synchronize. The container entrypoint detects `/proc/1/root/etc/hosts` automatically when running with host PID mode. |
 | `LOG_LEVEL` | `info` | Log verbosity (`debug`, `info`, `warn`, `error`) |
 | `CORS_ALLOWED_ORIGINS` | | Comma-separated browser origin allowlist (for standalone UI) |
@@ -248,7 +249,7 @@ When authenticating via the API, provide the Linux username and password to rece
 * **Server user** – The process runs with permissions to access the container runtime.
 * **Authenticated users** – Must be members of `API_USER_GROUP` or `SUPERUSER_GROUP`.
 * **Library integration** – Containerlab is embedded as a Go library, not executed as a separate CLI process.
-* **Ownership** – Lab ownership is tracked via container labels.
+* **Ownership** – Lab ownership is tracked via container labels. Regular users manage their own labs and labs in `CLAB_SHARED_LABS_ROOT`; superusers can manage all labs.
 * **SSH sessions** – Allocated ports forward to container port 22 with automatic expiration.
 * **Security controls** – PAM for credential validation, JWT for session management, input validation, and HTTPS by default.
 
@@ -332,6 +333,53 @@ links, and runtime directories containing `.state.clab.yaml` or `topology-data.j
 are excluded from discovery. Repositories named `clab-*` remain discoverable.
 
 Enable browser access by setting `CORS_ALLOWED_ORIGINS` (for example `https://localhost:5173`).
+
+### Shared labs
+
+Set `CLAB_SHARED_LABS_ROOT=/var/lib/containerlab/shared-labs` in the server's
+environment and restart it to enable a shared workspace. Use a dedicated absolute
+folder separate from personal workspaces. For a containerized server, mount this
+folder at the same absolute path on the host and inside the server container.
+Leave the setting empty to keep sharing disabled.
+
+Every authenticated API user can read, edit, deploy, operate, and destroy labs in
+this folder. This grants access to all API users; it does not define per-user or
+per-group sharing rules. Personal labs keep their existing access rules. File
+access through the API does not require changing Linux users' group memberships.
+
+The folder appears as `@shared` in the workspace tree. Topology discovery includes
+shared files with paths such as `@shared/demo/demo.clab.yml`, including when the
+lab is undeployed. Create the directory and upload a topology through the existing
+workspace endpoints, then deploy the returned path:
+
+```bash
+curl -k -X POST -H "Authorization: Bearer <token>" \
+  -H 'Content-Type: application/json' -d '{"path":"@shared/demo"}' \
+  https://localhost:8090/api/v1/labs/workspace/directory
+
+curl -k -X PUT -H "Authorization: Bearer <token>" \
+  --data-binary @demo.clab.yml \
+  'https://localhost:8090/api/v1/labs/workspace/file?path=%40shared%2Fdemo%2Fdemo.clab.yml'
+
+curl -k -X POST -H "Authorization: Bearer <token>" \
+  'https://localhost:8090/api/v1/labs/demo/deploy?path=%40shared%2Fdemo%2Fdemo.clab.yml'
+```
+
+Another API user can now access `/api/v1/labs/demo`, its nodes, topology documents,
+and events. Redeploying or reconfiguring a shared lab preserves the deployment
+owner. To reconfigure, use the on-disk deploy endpoint with the same shared path
+and `reconfigure=true`. Direct JSON, archive, and URL deployment endpoints continue
+to create personal labs. Lab names must be unique across running labs.
+
+Destroying a lab keeps its source available to collaborators. With
+`purgeLabDir=true`, its topology parent directory is also deleted, provided it is
+below the shared root; the shared root itself cannot be purged. Moves between
+personal and shared workspaces are rejected. Terminal, SSH, and capture sessions
+remain private to the user who creates them, with existing superuser access.
+
+To run the shared-lab integration tests, configure the server as above and run
+`GOTEST_SHARED_LABS=true go test -count=1 ./tests_go -run TestSharedLabsSuite`.
+The tests use `tests_go/.env` and create and remove a temporary second API user.
 
 ## Flashpost Collection
 

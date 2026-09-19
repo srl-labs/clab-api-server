@@ -135,6 +135,7 @@ func writeTopologyRevisionHeader(c *gin.Context, username, labName, relPath stri
 
 // @Summary Stream topology document events
 // @Description Streams topology YAML/annotations change events for a single lab topology document pair as NDJSON.
+// @Description Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce application/x-ndjson

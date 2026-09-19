@@ -279,7 +279,7 @@ func resolveCaptureContainer(
 		return nil, false
 	}
 
-	if !isSuperuser(username) && best.Owner != username {
+	if !canAccessLab(username, best) {
 		err := fmt.Errorf("container '%s' not found or not owned by user", requestedName)
 		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
 		return nil, false

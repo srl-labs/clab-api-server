@@ -20,6 +20,7 @@ type Config struct {
 	SuperuserGroup               string        `mapstructure:"SUPERUSER_GROUP"` // Group for elevated privileges
 	ClabRuntime                  string        `mapstructure:"CLAB_RUNTIME"`
 	ClabLabsRoot                 string        `mapstructure:"CLAB_LABS_ROOT"`
+	ClabSharedLabsRoot           string        `mapstructure:"CLAB_SHARED_LABS_ROOT"`
 	ClabHostsFile                string        `mapstructure:"CLAB_HOSTS_FILE"`
 	CapturePacketflixPort        int           `mapstructure:"CAPTURE_PACKETFLIX_PORT"`
 	CaptureRemoteHostname        string        `mapstructure:"CAPTURE_REMOTE_HOSTNAME"`
@@ -57,6 +58,7 @@ func LoadConfig(envFilePath string) error {
 	viper.SetDefault("SUPERUSER_GROUP", "")
 	viper.SetDefault("CLAB_RUNTIME", "docker")
 	viper.SetDefault("CLAB_LABS_ROOT", "")
+	viper.SetDefault("CLAB_SHARED_LABS_ROOT", "")
 	viper.SetDefault("CLAB_HOSTS_FILE", "")
 	viper.SetDefault("CAPTURE_PACKETFLIX_PORT", 5001)
 	viper.SetDefault("CAPTURE_REMOTE_HOSTNAME", "")
@@ -114,6 +116,23 @@ func LoadConfig(envFilePath string) error {
 			return fmt.Errorf("CLAB_LABS_ROOT must be an absolute path")
 		}
 		AppConfig.ClabLabsRoot = filepath.Clean(AppConfig.ClabLabsRoot)
+	}
+
+	AppConfig.ClabSharedLabsRoot = strings.TrimSpace(AppConfig.ClabSharedLabsRoot)
+	if AppConfig.ClabSharedLabsRoot != "" {
+		if !filepath.IsAbs(AppConfig.ClabSharedLabsRoot) {
+			return fmt.Errorf("CLAB_SHARED_LABS_ROOT must be an absolute path")
+		}
+		AppConfig.ClabSharedLabsRoot = filepath.Clean(AppConfig.ClabSharedLabsRoot)
+		if AppConfig.ClabSharedLabsRoot == string(filepath.Separator) {
+			return fmt.Errorf("CLAB_SHARED_LABS_ROOT must not be the filesystem root")
+		}
+		if AppConfig.ClabLabsRoot != "" {
+			rel, err := filepath.Rel(AppConfig.ClabSharedLabsRoot, AppConfig.ClabLabsRoot)
+			if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return fmt.Errorf("CLAB_SHARED_LABS_ROOT must not contain CLAB_LABS_ROOT")
+			}
+		}
 	}
 
 	AppConfig.ClabHostsFile = strings.TrimSpace(AppConfig.ClabHostsFile)

@@ -134,7 +134,7 @@ func RequestTerminalSessionHandler(c *gin.Context) {
 		})
 		return
 	}
-	if !isSuperuser(username) && containerInfo.Owner != username {
+	if !canAccessLab(username, &containerInfo) {
 		err := fmt.Errorf("container '%s' not found or not owned by user", requestedNodeName)
 		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
 		return
