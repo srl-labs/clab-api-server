@@ -56,18 +56,51 @@ func NewService() *Service {
 	return &Service{}
 }
 
-var containerlabInitMu sync.Mutex
+// containerlabMu protects containerlab's process-wide owner environment, working
+// directory and special link nodes. Stateful operations hold it from construction
+// through completion; constructors used by read-only requests take the same lock.
+var containerlabMu sync.Mutex
+
+// lockContainerlabOperation gives one operation exclusive use of the host and
+// mgmt-net pseudo nodes. Clear stale endpoints before link resolution and release
+// references afterwards, including when an operation fails. This only forgets
+// endpoint objects; it does not remove interfaces belonging to running labs.
+func lockContainerlabOperation() func() {
+	containerlabMu.Lock()
+	drainSpecialLinkNodes()
+	return func() {
+		drainSpecialLinkNodes()
+		containerlabMu.Unlock()
+	}
+}
+
+// drainSpecialLinkNodes restores the state a fresh containerlab CLI process sees.
+// Callers must hold containerlabMu while draining and using these shared nodes.
+func drainSpecialLinkNodes() {
+	for _, n := range []clablinks.Node{clablinks.GetHostLinkNode(), clablinks.GetMgmtBrLinkNode()} {
+		if n == nil {
+			continue
+		}
+		// Copy first: ReleaseEndpoint changes the slice we would be ranging over.
+		for _, ep := range append([]clablinks.Endpoint(nil), n.GetEndpoints()...) {
+			_ = n.ReleaseEndpoint(ep)
+		}
+	}
+	// Containerlab renames this singleton to the management bridge. Leaving that
+	// name behind can shadow a topology's bridge node during the next resolution.
+	_ = clablinks.SetMgmtNetUnderlyingBridge("mgmt-net")
+}
 
 func newContainerLab(opts ...clabcore.ClabOption) (*clabcore.CLab, error) {
-	containerlabInitMu.Lock()
-	defer containerlabInitMu.Unlock()
+	containerlabMu.Lock()
+	defer containerlabMu.Unlock()
 
 	return clabcore.NewContainerLab(opts...)
 }
 
 func newContainerLabForOwner(owner string, opts ...clabcore.ClabOption) (*clabcore.CLab, error) {
-	containerlabInitMu.Lock()
-	defer containerlabInitMu.Unlock()
+	containerlabMu.Lock()
+	defer containerlabMu.Unlock()
 
 	restoreOwnerEnv := setProcessOwnerEnv(owner)
 	defer restoreOwnerEnv()
@@ -560,6 +593,12 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 	}
 
 	// Change to the work directory for relative path resolution
+	unlock := lockContainerlabOperation()
+	defer unlock()
+
+	restoreOwnerEnv := setProcessOwnerEnv(opts.Username)
+	defer restoreOwnerEnv()
+
 	originalDir, _ := os.Getwd()
 	if chErr := os.Chdir(workDir); chErr != nil {
 		return nil, fmt.Errorf("failed to change to work directory: %w", chErr)
@@ -577,10 +616,7 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 	)
 
 	// Create containerlab instance
-	clab, err := newContainerLabForOwner(
-		opts.Username,
-		deployClabOptions(topoPath, labName, opts)...,
-	)
+	clab, err := clabcore.NewContainerLab(deployClabOptions(topoPath, labName, opts)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create containerlab instance: %w", err)
 	}
@@ -605,22 +641,11 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 		"reconfigure", opts.Reconfigure,
 	)
 
-	// Deploy the lab with the same owner env used during containerlab initialization. containerlab
-	// uses these uid/gid env vars for ownership of deploy-time files it creates.
+	deployResult, err := clab.Deploy(ctx, deployOpts)
 	var containers []clabruntime.GenericContainer
-	err = func() error {
-		containerlabInitMu.Lock()
-		defer containerlabInitMu.Unlock()
-
-		restoreOwnerEnv := setProcessOwnerEnv(opts.Username)
-		defer restoreOwnerEnv()
-
-		deployResult, deployErr := clab.Deploy(ctx, deployOpts)
-		if deployResult != nil {
-			containers = deployResult.Containers
-		}
-		return deployErr
-	}()
+	if deployResult != nil {
+		containers = deployResult.Containers
+	}
 	if err != nil {
 		return nil, fmt.Errorf("deployment failed: %w", err)
 	}
@@ -650,6 +675,12 @@ func (s *Service) Apply(ctx context.Context, opts ApplyOptions) (*clabcore.Apply
 		return nil, fmt.Errorf("failed to prepare working directory: %w", err)
 	}
 
+	unlock := lockContainerlabOperation()
+	defer unlock()
+
+	restoreOwnerEnv := setProcessOwnerEnv(opts.Username)
+	defer restoreOwnerEnv()
+
 	originalDir, _ := os.Getwd()
 	if chErr := os.Chdir(workDir); chErr != nil {
 		return nil, fmt.Errorf("failed to change to work directory: %w", chErr)
@@ -674,7 +705,7 @@ func (s *Service) Apply(ctx context.Context, opts ApplyOptions) (*clabcore.Apply
 		"runtime", config.AppConfig.ClabRuntime,
 	)
 
-	clab, err := newContainerLabForOwner(opts.Username, clabOpts...)
+	clab, err := clabcore.NewContainerLab(clabOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create containerlab instance: %w", err)
 	}
@@ -693,18 +724,7 @@ func (s *Service) Apply(ctx context.Context, opts ApplyOptions) (*clabcore.Apply
 		"dryRun", opts.DryRun,
 	)
 
-	var result *clabcore.ApplyResult
-	err = func() error {
-		containerlabInitMu.Lock()
-		defer containerlabInitMu.Unlock()
-
-		restoreOwnerEnv := setProcessOwnerEnv(opts.Username)
-		defer restoreOwnerEnv()
-
-		var applyErr error
-		result, applyErr = clab.Apply(ctx, applyOpts)
-		return applyErr
-	}()
+	result, err := clab.Apply(ctx, applyOpts)
 	if err != nil {
 		return nil, fmt.Errorf("apply failed: %w", err)
 	}
@@ -730,6 +750,9 @@ func (s *Service) Destroy(ctx context.Context, opts DestroyOptions) error {
 	if err != nil {
 		return fmt.Errorf("failed to prepare working directory: %w", err)
 	}
+
+	unlock := lockContainerlabOperation()
+	defer unlock()
 
 	originalDir, _ := os.Getwd()
 	if chErr := os.Chdir(workDir); chErr != nil {
@@ -774,7 +797,7 @@ func (s *Service) Destroy(ctx context.Context, opts DestroyOptions) error {
 		"username", opts.Username,
 	)
 
-	clab, err := newContainerLab(clabOpts...)
+	clab, err := clabcore.NewContainerLab(clabOpts...)
 	if err != nil {
 		return fmt.Errorf("failed to create containerlab instance: %w", err)
 	}
@@ -925,6 +948,9 @@ func (s *Service) runTopologyNodeLifecycleAction(ctx context.Context, opts NodeL
 		return fmt.Errorf("failed to prepare working directory: %w", err)
 	}
 
+	unlock := lockContainerlabOperation()
+	defer unlock()
+
 	originalDir, _ := os.Getwd()
 	if chErr := os.Chdir(workDir); chErr != nil {
 		return fmt.Errorf("failed to change to work directory: %w", chErr)
@@ -951,7 +977,7 @@ func (s *Service) runTopologyNodeLifecycleAction(ctx context.Context, opts NodeL
 		return fmt.Errorf("either lab name or topology path is required")
 	}
 
-	clab, err := newContainerLab(clabOpts...)
+	clab, err := clabcore.NewContainerLab(clabOpts...)
 	if err != nil {
 		return fmt.Errorf("failed to create containerlab instance: %w", err)
 	}
@@ -1295,6 +1321,9 @@ func (s *Service) Exec(ctx context.Context, opts ExecOptions) (*clabexec.ExecCol
 		return nil, fmt.Errorf("failed to prepare working directory: %w", err)
 	}
 
+	unlock := lockContainerlabOperation()
+	defer unlock()
+
 	originalDir, _ := os.Getwd()
 	if chErr := os.Chdir(workDir); chErr != nil {
 		return nil, fmt.Errorf("failed to change to work directory: %w", chErr)
@@ -1315,7 +1344,7 @@ func (s *Service) Exec(ctx context.Context, opts ExecOptions) (*clabexec.ExecCol
 		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{Timeout: defaultTimeout}),
 	)
 
-	clab, err := newContainerLab(clabOpts...)
+	clab, err := clabcore.NewContainerLab(clabOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create containerlab instance: %w", err)
 	}
@@ -1357,6 +1386,9 @@ func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) error {
 		return fmt.Errorf("failed to prepare working directory: %w", err)
 	}
 
+	unlock := lockContainerlabOperation()
+	defer unlock()
+
 	originalDir, _ := os.Getwd()
 	if chErr := os.Chdir(workDir); chErr != nil {
 		return fmt.Errorf("failed to change to work directory: %w", chErr)
@@ -1373,7 +1405,7 @@ func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) error {
 		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{Timeout: defaultTimeout}),
 	}
 
-	clab, err := newContainerLab(clabOpts...)
+	clab, err := clabcore.NewContainerLab(clabOpts...)
 	if err != nil {
 		return fmt.Errorf("failed to create containerlab instance: %w", err)
 	}
