@@ -846,7 +846,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns editable topology entries from the authenticated user's lab directory.",
+                "description": "Recursively discovers editable *.clab.yml and *.clab.yaml files in the authenticated user's lab workspace. YAML and annotation paths are relative to the workspace root. Hidden directories, dependency caches, containerlab runtime directories, and symbolic links are excluded.",
                 "produces": [
                     "application/json"
                 ],
@@ -1641,7 +1641,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Relative topology file path inside lab directory (defaults to running topology path or \u003clabName\u003e.clab.yml)",
+                        "description": "Workspace-relative or legacy lab-relative topology path (defaults to running topology path or \u003clabName\u003e.clab.yml)",
                         "name": "path",
                         "in": "query"
                     },
@@ -1911,7 +1911,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Relative topology file path inside lab directory (defaults to \u003clabName\u003e.clab.yml)",
+                        "description": "Workspace-relative or legacy lab-relative topology path (defaults to \u003clabName\u003e.clab.yml)",
                         "name": "path",
                         "in": "query"
                     },
@@ -3493,7 +3493,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Relative topology YAML or annotations path inside lab directory",
+                        "description": "Workspace-relative or legacy lab-relative topology YAML or annotations path",
                         "name": "path",
                         "in": "query",
                         "required": true
@@ -3552,7 +3552,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Relative file path inside lab directory",
+                        "description": "Workspace-relative path from the topology listing, or legacy lab-relative path",
                         "name": "path",
                         "in": "query",
                         "required": true
@@ -3618,7 +3618,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Relative file path inside lab directory",
+                        "description": "Workspace-relative path from the topology listing, or legacy lab-relative path",
                         "name": "path",
                         "in": "query",
                         "required": true
@@ -3684,7 +3684,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Relative file path inside lab directory",
+                        "description": "Workspace-relative path from the topology listing, or legacy lab-relative path",
                         "name": "path",
                         "in": "query",
                         "required": true
@@ -3738,7 +3738,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Relative file path inside lab directory",
+                        "description": "Workspace-relative path from the topology listing, or legacy lab-relative path",
                         "name": "path",
                         "in": "query",
                         "required": true
@@ -7564,6 +7564,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "annotationsFileName": {
+                    "description": "Sidecar path relative to the managed workspace root.",
                     "type": "string"
                 },
                 "deploymentState": {
@@ -7577,6 +7578,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "yamlFileName": {
+                    "description": "Topology path relative to the managed workspace root.",
                     "type": "string"
                 }
             }

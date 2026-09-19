@@ -139,7 +139,7 @@ func writeTopologyRevisionHeader(c *gin.Context, username, labName, relPath stri
 // @Security BearerAuth
 // @Produce application/x-ndjson
 // @Param labName path string true "Lab name"
-// @Param path query string true "Relative topology YAML or annotations path inside lab directory"
+// @Param path query string true "Workspace-relative or legacy lab-relative topology YAML or annotations path"
 // @Success 200 {object} models.TopologyDocEventResponse "Topology document event stream"
 // @Failure 400 {object} models.ErrorResponse "Invalid path"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
