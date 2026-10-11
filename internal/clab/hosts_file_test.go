@@ -55,8 +55,9 @@ topology:
 		t.Fatal(err)
 	}
 	// Exercise Containerlab's actual SR OS hostname generation without booting a VM.
+	// The management IP belongs to the netns holder; the CPM container joins its namespace.
 	lab.Nodes["sros"].WithRuntime(&hostsTestRuntime{containers: []clabruntime.GenericContainer{{
-		Names: []string{"clab-demo-sros-1"},
+		Names: []string{"clab-demo-sros-netns"},
 		ID:    "1234567890abcdef",
 		NetworkSettings: clabruntime.GenericMgmtIPs{
 			IPv4addr: "172.20.20.2",

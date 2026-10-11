@@ -62,21 +62,6 @@ type DeployRequest struct {
 	TopologySourceUrl string `json:"topologySourceUrl,omitempty"`
 }
 
-// RedeployRequest represents the payload for redeploying a lab
-type RedeployRequest struct {
-	Cleanup        bool   `json:"cleanup,omitempty"`        // Corresponds to --cleanup flag
-	Graceful       bool   `json:"graceful,omitempty"`       // Corresponds to --graceful flag
-	Graph          bool   `json:"graph,omitempty"`          // Corresponds to --graph flag
-	Network        string `json:"network,omitempty"`        // Corresponds to --network flag
-	Ipv4Subnet     string `json:"ipv4Subnet,omitempty"`     // Corresponds to --ipv4-subnet flag
-	Ipv6Subnet     string `json:"ipv6Subnet,omitempty"`     // Corresponds to --ipv6-subnet flag
-	MaxWorkers     int    `json:"maxWorkers,omitempty"`     // Corresponds to --max-workers flag (0 means default)
-	KeepMgmtNet    bool   `json:"keepMgmtNet,omitempty"`    // Corresponds to --keep-mgmt-net flag
-	SkipPostDeploy bool   `json:"skipPostDeploy,omitempty"` // Corresponds to --skip-post-deploy flag
-	ExportTemplate string `json:"exportTemplate,omitempty"` // Corresponds to --export-template flag (__full is special)
-	SkipLabdirAcl  bool   `json:"skipLabdirAcl,omitempty"`  // Corresponds to --skip-labdir-acl flag
-}
-
 // ApplyLabResponse summarizes changes from a containerlab apply operation.
 type ApplyLabResponse struct {
 	DryRun            bool              `json:"dryRun"`
@@ -131,8 +116,6 @@ type WorkspaceFileEventResponse struct {
 // ClabInspectOutput matches the top-level structure of `clab inspect --all --format json`
 type ClabInspectOutput map[string][]ClabContainerInfo
 
-type ClabInspectOutputDetails map[string][]json.RawMessage
-
 // ClabContainerInfo matches the structure of each item in the "Containers" array
 type ClabContainerInfo struct {
 	Name        string `json:"name"`         // Name of the container node (e.g., "lab01-client1")
@@ -149,6 +132,18 @@ type ClabContainerInfo struct {
 	AbsLabPath  string `json:"absLabPath"`   // Absolute path to topology file
 	Group       string `json:"group"`        // Group assigned in topology (Might not always be present)
 	Owner       string `json:"owner"`        // OS user from clab inspect output (Used for authorization)
+	// MgmtNetwork is the management network the node is attached to; with
+	// several management networks (mgmt list in the topology) it tells them apart.
+	MgmtNetwork string            `json:"mgmt_network,omitempty" example:"clab"`
+	Ports       []ClabPortBinding `json:"ports,omitempty"` // Published ports, as in `clab inspect --format json`
+}
+
+// ClabPortBinding is a port published by a node container.
+type ClabPortBinding struct {
+	HostIP        string `json:"host_ip,omitempty" example:"0.0.0.0"`
+	HostPort      int    `json:"host_port,omitempty" example:"8080"`
+	ContainerPort int    `json:"port,omitempty" example:"80"`
+	Protocol      string `json:"protocol,omitempty" example:"tcp"`
 }
 
 // --- Structs for parsing `clab inspect interfaces --format json` output ---
@@ -376,9 +371,18 @@ type VxlanCreateRequest struct {
 // NetemSetRequest represents the parameters for setting network emulation.
 // Use pointers to distinguish between unset and zero values if necessary,
 // but clab defaults usually handle zero values correctly (meaning "unset").
+//
+// Target a node either by its container name, or by lab name and topology node
+// name (like `clab tools netem set --name <lab> -n <node>`).
 type NetemSetRequest struct {
-	// Container/node name to apply impairments on (e.g., "clab-my-lab-srl1").
-	ContainerName string `json:"containerName" binding:"required" example:"clab-my-lab-srl1"`
+	// Container name to apply impairments on (e.g., "clab-my-lab-srl1").
+	ContainerName string `json:"containerName,omitempty" example:"clab-my-lab-srl1"`
+
+	// Lab name of the topology node to apply impairments on. Used with nodeName instead of containerName.
+	LabName string `json:"labName,omitempty" example:"my-lab"`
+
+	// Topology node name to apply impairments on. Used with labName instead of containerName.
+	NodeName string `json:"nodeName,omitempty" example:"srl1"`
 
 	// Interface name or interface alias to apply impairments on (e.g., "eth1" or "mgmt0").
 	Interface string `json:"interface" binding:"required" example:"eth1"`
@@ -391,9 +395,16 @@ type NetemSetRequest struct {
 }
 
 // NetemResetRequest represents the parameters for resetting network emulation on an interface.
+// Target a node either by its container name, or by lab name and topology node name.
 type NetemResetRequest struct {
-	// Container/node name to reset impairments on (e.g., "clab-my-lab-srl1").
-	ContainerName string `json:"containerName" binding:"required" example:"clab-my-lab-srl1"`
+	// Container name to reset impairments on (e.g., "clab-my-lab-srl1").
+	ContainerName string `json:"containerName,omitempty" example:"clab-my-lab-srl1"`
+
+	// Lab name of the topology node to reset impairments on. Used with nodeName instead of containerName.
+	LabName string `json:"labName,omitempty" example:"my-lab"`
+
+	// Topology node name to reset impairments on. Used with labName instead of containerName.
+	NodeName string `json:"nodeName,omitempty" example:"srl1"`
 
 	// Interface name or interface alias to reset impairments on (e.g., "eth1" or "mgmt0").
 	Interface string `json:"interface" binding:"required" example:"eth1"`
@@ -410,7 +421,9 @@ type NetemInterfaceInfo struct {
 }
 
 // NetemShowResponse matches the JSON output of `clab tools netem show --format json`
-// It's a map where the key is the node name (container name) and the value is a list of interface details.
+// It's a map keyed by the requested container name, or by topology node name when
+// a lab is queried, with the interface impairments as value. Impairments of
+// stitched links set on the host side are listed as "<interface> (host)".
 type NetemShowResponse map[string][]NetemInterfaceInfo
 
 // VersionResponse holds the output of the 'clab version' command.

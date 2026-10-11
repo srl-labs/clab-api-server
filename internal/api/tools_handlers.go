@@ -15,6 +15,7 @@ import (
 
 	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
+	clabtypes "github.com/srl-labs/containerlab/types"
 
 	"github.com/srl-labs/clab-api-server/internal/clab"
 	"github.com/srl-labs/clab-api-server/internal/models"
@@ -628,8 +629,95 @@ func DeleteVxlanHandler(c *gin.Context) {
 
 // --- Netem Handlers ---
 
+// netemRequestTarget is a netem node target together with the lab it belongs to.
+type netemRequestTarget struct {
+	target  clab.NetemTarget
+	labName string
+	display string
+}
+
+// resolveNetemRequestTarget validates a netem target given either as container
+// name or as lab name plus topology node name, and checks the caller's access.
+// nodeOptional allows a lab without node name (show all nodes). It writes the
+// error response and returns false on failure.
+func resolveNetemRequestTarget(c *gin.Context, username, containerName, labName, nodeName string, nodeOptional bool) (netemRequestTarget, bool) {
+	containerName = strings.TrimSpace(containerName)
+	labName = strings.TrimSpace(labName)
+	nodeName = strings.TrimSpace(nodeName)
+
+	if containerName != "" {
+		if labName != "" || nodeName != "" {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Use either containerName or labName/nodeName, not both."})
+			return netemRequestTarget{}, false
+		}
+		if !isValidContainerName(containerName) {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid container name format."})
+			return netemRequestTarget{}, false
+		}
+		containerInfo, err := verifyContainerOwnership(c, username, containerName)
+		if err != nil {
+			return netemRequestTarget{}, false
+		}
+		return netemRequestTarget{
+			target:  clab.NetemTarget{ContainerName: containerName, Username: username},
+			labName: containerInfo.LabName,
+			display: containerName,
+		}, true
+	}
+
+	if labName == "" {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Either containerName or labName is required."})
+		return netemRequestTarget{}, false
+	}
+	if !isValidLabName(labName) {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid lab name format."})
+		return netemRequestTarget{}, false
+	}
+	if nodeName == "" && !nodeOptional {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "nodeName is required with labName."})
+		return netemRequestTarget{}, false
+	}
+	if nodeName != "" && !isValidContainerName(nodeName) {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid node name format."})
+		return netemRequestTarget{}, false
+	}
+	if _, err := verifyLabOwnership(c, username, labName); err != nil {
+		return netemRequestTarget{}, false
+	}
+
+	return netemRequestTarget{
+		target:  clab.NetemTarget{LabName: labName, NodeName: nodeName, Username: username},
+		labName: labName,
+		display: nodeName,
+	}, true
+}
+
+// validNetemInterface validates the interface of a netem request. Interface
+// aliases can include spaces/slashes, so validation stays minimal but bounded.
+func validNetemInterface(c *gin.Context, iface string) bool {
+	if iface == "" {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Interface cannot be empty."})
+		return false
+	}
+	if len(iface) > 128 {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Interface value is too long."})
+		return false
+	}
+	return true
+}
+
+// netemErrorStatus maps a netem failure to the HTTP status reported to the client.
+func netemErrorStatus(err error) int {
+	if errors.Is(err, clab.ErrNetemInterfaceNotFound) || errors.Is(err, clab.ErrNetemNodeNotFound) {
+		return http.StatusNotFound
+	}
+	return http.StatusInternalServerError
+}
+
 // @Summary Set link impairments (netem)
 // @Description Sets netem impairments (delay, jitter, loss, rate limiting, corruption) on a specific interface of a containerlab node owned by the authenticated user. Superusers may operate on any node.
+// @Description
+// @Description Target the node either by `containerName`, or by `labName` and topology `nodeName`. Interfaces of stitched links (e.g. vxlan-stitch) are impaired on their host-side interface.
 // @Tags Tools - Netem
 // @Security BearerAuth
 // @Accept json
@@ -638,7 +726,7 @@ func DeleteVxlanHandler(c *gin.Context) {
 // @Success 200 {object} models.GenericSuccessResponse "Impairments set successfully"
 // @Failure 400 {object} models.ErrorResponse "Invalid input parameters"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized (JWT)"
-// @Failure 404 {object} models.ErrorResponse "Container or interface not found, or container not owned by user"
+// @Failure 404 {object} models.ErrorResponse "Node or interface not found, or node not owned by user"
 // @Failure 500 {object} models.ErrorResponse "Internal server error"
 // @Router /api/v1/tools/netem/set [post]
 func SetNetemHandler(c *gin.Context) {
@@ -651,20 +739,8 @@ func SetNetemHandler(c *gin.Context) {
 		return
 	}
 
-	if !isValidContainerName(req.ContainerName) {
-		log.Warnf("SetNetem failed for user '%s': Invalid container name format '%s'", username, req.ContainerName)
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid container name format."})
-		return
-	}
-
 	iface := strings.TrimSpace(req.Interface)
-	if iface == "" {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Interface cannot be empty."})
-		return
-	}
-	// Interface aliases can include spaces/slashes, so keep validation minimal but bounded.
-	if len(iface) > 128 {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Interface value is too long."})
+	if !validNetemInterface(c, iface) {
 		return
 	}
 
@@ -698,119 +774,125 @@ func SetNetemHandler(c *gin.Context) {
 		return
 	}
 
-	containerInfo, ownerErr := verifyContainerOwnership(c, username, req.ContainerName)
-	if ownerErr != nil {
+	node, ok := resolveNetemRequestTarget(c, username, req.ContainerName, req.LabName, req.NodeName, false)
+	if !ok {
 		return
 	}
-	releaseLabOperation, ok := beginLabOperationOrConflict(c, containerInfo.LabName, "netem")
+	releaseLabOperation, ok := beginLabOperationOrConflict(c, node.labName, "netem")
 	if !ok {
 		return
 	}
 	defer releaseLabOperation()
 
 	svc := GetClabService()
-	log.Infof("User '%s' setting netem impairments: container=%s interface=%s", username, req.ContainerName, iface)
+	log.Infof("User '%s' setting netem impairments: node=%s interface=%s", username, node.display, iface)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	err = svc.SetNetem(ctx, clab.NetemSetOptions{
-		ContainerName: req.ContainerName,
-		Interface:     iface,
-		Delay:         delay,
-		Jitter:        jitter,
-		Loss:          req.Loss,
-		Rate:          uint64(req.Rate),
-		Corruption:    req.Corruption,
+		Target:     node.target,
+		Interface:  iface,
+		Delay:      delay,
+		Jitter:     jitter,
+		Loss:       req.Loss,
+		Rate:       uint64(req.Rate),
+		Corruption: req.Corruption,
 	})
 	if err != nil {
-		if errors.Is(err, clab.ErrNetemInterfaceNotFound) {
-			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Interface '%s' not found in container '%s'.", iface, req.ContainerName)})
-			return
-		}
-
-		log.Errorf("SetNetem failed for user '%s' (container '%s', interface '%s'): %v", username, req.ContainerName, iface, err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
-			Error: fmt.Sprintf("Failed to set netem impairments for container '%s' interface '%s': %s", req.ContainerName, iface, err.Error()),
+		log.Errorf("SetNetem failed for user '%s' (node '%s', interface '%s'): %v", username, node.display, iface, err)
+		c.JSON(netemErrorStatus(err), models.ErrorResponse{
+			Error: fmt.Sprintf("Failed to set netem impairments for node '%s' interface '%s': %s", node.display, iface, err.Error()),
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, models.GenericSuccessResponse{
-		Message: fmt.Sprintf("Netem impairments set successfully for container '%s' interface '%s'", req.ContainerName, iface),
+		Message: fmt.Sprintf("Netem impairments set successfully for node '%s' interface '%s'", node.display, iface),
 	})
 }
 
 // @Summary Show link impairments (netem)
 // @Description Lists netem impairments for a containerlab node owned by the authenticated user. Superusers may inspect any node.
+// @Description
+// @Description Target the node either by `containerName`, or by `labName` and topology `nodeName`. With `labName` alone, impairments of every deployed node of the lab are returned, keyed by node name.
 // @Tags Tools - Netem
 // @Security BearerAuth
 // @Produce json
-// @Param containerName query string true "Container/node name"
+// @Param containerName query string false "Container name"
+// @Param labName query string false "Lab name (with nodeName, or alone to show all nodes)"
+// @Param nodeName query string false "Topology node name (requires labName)"
 // @Success 200 {object} models.NetemShowResponse "Netem impairments"
 // @Failure 400 {object} models.ErrorResponse "Invalid input parameters"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized (JWT)"
-// @Failure 404 {object} models.ErrorResponse "Container not found, or container not owned by user"
+// @Failure 404 {object} models.ErrorResponse "Node not found, or node not owned by user"
 // @Failure 500 {object} models.ErrorResponse "Internal server error"
 // @Router /api/v1/tools/netem/show [get]
 func ShowNetemHandler(c *gin.Context) {
 	username := c.GetString("username")
 
-	containerName := c.Query("containerName")
-	if !isValidContainerName(containerName) {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid container name format."})
+	node, ok := resolveNetemRequestTarget(c, username, c.Query("containerName"), c.Query("labName"), c.Query("nodeName"), true)
+	if !ok {
 		return
 	}
-
-	containerInfo, ownerErr := verifyContainerOwnership(c, username, containerName)
-	if ownerErr != nil {
-		return
-	}
-	releaseLabOperation, ok := beginLabOperationOrConflict(c, containerInfo.LabName, "netem")
+	releaseLabOperation, ok := beginLabOperationOrConflict(c, node.labName, "netem")
 	if !ok {
 		return
 	}
 	defer releaseLabOperation()
 
 	svc := GetClabService()
-	log.Infof("User '%s' showing netem impairments: container=%s", username, containerName)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	impairments, err := svc.ShowNetem(ctx, containerName)
+	var impairmentsByNode map[string][]clabtypes.ImpairmentData
+	var err error
+	if node.target.ContainerName == "" && node.target.NodeName == "" {
+		log.Infof("User '%s' showing netem impairments: lab=%s", username, node.labName)
+		impairmentsByNode, err = svc.ShowLabNetem(ctx, node.labName, username)
+		node.display = node.labName
+	} else {
+		log.Infof("User '%s' showing netem impairments: node=%s", username, node.display)
+		var impairments []clabtypes.ImpairmentData
+		impairments, err = svc.ShowNetem(ctx, node.target)
+		impairmentsByNode = map[string][]clabtypes.ImpairmentData{node.display: impairments}
+	}
 	if err != nil {
-		log.Errorf("ShowNetem failed for user '%s' (container '%s'): %v", username, containerName, err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
-			Error: fmt.Sprintf("Failed to show netem impairments for container '%s': %s", containerName, err.Error()),
+		log.Errorf("ShowNetem failed for user '%s' (%s): %v", username, node.display, err)
+		c.JSON(netemErrorStatus(err), models.ErrorResponse{
+			Error: fmt.Sprintf("Failed to show netem impairments for '%s': %s", node.display, err.Error()),
 		})
 		return
 	}
 
-	infos := make([]models.NetemInterfaceInfo, 0, len(impairments))
-	for _, imp := range impairments {
-		rate := uint(0)
-		if imp.Rate > 0 {
-			rate = uint(imp.Rate)
-		}
+	response := make(models.NetemShowResponse, len(impairmentsByNode))
+	for name, impairments := range impairmentsByNode {
+		infos := make([]models.NetemInterfaceInfo, 0, len(impairments))
+		for _, imp := range impairments {
+			rate := uint(0)
+			if imp.Rate > 0 {
+				rate = uint(imp.Rate)
+			}
 
-		infos = append(infos, models.NetemInterfaceInfo{
-			Interface:  imp.Interface,
-			Delay:      imp.Delay,
-			Jitter:     imp.Jitter,
-			PacketLoss: imp.PacketLoss,
-			Rate:       rate,
-			Corruption: imp.Corruption,
-		})
+			infos = append(infos, models.NetemInterfaceInfo{
+				Interface:  imp.Interface,
+				Delay:      imp.Delay,
+				Jitter:     imp.Jitter,
+				PacketLoss: imp.PacketLoss,
+				Rate:       rate,
+				Corruption: imp.Corruption,
+			})
+		}
+		response[name] = infos
 	}
 
-	c.JSON(http.StatusOK, models.NetemShowResponse{
-		containerName: infos,
-	})
+	c.JSON(http.StatusOK, response)
 }
 
 // @Summary Reset link impairments (netem)
 // @Description Resets (removes) netem impairments from a specific interface of a containerlab node owned by the authenticated user. Superusers may operate on any node.
+// @Description
+// @Description Target the node either by `containerName`, or by `labName` and topology `nodeName`.
 // @Tags Tools - Netem
 // @Security BearerAuth
 // @Accept json
@@ -819,7 +901,7 @@ func ShowNetemHandler(c *gin.Context) {
 // @Success 200 {object} models.GenericSuccessResponse "Impairments reset successfully"
 // @Failure 400 {object} models.ErrorResponse "Invalid input parameters"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized (JWT)"
-// @Failure 404 {object} models.ErrorResponse "Container or interface not found, or container not owned by user"
+// @Failure 404 {object} models.ErrorResponse "Node or interface not found, or node not owned by user"
 // @Failure 500 {object} models.ErrorResponse "Internal server error"
 // @Router /api/v1/tools/netem/reset [post]
 func ResetNetemHandler(c *gin.Context) {
@@ -832,53 +914,36 @@ func ResetNetemHandler(c *gin.Context) {
 		return
 	}
 
-	if !isValidContainerName(req.ContainerName) {
-		log.Warnf("ResetNetem failed for user '%s': Invalid container name format '%s'", username, req.ContainerName)
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid container name format."})
-		return
-	}
-
 	iface := strings.TrimSpace(req.Interface)
-	if iface == "" {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Interface cannot be empty."})
-		return
-	}
-	if len(iface) > 128 {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Interface value is too long."})
+	if !validNetemInterface(c, iface) {
 		return
 	}
 
-	containerInfo, ownerErr := verifyContainerOwnership(c, username, req.ContainerName)
-	if ownerErr != nil {
+	node, ok := resolveNetemRequestTarget(c, username, req.ContainerName, req.LabName, req.NodeName, false)
+	if !ok {
 		return
 	}
-	releaseLabOperation, ok := beginLabOperationOrConflict(c, containerInfo.LabName, "netem")
+	releaseLabOperation, ok := beginLabOperationOrConflict(c, node.labName, "netem")
 	if !ok {
 		return
 	}
 	defer releaseLabOperation()
 
 	svc := GetClabService()
-	log.Infof("User '%s' resetting netem impairments: container=%s interface=%s", username, req.ContainerName, iface)
+	log.Infof("User '%s' resetting netem impairments: node=%s interface=%s", username, node.display, iface)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	err := svc.ResetNetem(ctx, req.ContainerName, iface)
-	if err != nil {
-		if errors.Is(err, clab.ErrNetemInterfaceNotFound) {
-			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Interface '%s' not found in container '%s'.", iface, req.ContainerName)})
-			return
-		}
-
-		log.Errorf("ResetNetem failed for user '%s' (container '%s', interface '%s'): %v", username, req.ContainerName, iface, err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
-			Error: fmt.Sprintf("Failed to reset netem impairments for container '%s' interface '%s': %s", req.ContainerName, iface, err.Error()),
+	if err := svc.ResetNetem(ctx, node.target, iface); err != nil {
+		log.Errorf("ResetNetem failed for user '%s' (node '%s', interface '%s'): %v", username, node.display, iface, err)
+		c.JSON(netemErrorStatus(err), models.ErrorResponse{
+			Error: fmt.Sprintf("Failed to reset netem impairments for node '%s' interface '%s': %s", node.display, iface, err.Error()),
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, models.GenericSuccessResponse{
-		Message: fmt.Sprintf("Netem impairments reset successfully for container '%s' interface '%s'", req.ContainerName, iface),
+		Message: fmt.Sprintf("Netem impairments reset successfully for node '%s' interface '%s'", node.display, iface),
 	})
 }

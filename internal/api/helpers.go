@@ -6,10 +6,12 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -224,8 +226,11 @@ func getLabInfo(ctx context.Context, username string, labName string) (info *mod
 	}
 
 	// List containers for the specific lab
+	// Internal helper containers carry the lab's owner label, so a lab that only
+	// has them left still exists for ownership checks and destroy.
 	containers, listErr := svc.ListContainers(ctx, clab.ListOptions{
-		LabName: labName,
+		LabName:         labName,
+		IncludeInternal: true,
 	})
 
 	if listErr != nil {
@@ -698,4 +703,70 @@ func ensureLabDirectory(labDir string, uid, gid int) error {
 		log.Warnf("Failed to set ownership for lab directory '%s' to %d:%d: %v", labDir, uid, gid, err)
 	}
 	return nil
+}
+
+// mgmtNetworkNamePattern accepts the network names docker and podman allow.
+var mgmtNetworkNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
+
+// mgmtOverrides holds the management network overrides that mirror the
+// --network, --ipv4-subnet and --ipv6-subnet deploy flags.
+type mgmtOverrides struct {
+	network    string
+	ipv4Subnet string
+	ipv6Subnet string
+}
+
+func (m mgmtOverrides) applyTo(opts *clab.DeployOptions) {
+	opts.MgmtNetwork = m.network
+	opts.MgmtIPv4Subnet = m.ipv4Subnet
+	opts.MgmtIPv6Subnet = m.ipv6Subnet
+}
+
+// parseMgmtOverrideQuery reads the network, ipv4Subnet and ipv6Subnet query
+// parameters. It writes a 400 response and returns false when a value is invalid.
+func parseMgmtOverrideQuery(c *gin.Context) (mgmtOverrides, bool) {
+	var overrides mgmtOverrides
+
+	overrides.network = strings.TrimSpace(c.Query("network"))
+	if overrides.network != "" && !mgmtNetworkNamePattern.MatchString(overrides.network) {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid 'network' query parameter."})
+		return overrides, false
+	}
+
+	var ok bool
+	if overrides.ipv4Subnet, ok = parseSubnetQuery(c, "ipv4Subnet", true); !ok {
+		return overrides, false
+	}
+	if overrides.ipv6Subnet, ok = parseSubnetQuery(c, "ipv6Subnet", false); !ok {
+		return overrides, false
+	}
+
+	return overrides, true
+}
+
+func parseSubnetQuery(c *gin.Context, param string, ipv4 bool) (string, bool) {
+	value := strings.TrimSpace(c.Query(param))
+	if value == "" {
+		return "", true
+	}
+	prefix, err := netip.ParsePrefix(value)
+	if err != nil || prefix.Addr().Is4() != ipv4 || prefix.Addr().Is4In6() {
+		family, example := "IPv6", "3fff:172:20:20::/64"
+		if ipv4 {
+			family, example = "IPv4", "172.20.20.0/24"
+		}
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error: fmt.Sprintf("Invalid '%s' query parameter: expected an %s prefix such as %s.", param, family, example),
+		})
+		return "", false
+	}
+	return prefix.String(), true
+}
+
+// deployErrorStatus maps a deploy failure to the HTTP status reported to the client.
+func deployErrorStatus(err error) int {
+	if errors.Is(err, clab.ErrMgmtOverrideUnsupported) {
+		return http.StatusBadRequest
+	}
+	return http.StatusInternalServerError
 }

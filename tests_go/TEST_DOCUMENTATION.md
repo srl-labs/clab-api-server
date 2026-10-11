@@ -134,6 +134,23 @@ The test suite uses a configuration structure (`TestConfig`) that loads values f
    - Verifies only the lab created by the API user appears in the list
    - Checks that the superuser's lab is filtered out
 
+## Management Network Tests (`mgmt_networks_suite_test.go`)
+
+| Test Name | Description | Expected Result |
+|-----------|-------------|-----------------|
+| `TestMultipleMgmtNetworks` | Deploys a topology with a list of two management networks and nodes attached via `mgmt-net` | Each node reports its `mgmt_network` and an address from that network's subnet; the Tailscale status lists no devices; a redeploy with `network` override is rejected with 400 and leaves the lab deployed |
+| `TestDeployMgmtOverrides` | Deploys with the `network` and `ipv4Subnet` query parameters | The node is attached to the overridden network with an address from the overridden subnet |
+| `TestDeployRejectsInvalidMgmtOverrides` | Deploys with malformed `network`, `ipv4Subnet` and `ipv6Subnet` values | 400 Bad Request naming the parameter |
+
+## Netem Tests (`netem_suite_test.go`)
+
+| Test Name | Description | Expected Result |
+|-----------|-------------|-----------------|
+| `TestNetemRejectsNonOwner` | Sets impairments on another user's container | 404 Not Found |
+| `TestNetemSetShowResetForLabOwner` | Sets, shows and resets impairments by container name | Impairments are applied, listed and removed |
+| `TestNetemByLabAndNodeName` | Targets a node by `labName`/`nodeName` and shows all nodes of a lab | Impairments are applied and removed by topology name; lab show lists every node; unknown nodes return 404 |
+| `TestNetemOnStitchedLinkUsesHostInterface` | Impairs the endpoint of a `veth-stitch` link | The impairment is set on and reset from the host side of the stitch, listed as `eth1 (host)` |
+
 ## Helper Functions
 
 The test suite includes several helper functions to facilitate testing:

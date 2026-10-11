@@ -687,6 +687,24 @@ const docTemplate = `{
                         "description": "Skip setting extended ACLs on lab directory",
                         "name": "skipLabdirAcl",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Override the management network name (like --network); not allowed with multiple management networks",
+                        "name": "network",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Override the management network IPv4 subnet (like --ipv4-subnet)",
+                        "name": "ipv4Subnet",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Override the management network IPv6 subnet (like --ipv6-subnet)",
+                        "name": "ipv6Subnet",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -796,6 +814,24 @@ const docTemplate = `{
                         "type": "boolean",
                         "description": "Skip setting extended ACLs on lab directory",
                         "name": "skipLabdirAcl",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Override the management network name (like --network); not allowed with multiple management networks",
+                        "name": "network",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Override the management network IPv4 subnet (like --ipv4-subnet)",
+                        "name": "ipv4Subnet",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Override the management network IPv6 subnet (like --ipv6-subnet)",
+                        "name": "ipv6Subnet",
                         "in": "query"
                     }
                 ],
@@ -1476,6 +1512,24 @@ const docTemplate = `{
                         "description": "Include captured lifecycle logs in the JSON response",
                         "name": "includeLogs",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Override the management network name (like --network); not allowed with multiple management networks",
+                        "name": "network",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Override the management network IPv4 subnet (like --ipv4-subnet)",
+                        "name": "ipv4Subnet",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Override the management network IPv6 subnet (like --ipv6-subnet)",
+                        "name": "ipv6Subnet",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1961,6 +2015,24 @@ const docTemplate = `{
                         "type": "boolean",
                         "description": "Include captured lifecycle logs in the JSON response",
                         "name": "includeLogs",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Override the management network name (like --network); not allowed with multiple management networks",
+                        "name": "network",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Override the management network IPv4 subnet (like --ipv4-subnet)",
+                        "name": "ipv4Subnet",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Override the management network IPv6 subnet (like --ipv6-subnet)",
+                        "name": "ipv6Subnet",
                         "in": "query"
                     }
                 ],
@@ -3342,6 +3414,64 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/v1/labs/{labName}/tailscale": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Reports the Tailscale devices containerlab runs for a lab: the SSO proxy (` + "`" + `mgmt.tailscale.auth-mode: sso` + "`" + `), the auth-key sidecars of nodes, and nodes of the ` + "`" + `tailscale` + "`" + ` kind.\n\nThese are internal helper containers that are not listed as lab nodes. While the SSO proxy waits for authentication, ` + "`" + `authUrl` + "`" + ` holds the login URL to open; ` + "`" + `forwards` + "`" + ` lists the tailnet ports it forwards to nodes.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Labs"
+                ],
+                "summary": "Get lab Tailscale status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Lab Name",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.TailscaleStatusResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/labs/{labName}/topology/annotations": {
             "get": {
                 "security": [
@@ -4678,7 +4808,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Resets (removes) netem impairments from a specific interface of a containerlab node owned by the authenticated user. Superusers may operate on any node.",
+                "description": "Resets (removes) netem impairments from a specific interface of a containerlab node owned by the authenticated user. Superusers may operate on any node.\n\nTarget the node either by ` + "`" + `containerName` + "`" + `, or by ` + "`" + `labName` + "`" + ` and topology ` + "`" + `nodeName` + "`" + `.",
                 "consumes": [
                     "application/json"
                 ],
@@ -4720,7 +4850,7 @@ const docTemplate = `{
                         }
                     },
                     "404": {
-                        "description": "Container or interface not found, or container not owned by user",
+                        "description": "Node or interface not found, or node not owned by user",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -4741,7 +4871,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Sets netem impairments (delay, jitter, loss, rate limiting, corruption) on a specific interface of a containerlab node owned by the authenticated user. Superusers may operate on any node.",
+                "description": "Sets netem impairments (delay, jitter, loss, rate limiting, corruption) on a specific interface of a containerlab node owned by the authenticated user. Superusers may operate on any node.\n\nTarget the node either by ` + "`" + `containerName` + "`" + `, or by ` + "`" + `labName` + "`" + ` and topology ` + "`" + `nodeName` + "`" + `. Interfaces of stitched links (e.g. vxlan-stitch) are impaired on their host-side interface.",
                 "consumes": [
                     "application/json"
                 ],
@@ -4783,7 +4913,7 @@ const docTemplate = `{
                         }
                     },
                     "404": {
-                        "description": "Container or interface not found, or container not owned by user",
+                        "description": "Node or interface not found, or node not owned by user",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -4804,7 +4934,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Lists netem impairments for a containerlab node owned by the authenticated user. Superusers may inspect any node.",
+                "description": "Lists netem impairments for a containerlab node owned by the authenticated user. Superusers may inspect any node.\n\nTarget the node either by ` + "`" + `containerName` + "`" + `, or by ` + "`" + `labName` + "`" + ` and topology ` + "`" + `nodeName` + "`" + `. With ` + "`" + `labName` + "`" + ` alone, impairments of every deployed node of the lab are returned, keyed by node name.",
                 "produces": [
                     "application/json"
                 ],
@@ -4815,10 +4945,21 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Container/node name",
+                        "description": "Container name",
                         "name": "containerName",
-                        "in": "query",
-                        "required": true
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Lab name (with nodeName, or alone to show all nodes)",
+                        "name": "labName",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Topology node name (requires labName)",
+                        "name": "nodeName",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -4841,7 +4982,7 @@ const docTemplate = `{
                         }
                     },
                     "404": {
-                        "description": "Container not found, or container not owned by user",
+                        "description": "Node not found, or node not owned by user",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -6365,6 +6506,11 @@ const docTemplate = `{
                     "description": "Name of the lab this node belongs to (redundant with map key but present)",
                     "type": "string"
                 },
+                "mgmt_network": {
+                    "description": "MgmtNetwork is the management network the node is attached to; with\nseveral management networks (mgmt list in the topology) it tells them apart.",
+                    "type": "string",
+                    "example": "clab"
+                },
                 "name": {
                     "description": "Name of the container node (e.g., \"lab01-client1\")",
                     "type": "string"
@@ -6376,6 +6522,13 @@ const docTemplate = `{
                 "owner": {
                     "description": "OS user from clab inspect output (Used for authorization)",
                     "type": "string"
+                },
+                "ports": {
+                    "description": "Published ports, as in ` + "`" + `clab inspect --format json` + "`" + `",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ClabPortBinding"
+                    }
                 },
                 "state": {
                     "description": "e.g., \"running\"",
@@ -6417,6 +6570,27 @@ const docTemplate = `{
                 "type": "array",
                 "items": {
                     "$ref": "#/definitions/models.ClabContainerInfo"
+                }
+            }
+        },
+        "models.ClabPortBinding": {
+            "type": "object",
+            "properties": {
+                "host_ip": {
+                    "type": "string",
+                    "example": "0.0.0.0"
+                },
+                "host_port": {
+                    "type": "integer",
+                    "example": 8080
+                },
+                "port": {
+                    "type": "integer",
+                    "example": 80
+                },
+                "protocol": {
+                    "type": "string",
+                    "example": "tcp"
                 }
             }
         },
@@ -7118,12 +7292,11 @@ const docTemplate = `{
         "models.NetemResetRequest": {
             "type": "object",
             "required": [
-                "containerName",
                 "interface"
             ],
             "properties": {
                 "containerName": {
-                    "description": "Container/node name to reset impairments on (e.g., \"clab-my-lab-srl1\").",
+                    "description": "Container name to reset impairments on (e.g., \"clab-my-lab-srl1\").",
                     "type": "string",
                     "example": "clab-my-lab-srl1"
                 },
@@ -7131,18 +7304,27 @@ const docTemplate = `{
                     "description": "Interface name or interface alias to reset impairments on (e.g., \"eth1\" or \"mgmt0\").",
                     "type": "string",
                     "example": "eth1"
+                },
+                "labName": {
+                    "description": "Lab name of the topology node to reset impairments on. Used with nodeName instead of containerName.",
+                    "type": "string",
+                    "example": "my-lab"
+                },
+                "nodeName": {
+                    "description": "Topology node name to reset impairments on. Used with labName instead of containerName.",
+                    "type": "string",
+                    "example": "srl1"
                 }
             }
         },
         "models.NetemSetRequest": {
             "type": "object",
             "required": [
-                "containerName",
                 "interface"
             ],
             "properties": {
                 "containerName": {
-                    "description": "Container/node name to apply impairments on (e.g., \"clab-my-lab-srl1\").",
+                    "description": "Container name to apply impairments on (e.g., \"clab-my-lab-srl1\").",
                     "type": "string",
                     "example": "clab-my-lab-srl1"
                 },
@@ -7166,10 +7348,20 @@ const docTemplate = `{
                     "type": "string",
                     "example": "5ms"
                 },
+                "labName": {
+                    "description": "Lab name of the topology node to apply impairments on. Used with nodeName instead of containerName.",
+                    "type": "string",
+                    "example": "my-lab"
+                },
                 "loss": {
                     "description": "Percentage (0.0 to 100.0)",
                     "type": "number",
                     "example": 10.5
+                },
+                "nodeName": {
+                    "description": "Topology node name to apply impairments on. Used with labName instead of containerName.",
+                    "type": "string",
+                    "example": "srl1"
                 },
                 "rate": {
                     "description": "Kbit/s (non-negative integer)",
@@ -7445,6 +7637,98 @@ const docTemplate = `{
                 "success": {
                     "type": "boolean",
                     "example": true
+                }
+            }
+        },
+        "models.TailscaleDevice": {
+            "type": "object",
+            "properties": {
+                "authUrl": {
+                    "description": "AuthURL is the login URL to open while the device waits for authentication.",
+                    "type": "string",
+                    "example": "https://login.tailscale.com/a/0123456789ab"
+                },
+                "backendState": {
+                    "description": "BackendState is the tailscaled state, e.g. NeedsLogin or Running.",
+                    "type": "string",
+                    "example": "NeedsLogin"
+                },
+                "containerName": {
+                    "type": "string",
+                    "example": "clab-mylab-ts"
+                },
+                "dnsName": {
+                    "type": "string",
+                    "example": "clab-mylab.tailnet-1234.ts.net"
+                },
+                "error": {
+                    "description": "Error reports why the tailnet state could not be read.",
+                    "type": "string"
+                },
+                "forwards": {
+                    "description": "Forwards lists the tailnet ports the SSO proxy forwards to nodes (/ts ports).",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.TailscaleForward"
+                    }
+                },
+                "hostName": {
+                    "type": "string",
+                    "example": "clab-mylab"
+                },
+                "nodeName": {
+                    "type": "string",
+                    "example": "srl1"
+                },
+                "online": {
+                    "type": "boolean"
+                },
+                "role": {
+                    "description": "Role is \"proxy\" for the SSO proxy (mgmt.tailscale.auth-mode: sso), \"sidecar\"\nfor the auth-key sidecar of nodeName, or \"node\" for a node of the tailscale kind.",
+                    "type": "string",
+                    "example": "proxy"
+                },
+                "state": {
+                    "type": "string",
+                    "example": "running"
+                },
+                "tailscaleIps": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "models.TailscaleForward": {
+            "type": "object",
+            "properties": {
+                "listenPort": {
+                    "type": "integer",
+                    "example": 2201
+                },
+                "nodeName": {
+                    "type": "string",
+                    "example": "srl1"
+                },
+                "target": {
+                    "type": "string",
+                    "example": "172.20.20.2:22"
+                }
+            }
+        },
+        "models.TailscaleStatusResponse": {
+            "type": "object",
+            "properties": {
+                "devices": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.TailscaleDevice"
+                    }
+                },
+                "labName": {
+                    "type": "string",
+                    "example": "mylab"
                 }
             }
         },

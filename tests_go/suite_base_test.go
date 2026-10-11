@@ -668,6 +668,7 @@ type ClabContainerInfo struct {
 	NodeName    string `json:"nodeName"`
 	Owner       string `json:"owner"`
 	Group       string `json:"group"`
+	MgmtNetwork string `json:"mgmt_network"`
 }
 
 type ClabInspectOutput map[string][]ClabContainerInfo

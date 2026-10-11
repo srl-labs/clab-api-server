@@ -64,7 +64,7 @@ func beginLabOperationOrConflict(c *gin.Context, labName, operation string) (fun
 }
 
 func ensureLabDestroyed(ctx context.Context, svc *clab.Service, labName string) error {
-	containers, err := svc.ListContainers(ctx, clab.ListOptions{LabName: labName})
+	containers, err := svc.ListContainers(ctx, clab.ListOptions{LabName: labName, IncludeInternal: true})
 	if err != nil {
 		msg := strings.ToLower(err.Error())
 		if strings.Contains(msg, "no containers found") ||
