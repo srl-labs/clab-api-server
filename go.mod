@@ -9,6 +9,7 @@ require (
 	github.com/florianl/go-tc v0.4.8
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gin-gonic/gin v1.12.0
+	github.com/go-git/go-git/v5 v5.19.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/joho/godotenv v1.5.1
@@ -24,7 +25,7 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/crypto v0.57.0
 	golang.org/x/mod v0.41.0
-	golang.org/x/sys v0.48.0
+	golang.org/x/sys v0.49.0
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -98,7 +99,6 @@ require (
 	github.com/gin-contrib/sse v1.1.2 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
 	github.com/go-git/go-billy/v5 v5.9.1 // indirect
-	github.com/go-git/go-git/v5 v5.19.2 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.5 // indirect
 	github.com/go-logfmt/logfmt v0.6.1 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
