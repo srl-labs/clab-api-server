@@ -6315,6 +6315,10 @@ const docTemplate = `{
                 },
                 "interfaceName": {
                     "type": "string"
+                },
+                "nodeNamespace": {
+                    "description": "NodeNamespace marks InterfaceName as the port's name inside the node's\nnetwork namespace. It is captured there as-is, instead of being resolved\nthrough its alias to the host-side end of a stitched link, so a node's\nlinks and its own interfaces (e.g. eth0) can share one capture stream.",
+                    "type": "boolean"
                 }
             }
         },

@@ -5,6 +5,11 @@ import "time"
 type CaptureTarget struct {
 	ContainerName string `json:"containerName" binding:"required"`
 	InterfaceName string `json:"interfaceName" binding:"required"`
+	// NodeNamespace marks InterfaceName as the port's name inside the node's
+	// network namespace. It is captured there as-is, instead of being resolved
+	// through its alias to the host-side end of a stitched link, so a node's
+	// links and its own interfaces (e.g. eth0) can share one capture stream.
+	NodeNamespace bool `json:"nodeNamespace,omitempty"`
 }
 
 type CapturePacketflixRequest struct {
