@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -485,5 +486,57 @@ services:
 	downArgs := runner.commandArgsContaining("compose", "down")
 	if downArgs == nil {
 		t.Fatalf("expected compose down command, got %#v", runner.commands)
+	}
+}
+
+func TestInstallEdgeSharkUsesBareDiscoveryServiceHost(t *testing.T) {
+	composeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`
+services:
+  gostwire:
+    image: gostwire:test
+  edgeshark:
+    image: edgeshark:test
+    entrypoint:
+    - "/packetflix"
+    - "--discovery-service=gostwire.ghost-in-da-edge"
+    - "--gw-port=5000"
+`))
+	}))
+	defer composeServer.Close()
+
+	previousComposeURL := edgesharkComposeURL
+	edgesharkComposeURL = composeServer.URL
+	t.Cleanup(func() {
+		edgesharkComposeURL = previousComposeURL
+	})
+
+	for _, extraEnv := range []string{"", "HTTP_PROXY="} {
+		t.Run(fmt.Sprintf("extraEnv=%q", extraEnv), func(t *testing.T) {
+			var composeContent string
+			runner := &fakeCommandRunner{t: t, responses: map[string]string{}}
+			runner.onRun = func(cmd recordedCommand) {
+				content, err := os.ReadFile(cmd.args[2])
+				if err != nil {
+					t.Fatalf("failed reading prepared compose file: %v", err)
+				}
+				composeContent = string(content)
+				runner.responses[commandKey(cmd.name, cmd.args)] = ""
+			}
+
+			manager := newTestManager(t, ManagerConfig{
+				Runtime:               "podman",
+				EdgesharkExtraEnvVars: extraEnv,
+			})
+			manager.runner = runner
+
+			if err := manager.InstallEdgeShark(context.Background()); err != nil {
+				t.Fatalf("InstallEdgeShark returned error: %v", err)
+			}
+			if !strings.Contains(composeContent, "--discovery-service=gostwire") ||
+				strings.Contains(composeContent, "gostwire.ghost-in-da-edge") {
+				t.Fatalf("expected bare gostwire discovery host, got:\n%s", composeContent)
+			}
+		})
 	}
 }
