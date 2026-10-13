@@ -17,6 +17,8 @@ import (
 
 	"github.com/charmbracelet/log"
 	"github.com/creack/pty"
+	clabcore "github.com/srl-labs/containerlab/core"
+	clabnodes "github.com/srl-labs/containerlab/nodes"
 
 	"github.com/srl-labs/clab-api-server/internal/models"
 )
@@ -43,15 +45,29 @@ var (
 var defaultShellCommandsByKind = map[string][]string{
 	"nokia_srlinux": {"sr_cli"},
 	"cisco_xrd":     {"/pkg/bin/xr_cli.sh"},
+	"frr":           {"vtysh"},
+	"frrouting":     {"vtysh"},
 }
 
-var defaultSSHUserByKind = map[string]string{
-	"nokia_srlinux": "admin",
-	"nokia_sros":    "admin",
-	"cisco_xrd":     "clab",
-	"cisco_xr9vk":   "clab",
-	"arista_ceos":   "admin",
-	"juniper_crpd":  "root",
+// kindRegistry holds containerlab's node kinds, whose default credentials are
+// the users images ship for SSH logins.
+var kindRegistry = sync.OnceValue(func() *clabnodes.NodeRegistry {
+	lab := &clabcore.CLab{Reg: clabnodes.NewNodeRegistry()}
+	lab.RegisterNodes()
+	return lab.Reg
+})
+
+// defaultSSHUsername returns the default login user of a node kind.
+func defaultSSHUsername(kind string) string {
+	entry := kindRegistry().Kind(strings.TrimSpace(kind))
+	if entry == nil {
+		return ""
+	}
+	credentials := entry.GetCredentials()
+	if credentials == nil {
+		return ""
+	}
+	return credentials.GetUsername()
 }
 
 type CreateSessionOptions struct {
@@ -609,7 +625,7 @@ func resolveSSHUsername(kind, requested string) string {
 	if trimmed := strings.TrimSpace(requested); validSSHUsernameExpr.MatchString(trimmed) {
 		return trimmed
 	}
-	if username, ok := defaultSSHUserByKind[strings.TrimSpace(kind)]; ok && username != "" {
+	if username := defaultSSHUsername(kind); username != "" {
 		return username
 	}
 	return "admin"

@@ -275,30 +275,3 @@ func GenerateTopologyHandler(c *gin.Context) {
 		c.JSON(http.StatusOK, response)
 	}
 }
-
-// extractJSONFromClabOutput attempts to isolate the JSON block from clab CLI output
-// that may include banners, warnings, or ANSI art before/after the JSON payload.
-func extractJSONFromClabOutput(output string) string {
-	start := -1
-	end := -1
-	for i := 0; i < len(output); i++ {
-		if output[i] == '{' {
-			start = i
-			break
-		}
-	}
-	for i := len(output) - 1; i >= 0; i-- {
-		if output[i] == '}' {
-			end = i
-			break
-		}
-	}
-	if start == -1 || end == -1 || end <= start {
-		return ""
-	}
-	candidate := output[start : end+1]
-	if json.Valid([]byte(candidate)) {
-		return candidate
-	}
-	return ""
-}

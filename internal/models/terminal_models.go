@@ -23,14 +23,6 @@ type TerminalSessionRequest struct {
 	TelnetPort int `json:"telnetPort,omitempty"`
 }
 
-type TerminalSessionResponse struct {
-	SessionID string           `json:"sessionId"`
-	Protocol  TerminalProtocol `json:"protocol"`
-	State     string           `json:"state"`
-	CreatedAt time.Time        `json:"createdAt"`
-	ExpiresAt time.Time        `json:"expiresAt"`
-}
-
 type TerminalSessionInfo struct {
 	SessionID    string           `json:"sessionId"`
 	Username     string           `json:"username"`

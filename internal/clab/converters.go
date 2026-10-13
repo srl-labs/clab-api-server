@@ -3,6 +3,7 @@ package clab
 
 import (
 	"encoding/json"
+	"slices"
 
 	clabconst "github.com/srl-labs/containerlab/constants"
 	clabcore "github.com/srl-labs/containerlab/core"
@@ -12,6 +13,22 @@ import (
 
 	"github.com/srl-labs/clab-api-server/internal/models"
 )
+
+// isInternalContainer reports whether a container is a helper containerlab
+// creates on behalf of a node rather than a node users interact with.
+func isInternalContainer(c clabruntime.GenericContainer) bool {
+	return c.Labels[clabconst.InternalNode] == "true"
+}
+
+// isInternalNodeConfig reports whether a topology node is a helper containerlab
+// adds on its own, such as a Tailscale sidecar.
+func isInternalNodeConfig(cfg *clabtypes.NodeConfig) bool {
+	return cfg != nil && cfg.Labels[clabconst.InternalNode] == "true"
+}
+
+func withoutInternalContainers(containers []clabruntime.GenericContainer) []clabruntime.GenericContainer {
+	return slices.DeleteFunc(containers, isInternalContainer)
+}
 
 // ContainerToClabContainerInfo converts a containerlab GenericContainer to API ClabContainerInfo.
 func ContainerToClabContainerInfo(c clabruntime.GenericContainer) models.ClabContainerInfo {
@@ -34,7 +51,37 @@ func ContainerToClabContainerInfo(c clabruntime.GenericContainer) models.ClabCon
 		AbsLabPath:  c.Labels[clabconst.TopoFile],
 		Group:       c.Labels[clabconst.NodeGroup],
 		Owner:       c.Labels[clabconst.Owner],
+		MgmtNetwork: containerMgmtNetwork(c),
+		Ports:       containerPorts(c),
 	}
+}
+
+// containerMgmtNetwork returns the management network name the runtime reports,
+// leaving it empty when the runtime could not determine it.
+func containerMgmtNetwork(c clabruntime.GenericContainer) string {
+	if c.NetworkName == "unknown" {
+		return ""
+	}
+	return c.NetworkName
+}
+
+func containerPorts(c clabruntime.GenericContainer) []models.ClabPortBinding {
+	if len(c.Ports) == 0 {
+		return nil
+	}
+	ports := make([]models.ClabPortBinding, 0, len(c.Ports))
+	for _, port := range c.Ports {
+		if port == nil {
+			continue
+		}
+		ports = append(ports, models.ClabPortBinding{
+			HostIP:        port.HostIP,
+			HostPort:      port.HostPort,
+			ContainerPort: port.ContainerPort,
+			Protocol:      port.Protocol,
+		})
+	}
+	return ports
 }
 
 // ContainersToClabInspectOutput converts a slice of containers to the API inspect output format.
@@ -184,89 +231,10 @@ func GetContainerName(c *clabruntime.GenericContainer) string {
 	return c.Names[0]
 }
 
-// GetContainerLabName extracts the lab name from a container's labels.
-func GetContainerLabName(c *clabruntime.GenericContainer) string {
-	if c == nil {
-		return ""
-	}
-	return c.Labels[clabconst.Containerlab]
-}
-
 // GetContainerNodeName extracts the topology node name from a container's labels.
 func GetContainerNodeName(c *clabruntime.GenericContainer) string {
 	if c == nil {
 		return ""
 	}
 	return c.Labels[clabconst.NodeName]
-}
-
-// GetContainerOwner extracts the owner from a container's labels.
-func GetContainerOwner(c *clabruntime.GenericContainer) string {
-	if c == nil {
-		return ""
-	}
-	return c.Labels[clabconst.Owner]
-}
-
-// GetContainerTopoPath extracts the topology path from a container's labels.
-func GetContainerTopoPath(c *clabruntime.GenericContainer) string {
-	if c == nil {
-		return ""
-	}
-	return c.Labels[clabconst.TopoFile]
-}
-
-// FilterContainersByOwner filters containers by owner.
-func FilterContainersByOwner(containers []clabruntime.GenericContainer, owner string) []clabruntime.GenericContainer {
-	var result []clabruntime.GenericContainer
-
-	for _, c := range containers {
-		if c.Labels[clabconst.Owner] == owner {
-			result = append(result, c)
-		}
-	}
-
-	return result
-}
-
-// FilterContainersByLab filters containers by lab name.
-func FilterContainersByLab(containers []clabruntime.GenericContainer, labName string) []clabruntime.GenericContainer {
-	var result []clabruntime.GenericContainer
-
-	for _, c := range containers {
-		if c.Labels[clabconst.Containerlab] == labName {
-			result = append(result, c)
-		}
-	}
-
-	return result
-}
-
-// FindContainerByName finds a container by its name in a slice.
-func FindContainerByName(containers []clabruntime.GenericContainer, name string) *clabruntime.GenericContainer {
-	for i := range containers {
-		for _, n := range containers[i].Names {
-			if n == name {
-				return &containers[i]
-			}
-		}
-		if containers[i].ShortID == name {
-			return &containers[i]
-		}
-	}
-	return nil
-}
-
-// GroupContainersByLab groups containers by their lab name.
-func GroupContainersByLab(containers []clabruntime.GenericContainer) map[string][]clabruntime.GenericContainer {
-	result := make(map[string][]clabruntime.GenericContainer)
-
-	for _, c := range containers {
-		labName := c.Labels[clabconst.Containerlab]
-		if labName != "" {
-			result[labName] = append(result[labName], c)
-		}
-	}
-
-	return result
 }

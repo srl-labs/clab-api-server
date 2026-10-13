@@ -12,28 +12,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
 	clabruntime "github.com/srl-labs/containerlab/runtime"
-	"gopkg.in/yaml.v3"
 
 	"github.com/srl-labs/clab-api-server/internal/clab"
 	"github.com/srl-labs/clab-api-server/internal/config"
 	"github.com/srl-labs/clab-api-server/internal/models"
 )
 
-const (
-	defaultGottyPort = 8080
-	defaultMgmtNet   = "clab"
-)
+const defaultGottyPort = 8080
 
 var httpLinkRegexp = regexp.MustCompile(`https?://[^\s"'<>]+`)
-
-type topologyMgmtConfig struct {
-	Mgmt struct {
-		Network string `yaml:"network"`
-	} `yaml:"mgmt"`
-}
 
 // @Summary Start node
 // @Description Starts a stopped node in a lab.
@@ -560,7 +549,6 @@ func RunLabFcliHandler(c *gin.Context) {
 
 	output, runErr := svc.RunFcliCommand(ctx, clab.FcliRunOptions{
 		Runtime:      config.AppConfig.ClabRuntime,
-		Network:      readMgmtNetworkFromTopologyFile(topoPath),
 		TopologyPath: topoPath,
 		CommandArgs:  commandArgs,
 	})
@@ -839,27 +827,6 @@ func hasDifferentDefaultContainerlabPrefix(labName, containerName string) bool {
 	return strings.HasPrefix(normalizedName, "clab-") && !strings.HasPrefix(normalizedName, expectedPrefix)
 }
 
-func readMgmtNetworkFromTopologyFile(topoPath string) string {
-	content, err := os.ReadFile(topoPath)
-	if err != nil {
-		log.Warnf("fcli: failed to read topology file '%s': %v", topoPath, err)
-		return defaultMgmtNet
-	}
-
-	var parsed topologyMgmtConfig
-	if err := yaml.Unmarshal(content, &parsed); err != nil {
-		log.Warnf("fcli: failed to parse topology file '%s': %v", topoPath, err)
-		return defaultMgmtNet
-	}
-
-	network := strings.TrimSpace(parsed.Mgmt.Network)
-	if network == "" {
-		return defaultMgmtNet
-	}
-
-	return network
-}
-
 func extractFirstHTTPLink(output string) string {
 	match := httpLinkRegexp.FindString(strings.TrimSpace(output))
 	return strings.TrimSpace(match)
@@ -900,4 +867,47 @@ func describePort(port int) string {
 	default:
 		return ""
 	}
+}
+
+// @Summary Get lab Tailscale status
+// @Description Reports the Tailscale devices containerlab runs for a lab: the SSO proxy (`mgmt.tailscale.auth-mode: sso`), the auth-key sidecars of nodes, and nodes of the `tailscale` kind.
+// @Description
+// @Description These are internal helper containers that are not listed as lab nodes. While the SSO proxy waits for authentication, `authUrl` holds the login URL to open; `forwards` lists the tailnet ports it forwards to nodes.
+// @Tags Labs
+// @Security BearerAuth
+// @Produce json
+// @Param labName path string true "Lab Name"
+// @Success 200 {object} models.TailscaleStatusResponse
+// @Failure 400 {object} models.ErrorResponse
+// @Failure 401 {object} models.ErrorResponse
+// @Failure 404 {object} models.ErrorResponse
+// @Failure 500 {object} models.ErrorResponse
+// @Router /api/v1/labs/{labName}/tailscale [get]
+func GetLabTailscaleStatusHandler(c *gin.Context) {
+	username := c.GetString("username")
+	labName := strings.TrimSpace(c.Param("labName"))
+	if !isValidLabName(labName) {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid lab name format."})
+		return
+	}
+	if _, err := verifyLabOwnership(c, username, labName); err != nil {
+		return
+	}
+
+	svc := GetClabService()
+	if svc == nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Containerlab service not initialized"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Minute)
+	defer cancel()
+
+	devices, err := svc.TailscaleStatus(ctx, labName)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to read Tailscale status of lab '%s': %s", labName, err.Error())})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.TailscaleStatusResponse{LabName: labName, Devices: devices})
 }

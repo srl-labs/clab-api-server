@@ -432,6 +432,9 @@ func ImportTopologyFromURLHandler(c *gin.Context) {
 // @Param skipLabdirAcl query boolean false "Skip setting extended ACLs on lab directory"
 // @Param stream query boolean false "Stream lifecycle output as NDJSON events"
 // @Param includeLogs query boolean false "Include captured lifecycle logs in the JSON response"
+// @Param network query string false "Override the management network name (like --network); not allowed with multiple management networks"
+// @Param ipv4Subnet query string false "Override the management network IPv4 subnet (like --ipv4-subnet)"
+// @Param ipv6Subnet query string false "Override the management network IPv6 subnet (like --ipv6-subnet)"
 // @Success 200 {object} models.ClabInspectOutput "Deployed lab details"
 // @Failure 400 {object} models.ErrorResponse "Invalid input"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
@@ -469,6 +472,10 @@ func DeployTopologyHandler(c *gin.Context) {
 	maxWorkers, err := strconv.Atoi(maxWorkersStr)
 	if err != nil || maxWorkers < 0 {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid 'maxWorkers' query parameter."})
+		return
+	}
+	mgmt, valid := parseMgmtOverrideQuery(c)
+	if !valid {
 		return
 	}
 
@@ -560,6 +567,7 @@ func DeployTopologyHandler(c *gin.Context) {
 		SkipPostDeploy: skipPostDeploy,
 		SkipLabDirACLs: skipLabdirAcl,
 	}
+	mgmt.applyTo(&deployOptions)
 
 	if streamLogs {
 		var inspectResult models.ClabInspectOutput
@@ -593,7 +601,7 @@ func DeployTopologyHandler(c *gin.Context) {
 			return nil
 		})
 		if deployErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
+			c.JSON(deployErrorStatus(deployErr), gin.H{
 				"error": fmt.Sprintf("Failed to deploy lab '%s': %s", labName, deployErr.Error()),
 				"logs":  logs,
 			})
@@ -608,7 +616,7 @@ func DeployTopologyHandler(c *gin.Context) {
 
 	containers, deployErr := svc.Deploy(deployCtx, deployOptions)
 	if deployErr != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to deploy lab '%s': %s", labName, deployErr.Error())})
+		c.JSON(deployErrorStatus(deployErr), models.ErrorResponse{Error: fmt.Sprintf("Failed to deploy lab '%s': %s", labName, deployErr.Error())})
 		return
 	}
 

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os/exec"
 	"sync"
 	"time"
 
@@ -32,7 +31,6 @@ type SSHSession struct {
 	ApiUsername string    // API user who created this session
 	Expiration  time.Time // When this session expires
 	Created     time.Time // When this session was created
-	cmd         *exec.Cmd // Proxy process
 	cmdCancel   func()    // Function to cancel the proxy process
 }
 

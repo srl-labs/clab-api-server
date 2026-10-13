@@ -67,6 +67,9 @@ func resolveURLDeploySource(
 // @Param nodeFilter query string false "Comma-separated list of node names to deploy"
 // @Param skipPostDeploy query boolean false "Skip post-deploy actions"
 // @Param skipLabdirAcl query boolean false "Skip setting extended ACLs on lab directory"
+// @Param network query string false "Override the management network name (like --network); not allowed with multiple management networks"
+// @Param ipv4Subnet query string false "Override the management network IPv4 subnet (like --ipv4-subnet)"
+// @Param ipv6Subnet query string false "Override the management network IPv6 subnet (like --ipv6-subnet)"
 // @Success 200 {object} models.ClabInspectOutput "Deployed lab details"
 // @Failure 400 {object} models.ErrorResponse "Invalid input"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
@@ -125,6 +128,10 @@ func DeployLabHandler(c *gin.Context) {
 	maxWorkers, err := strconv.Atoi(maxWorkersStr)
 	if err != nil || maxWorkers < 0 {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid 'maxWorkers' query parameter."})
+		return
+	}
+	mgmt, valid := parseMgmtOverrideQuery(c)
+	if !valid {
 		return
 	}
 
@@ -276,12 +283,13 @@ func DeployLabHandler(c *gin.Context) {
 		SkipPostDeploy: skipPostDeploy,
 		SkipLabDirACLs: skipLabdirAcl,
 	}
+	mgmt.applyTo(&deployOpts)
 
 	log.Infof("DeployLab user '%s': Deploying lab '%s'...", username, effectiveLabName)
 	containers, err := svc.Deploy(ctx, deployOpts)
 	if err != nil {
 		log.Errorf("DeployLab failed for user '%s', lab '%s': %v", username, effectiveLabName, err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to deploy lab '%s': %s", effectiveLabName, err.Error())})
+		c.JSON(deployErrorStatus(err), models.ErrorResponse{Error: fmt.Sprintf("Failed to deploy lab '%s': %s", effectiveLabName, err.Error())})
 		return
 	}
 
@@ -306,6 +314,9 @@ func DeployLabHandler(c *gin.Context) {
 // @Param nodeFilter query string false "Comma-separated list of node names to deploy"
 // @Param skipPostDeploy query boolean false "Skip post-deploy actions"
 // @Param skipLabdirAcl query boolean false "Skip setting extended ACLs on lab directory"
+// @Param network query string false "Override the management network name (like --network); not allowed with multiple management networks"
+// @Param ipv4Subnet query string false "Override the management network IPv4 subnet (like --ipv4-subnet)"
+// @Param ipv6Subnet query string false "Override the management network IPv6 subnet (like --ipv6-subnet)"
 // @Success 200 {object} models.ClabInspectOutput "Deployed lab details"
 // @Failure 400 {object} models.ErrorResponse "Invalid input"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
@@ -346,6 +357,10 @@ func DeployLabArchiveHandler(c *gin.Context) {
 	maxWorkers, err := strconv.Atoi(maxWorkersStr)
 	if err != nil || maxWorkers < 0 {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid 'maxWorkers' query parameter."})
+		return
+	}
+	mgmt, valid := parseMgmtOverrideQuery(c)
+	if !valid {
 		return
 	}
 
@@ -479,12 +494,13 @@ func DeployLabArchiveHandler(c *gin.Context) {
 		SkipPostDeploy: skipPostDeploy,
 		SkipLabDirACLs: skipLabdirAcl,
 	}
+	mgmt.applyTo(&deployOpts)
 
 	log.Infof("DeployLab (Archive) user '%s': Deploying lab '%s'...", username, labName)
 	containers, err := svc.Deploy(ctx, deployOpts)
 	if err != nil {
 		log.Errorf("DeployLab (Archive) failed for user '%s', lab '%s': %v", username, labName, err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to deploy lab '%s': %s", labName, err.Error())})
+		c.JSON(deployErrorStatus(err), models.ErrorResponse{Error: fmt.Sprintf("Failed to deploy lab '%s': %s", labName, err.Error())})
 		return
 	}
 
@@ -709,6 +725,9 @@ func DestroyLabHandler(c *gin.Context) {
 // @Param skipLabdirAcl query boolean false "Skip setting extended ACLs on lab directory"
 // @Param stream query boolean false "Stream lifecycle output as NDJSON events"
 // @Param includeLogs query boolean false "Include captured lifecycle logs in the JSON response"
+// @Param network query string false "Override the management network name (like --network); not allowed with multiple management networks"
+// @Param ipv4Subnet query string false "Override the management network IPv4 subnet (like --ipv4-subnet)"
+// @Param ipv6Subnet query string false "Override the management network IPv6 subnet (like --ipv6-subnet)"
 // @Success 200 {object} models.ClabInspectOutput "Redeployed lab details"
 // @Failure 400 {object} models.ErrorResponse "Invalid lab name"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
@@ -745,6 +764,10 @@ func RedeployLabHandler(c *gin.Context) {
 	maxWorkers, err := strconv.Atoi(maxWorkersStr)
 	if err != nil || maxWorkers < 0 {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid 'maxWorkers' query parameter."})
+		return
+	}
+	mgmt, valid := parseMgmtOverrideQuery(c)
+	if !valid {
 		return
 	}
 
@@ -798,11 +821,24 @@ func RedeployLabHandler(c *gin.Context) {
 		SkipPostDeploy: skipPostDeploy,
 		SkipLabDirACLs: skipLabdirAcl,
 	}
+	mgmt.applyTo(&deployOpts)
+
+	// Redeploy destroys the lab before deploying it again; reject options the
+	// topology cannot be deployed with while the lab is still intact.
+	if err := svc.ValidateDeploy(deployOpts); err != nil {
+		c.JSON(deployErrorStatus(err), models.ErrorResponse{Error: fmt.Sprintf("Cannot redeploy lab '%s': %s", labName, err.Error())})
+		return
+	}
 
 	runRedeploy := func() (models.ClabInspectOutput, error) {
 		log.Infof("RedeployLab user '%s': Destroying lab '%s'...", username, labName)
 		if err := svc.Destroy(ctx, destroyOpts); err != nil {
 			return nil, fmt.Errorf("Failed to destroy lab '%s': %s", labName, err.Error())
+		}
+		// containerlab can report success with cleanup enabled although
+		// containers were left behind; never deploy over a half-destroyed lab.
+		if err := ensureLabDestroyed(ctx, svc, labName); err != nil {
+			return nil, err
 		}
 
 		log.Infof("RedeployLab user '%s': Deploying lab '%s'...", username, labName)

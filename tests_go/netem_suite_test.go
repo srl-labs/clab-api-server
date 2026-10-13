@@ -176,3 +176,122 @@ func (s *NetemSuite) TestNetemSetShowResetForLabOwner() {
 		s.Require().False(strings.HasPrefix(ifs2[i].Interface, iface), "Expected netem entry for '%s' to be removed after reset. Body: %s", iface, string(showBody2))
 	}
 }
+
+// TestNetemByLabAndNodeName targets nodes by topology name, like
+// `clab tools netem --name <lab> -n <node>`, and shows all nodes of a lab.
+func (s *NetemSuite) TestNetemByLabAndNodeName() {
+	labName, userHeaders := s.setupEphemeralLab()
+	defer s.cleanupLab(labName, true)
+
+	type netemIfInfo struct {
+		Interface string `json:"interface"`
+		Delay     string `json:"delay"`
+	}
+	showLab := func(query string) map[string][]netemIfInfo {
+		showURL := fmt.Sprintf("%s/api/v1/tools/netem/show?%s", s.cfg.APIURL, query)
+		body, status, err := s.doRequest("GET", showURL, userHeaders, nil, s.cfg.RequestTimeout)
+		s.Require().NoError(err)
+		s.Require().Equal(http.StatusOK, status, "Expected 200 showing netem (%s). Body: %s", query, string(body))
+		var resp map[string][]netemIfInfo
+		s.Require().NoError(json.Unmarshal(body, &resp), "Body: %s", string(body))
+		return resp
+	}
+	findIface := func(infos []netemIfInfo, iface string) *netemIfInfo {
+		for i := range infos {
+			if strings.HasPrefix(infos[i].Interface, iface) {
+				return &infos[i]
+			}
+		}
+		return nil
+	}
+	post := func(path string, payload map[string]interface{}) ([]byte, int) {
+		body, status, err := s.doRequest("POST", fmt.Sprintf("%s/api/v1/tools/netem/%s", s.cfg.APIURL, path), userHeaders, bytes.NewBuffer(s.mustMarshal(payload)), s.cfg.RequestTimeout)
+		s.Require().NoError(err)
+		return body, status
+	}
+
+	body, status := post("set", map[string]interface{}{"labName": labName, "nodeName": "srl1", "interface": "eth1", "delay": "20ms"})
+	s.Require().Equal(http.StatusOK, status, "Expected 200 setting netem by node name. Body: %s", string(body))
+	time.Sleep(500 * time.Millisecond)
+
+	allNodes := showLab("labName=" + labName)
+	s.Require().Contains(allNodes, "srl1", "Expected lab show to include srl1: %v", allNodes)
+	s.Require().Contains(allNodes, "srl2", "Expected lab show to include srl2: %v", allNodes)
+	entry := findIface(allNodes["srl1"], "eth1")
+	s.Require().NotNil(entry, "Expected eth1 impairment on srl1: %v", allNodes)
+	s.Require().Equal("20ms", entry.Delay)
+
+	oneNode := showLab(fmt.Sprintf("labName=%s&nodeName=srl1", labName))
+	s.Require().NotNil(findIface(oneNode["srl1"], "eth1"), "Expected eth1 impairment in node show: %v", oneNode)
+
+	body, status = post("reset", map[string]interface{}{"labName": labName, "nodeName": "srl1", "interface": "eth1"})
+	s.Require().Equal(http.StatusOK, status, "Expected 200 resetting netem by node name. Body: %s", string(body))
+	time.Sleep(500 * time.Millisecond)
+	s.Require().Nil(findIface(showLab("labName=" + labName)["srl1"], "eth1"), "Expected eth1 impairment to be removed")
+
+	body, status = post("set", map[string]interface{}{"labName": labName, "nodeName": "missing", "interface": "eth1", "delay": "20ms"})
+	s.Require().Equal(http.StatusNotFound, status, "Expected 404 for unknown node. Body: %s", string(body))
+
+	body, status = post("set", map[string]interface{}{"labName": labName, "interface": "eth1", "delay": "20ms"})
+	s.Require().Equal(http.StatusBadRequest, status, "Expected 400 without nodeName. Body: %s", string(body))
+}
+
+// TestNetemOnStitchedLinkUsesHostInterface checks that impairments of a
+// veth-stitch endpoint are applied to, shown on and reset from the host-side
+// tools interface of the stitch, like the containerlab CLI does.
+func (s *NetemSuite) TestNetemOnStitchedLinkUsesHostInterface() {
+	labName := fmt.Sprintf("%s-stitch-%s", s.cfg.LabNamePrefix, s.randomSuffix(5))
+	topology := fmt.Sprintf(`{
+  "name": %q,
+  "topology": {
+    "nodes": {
+      "srl1": {"kind": "linux", "image": "ghcr.io/srl-labs/network-multitool:latest"},
+      "srl2": {"kind": "linux", "image": "ghcr.io/srl-labs/network-multitool:latest"}
+    },
+    "links": [
+      {"type": "veth-stitch", "endpoints": [{"node": "srl1", "interface": "eth1"}, {"node": "srl2", "interface": "eth1"}]}
+    ]
+  }
+}`, labName)
+
+	bodyBytes, statusCode, err := s.createLab(s.apiUserHeaders, labName, topology, false, s.cfg.DeployTimeout)
+	s.Require().NoError(err)
+	s.Require().Equal(http.StatusOK, statusCode, "Expected stitched lab deploy to succeed. Body: %s", string(bodyBytes))
+	defer s.cleanupLab(labName, true)
+	time.Sleep(s.cfg.StabilizePause)
+
+	post := func(path string, payload map[string]interface{}) ([]byte, int) {
+		body, status, err := s.doRequest("POST", fmt.Sprintf("%s/api/v1/tools/netem/%s", s.cfg.APIURL, path), s.apiUserHeaders, bytes.NewBuffer(s.mustMarshal(payload)), s.cfg.RequestTimeout)
+		s.Require().NoError(err)
+		return body, status
+	}
+	show := func() []map[string]interface{} {
+		showURL := fmt.Sprintf("%s/api/v1/tools/netem/show?labName=%s&nodeName=srl1", s.cfg.APIURL, labName)
+		body, status, err := s.doRequest("GET", showURL, s.apiUserHeaders, nil, s.cfg.RequestTimeout)
+		s.Require().NoError(err)
+		s.Require().Equal(http.StatusOK, status, "Body: %s", string(body))
+		var resp map[string][]map[string]interface{}
+		s.Require().NoError(json.Unmarshal(body, &resp), "Body: %s", string(body))
+		return resp["srl1"]
+	}
+
+	body, status := post("set", map[string]interface{}{"labName": labName, "nodeName": "srl1", "interface": "eth1", "delay": "15ms"})
+	s.Require().Equal(http.StatusOK, status, "Expected 200 setting netem on stitched interface. Body: %s", string(body))
+	time.Sleep(500 * time.Millisecond)
+
+	var hostEntry map[string]interface{}
+	for _, entry := range show() {
+		if entry["interface"] == "eth1 (host)" {
+			hostEntry = entry
+		}
+	}
+	s.Require().NotNil(hostEntry, "Expected impairment on the host side of the stitch: %v", show())
+	s.Require().Equal("15ms", hostEntry["delay"])
+
+	body, status = post("reset", map[string]interface{}{"labName": labName, "nodeName": "srl1", "interface": "eth1"})
+	s.Require().Equal(http.StatusOK, status, "Expected 200 resetting stitched interface. Body: %s", string(body))
+	time.Sleep(500 * time.Millisecond)
+	for _, entry := range show() {
+		s.Require().NotEqual("eth1 (host)", entry["interface"], "Expected host-side impairment to be removed")
+	}
+}

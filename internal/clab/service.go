@@ -48,6 +48,13 @@ const (
 
 var ErrNetemInterfaceNotFound = errors.New("netem interface not found")
 
+// ErrNetemNodeNotFound is returned when a netem target node is not part of the lab topology.
+var ErrNetemNodeNotFound = errors.New("netem node not found")
+
+// ErrMgmtOverrideUnsupported is returned when management network overrides are
+// requested for a topology that defines several management networks.
+var ErrMgmtOverrideUnsupported = errors.New("management network overrides cannot be used with multiple management networks")
+
 // Service provides an interface to containerlab operations using the library directly.
 type Service struct{}
 
@@ -282,6 +289,11 @@ type DeployOptions struct {
 	NodeFilter     []string
 	SkipPostDeploy bool
 	SkipLabDirACLs bool
+	// MgmtNetwork, MgmtIPv4Subnet and MgmtIPv6Subnet override the topology's
+	// management network like the --network, --ipv4-subnet and --ipv6-subnet flags.
+	MgmtNetwork    string
+	MgmtIPv4Subnet string
+	MgmtIPv6Subnet string
 }
 
 // ApplyOptions contains options for applying topology changes to a lab.
@@ -312,6 +324,9 @@ type ListOptions struct {
 	LabName       string
 	ContainerName string
 	NodeName      string
+	// IncludeInternal also returns helper containers containerlab creates for a
+	// node (e.g. the SR-SIM netns holder), which `clab inspect` hides by default.
+	IncludeInternal bool
 }
 
 // ExecOptions contains options for executing commands.
@@ -389,7 +404,6 @@ type DrawioGenerateResult struct {
 
 type FcliRunOptions struct {
 	Runtime      string
-	Network      string
 	TopologyPath string
 	CommandArgs  []string
 }
@@ -561,23 +575,46 @@ func deployClabOptions(topoPath, labName string, opts DeployOptions) []clabcore.
 		clabOpts = append(clabOpts, clabcore.WithNodeFilter(opts.NodeFilter))
 	}
 
+	return append(clabOpts, mgmtOverrideOptions(opts)...)
+}
+
+// mgmtOverrideOptions mirrors the --network, --ipv4-subnet and --ipv6-subnet deploy flags.
+func mgmtOverrideOptions(opts DeployOptions) []clabcore.ClabOption {
+	var clabOpts []clabcore.ClabOption
+	if opts.MgmtNetwork != "" {
+		clabOpts = append(clabOpts, clabcore.WithManagementNetworkName(opts.MgmtNetwork))
+	}
+	if opts.MgmtIPv4Subnet != "" {
+		clabOpts = append(clabOpts, clabcore.WithManagementIpv4Subnet(opts.MgmtIPv4Subnet))
+	}
+	if opts.MgmtIPv6Subnet != "" {
+		clabOpts = append(clabOpts, clabcore.WithManagementIpv6Subnet(opts.MgmtIPv6Subnet))
+	}
 	return clabOpts
 }
 
-// Deploy deploys a lab using the containerlab library.
-func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime.GenericContainer, error) {
-	ctx, cancel := s.ensureTimeout(ctx)
-	defer cancel()
+// wrapMgmtOverrideError maps containerlab's rejection of management network
+// overrides to ErrMgmtOverrideUnsupported so handlers can report a client error.
+func wrapMgmtOverrideError(err error) error {
+	if err != nil && strings.Contains(err.Error(), "management network flags cannot be used") {
+		return fmt.Errorf("%w: %v", ErrMgmtOverrideUnsupported, err)
+	}
+	return err
+}
 
+// openDeployLab prepares the process state a deploy runs in (owner env, work
+// directory, containerlab lock) and loads the topology with the deploy options.
+// The returned release function must be called once the instance is no longer used.
+func (s *Service) openDeployLab(opts DeployOptions) (*clabcore.CLab, func(), error) {
 	labName := strings.TrimSpace(opts.LabName)
 	if labName == "" {
-		return nil, fmt.Errorf("authorized lab name is required")
+		return nil, nil, fmt.Errorf("authorized lab name is required")
 	}
 
 	// Prepare clab working directory
 	workDir, err := s.prepareWorkDir(opts.Username)
 	if err != nil {
-		return nil, fmt.Errorf("failed to prepare working directory: %w", err)
+		return nil, nil, fmt.Errorf("failed to prepare working directory: %w", err)
 	}
 
 	// Handle GitHub/GitLab URLs by cloning the repo first
@@ -587,27 +624,28 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 		var gitErr error
 		topoPath, gitErr = s.processGitTopoFile(topoPath, workDir)
 		if gitErr != nil {
-			return nil, fmt.Errorf("failed to process git URL: %w", gitErr)
+			return nil, nil, fmt.Errorf("failed to process git URL: %w", gitErr)
 		}
 		log.Debug("Using cloned topology file", "path", topoPath)
 	}
 
 	// Change to the work directory for relative path resolution
 	unlock := lockContainerlabOperation()
-	defer unlock()
-
 	restoreOwnerEnv := setProcessOwnerEnv(opts.Username)
-	defer restoreOwnerEnv()
 
 	originalDir, _ := os.Getwd()
 	if chErr := os.Chdir(workDir); chErr != nil {
-		return nil, fmt.Errorf("failed to change to work directory: %w", chErr)
+		restoreOwnerEnv()
+		unlock()
+		return nil, nil, fmt.Errorf("failed to change to work directory: %w", chErr)
 	}
-	defer func() {
+	release := func() {
 		if restoreErr := os.Chdir(originalDir); restoreErr != nil {
 			log.Warn("Failed to restore working directory", "error", restoreErr)
 		}
-	}()
+		restoreOwnerEnv()
+		unlock()
+	}
 
 	log.Debug("Creating containerlab instance",
 		"topoPath", opts.TopoPath,
@@ -615,11 +653,37 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 		"runtime", config.AppConfig.ClabRuntime,
 	)
 
-	// Create containerlab instance
 	clab, err := clabcore.NewContainerLab(deployClabOptions(topoPath, labName, opts)...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create containerlab instance: %w", err)
+		release()
+		return nil, nil, fmt.Errorf("failed to create containerlab instance: %w", wrapMgmtOverrideError(err))
 	}
+
+	return clab, release, nil
+}
+
+// ValidateDeploy loads the topology with the given deploy options without
+// changing any lab state, so callers can reject invalid options before a
+// destructive step such as the destroy phase of a redeploy.
+func (s *Service) ValidateDeploy(opts DeployOptions) error {
+	_, release, err := s.openDeployLab(opts)
+	if err != nil {
+		return err
+	}
+	release()
+	return nil
+}
+
+// Deploy deploys a lab using the containerlab library.
+func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime.GenericContainer, error) {
+	ctx, cancel := s.ensureTimeout(ctx)
+	defer cancel()
+
+	clab, release, err := s.openDeployLab(opts)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	// Build deploy options
 	deployOpts, err := clabcore.NewDeployOptions(opts.MaxWorkers)
@@ -644,7 +708,7 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 	deployResult, err := clab.Deploy(ctx, deployOpts)
 	var containers []clabruntime.GenericContainer
 	if deployResult != nil {
-		containers = deployResult.Containers
+		containers = withoutInternalContainers(deployResult.Containers)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("deployment failed: %w", err)
@@ -889,6 +953,9 @@ func (s *Service) ListContainers(ctx context.Context, opts ListOptions) ([]clabr
 	containers, err := clab.ListContainers(ctx, listOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list containers: %w", err)
+	}
+	if !opts.IncludeInternal {
+		containers = withoutInternalContainers(containers)
 	}
 
 	return containers, nil
@@ -1180,24 +1247,56 @@ func (s *Service) RunFcliCommand(ctx context.Context, opts FcliRunOptions) (stri
 		runtimeName = "docker"
 	}
 
-	networkName := strings.TrimSpace(opts.Network)
-	if networkName == "" {
-		networkName = "clab"
+	networkArgs, err := s.fcliNetworkArgs(ctx, topologyPath)
+	if err != nil {
+		return "", err
 	}
 
 	args := []string{
 		"run",
 		"--pull", "always",
 		"--rm",
-		"--network", networkName,
+	}
+	args = append(args, networkArgs...)
+	args = append(args,
 		"-v", "/etc/hosts:/etc/hosts:ro",
 		"-v", fmt.Sprintf("%s:/topo.yml", topologyPath),
 		"ghcr.io/srl-labs/nornir-srl:latest",
 		"-t", "/topo.yml",
-	}
+	)
 	args = append(args, opts.CommandArgs...)
 
 	return s.runCommand(ctx, runtimeName, args)
+}
+
+// fcliNetworkArgs attaches the fcli container to the lab's default management
+// network. Unless the network uses runtime IPAM, containerlab allocates the
+// container address, as it does for its own tool containers, so the address
+// cannot clash with addresses containerlab assigns to lab nodes.
+func (s *Service) fcliNetworkArgs(ctx context.Context, topologyPath string) ([]string, error) {
+	lab, err := newContainerLab(
+		clabcore.WithTimeout(defaultTimeout),
+		clabcore.WithTopoPath(topologyPath, nil),
+		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{Timeout: defaultTimeout}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load topology: %w", err)
+	}
+
+	network := lab.Config.Mgmt.Network
+	cfg := &clabtypes.NodeConfig{ShortName: "fcli", LongName: "fcli", MgmtNet: network}
+	if err := lab.AllocateToolManagementIPs(ctx, cfg); err != nil {
+		return nil, fmt.Errorf("failed to allocate fcli management address: %w", err)
+	}
+
+	args := []string{"--network", network}
+	if cfg.MgmtIPv4Address != "" {
+		args = append(args, "--ip", cfg.MgmtIPv4Address)
+	}
+	if cfg.MgmtIPv6Address != "" {
+		args = append(args, "--ip6", cfg.MgmtIPv6Address)
+	}
+	return args, nil
 }
 
 func (s *Service) GenerateDrawioFile(ctx context.Context, opts DrawioGenerateOptions) (DrawioGenerateResult, error) {
@@ -2018,40 +2117,121 @@ func (s *Service) DeleteVxlan(ctx context.Context, prefix string) ([]string, err
 
 // --- Netem ---
 
-// NetemSetOptions contains options for setting link impairments using netem.
-type NetemSetOptions struct {
+// NetemTarget selects the node netem operates on: either a runtime container,
+// or a topology node of a running lab (`clab tools netem -n <node> --name <lab>`).
+type NetemTarget struct {
 	ContainerName string
-	Interface     string
-	Delay         time.Duration
-	Jitter        time.Duration
-	Loss          float64
-	Rate          uint64 // kbit/s
-	Corruption    float64
+	LabName       string
+	NodeName      string
+	// Username owns the working directory used to load the lab topology.
+	Username string
 }
 
-// SetNetem applies netem impairments to a specific interface in a container's network namespace.
-func (s *Service) SetNetem(ctx context.Context, opts NetemSetOptions) error {
-	ctx, cancel := s.ensureTimeout(ctx)
-	defer cancel()
+// NetemSetOptions contains options for setting link impairments using netem.
+type NetemSetOptions struct {
+	Target     NetemTarget
+	Interface  string
+	Delay      time.Duration
+	Jitter     time.Duration
+	Loss       float64
+	Rate       uint64 // kbit/s
+	Corruption float64
+}
 
-	// Best-effort: ensure netem kernel module is loaded (helps on some distros).
-	if err := exec.CommandContext(ctx, "modprobe", "sch_netem").Run(); err != nil {
-		log.Warn("failed to load sch_netem kernel module", "err", err)
+// resolveNetemNode returns the netns and topology identity netem works with.
+// A topology node resolves through its kind, so a multi-container node (e.g. a
+// distributed SR-SIM) targets the namespace its interfaces live in.
+func (s *Service) resolveNetemNode(ctx context.Context, target NetemTarget) (*clabcore.NetemNode, error) {
+	if target.ContainerName != "" {
+		node, err := clabcore.ResolveNetemNode(ctx, config.AppConfig.ClabRuntime, defaultTimeout, target.ContainerName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get namespace path for container %s: %w", target.ContainerName, err)
+		}
+		return node, nil
 	}
 
-	rt, err := s.getContainerRuntime()
+	var node *clabcore.NetemNode
+	err := s.withRunningLab(target.LabName, target.Username, func(lab *clabcore.CLab) error {
+		labNode, ok := lab.Nodes[target.NodeName]
+		if !ok || isInternalNodeConfig(labNode.Config()) {
+			return fmt.Errorf("%w: node %q in lab %q", ErrNetemNodeNotFound, target.NodeName, target.LabName)
+		}
+		nsPath, err := labNode.GetNSPath(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get namespace path for node %s: %w", target.NodeName, err)
+		}
+		node = clabcore.NewNetemNode(nsPath, target.NodeName, lab.Config.Name, target.NodeName)
+		return nil
+	})
+	return node, err
+}
+
+// hostNetNS is the server's own network namespace, opened while the package
+// initializes and no thread has switched namespaces yet.
+var hostNetNS, hostNetNSErr = ns.GetCurrentNS()
+
+// resolveNetemTarget returns where impairments of iface must be applied.
+func (s *Service) resolveNetemTarget(ctx context.Context, nodeTarget NetemTarget, iface string) (*clabcore.NetemTarget, error) {
+	node, err := s.resolveNetemNode(ctx, nodeTarget)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	target, err := node.TargetFor(iface)
+	if err != nil {
+		return nil, err
+	}
+	// TargetFor names the host namespace by the calling thread's netns path,
+	// which may meanwhile belong to a thread another request moved into a node
+	// namespace. Pin host-side targets to the namespace opened at startup.
+	if target.NSPath != node.NSPath {
+		if hostNetNSErr != nil {
+			return nil, fmt.Errorf("failed to open host network namespace: %w", hostNetNSErr)
+		}
+		target.NSPath = fmt.Sprintf("/proc/self/fd/%d", hostNetNS.Fd())
+	}
+	return target, nil
+}
+
+// withRunningLab loads the topology of a running lab the way commands invoked
+// with --name do, and runs fn while holding the containerlab operation lock.
+func (s *Service) withRunningLab(labName, username string, fn func(*clabcore.CLab) error) error {
+	workDir, err := s.prepareWorkDir(username)
+	if err != nil {
+		return fmt.Errorf("failed to prepare working directory: %w", err)
 	}
 
-	nsPath, err := rt.GetNSPath(ctx, opts.ContainerName)
+	unlock := lockContainerlabOperation()
+	defer unlock()
+
+	originalDir, _ := os.Getwd()
+	if chErr := os.Chdir(workDir); chErr != nil {
+		return fmt.Errorf("failed to change to work directory: %w", chErr)
+	}
+	defer func() {
+		if restoreErr := os.Chdir(originalDir); restoreErr != nil {
+			log.Warn("Failed to restore working directory", "error", restoreErr)
+		}
+	}()
+
+	// WithTopologyFromLab looks the lab up through the runtime, so it must come after WithRuntime.
+	lab, err := clabcore.NewContainerLab(
+		clabcore.WithTimeout(defaultTimeout),
+		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{Timeout: defaultTimeout}),
+		clabcore.WithTopologyFromLab(labName, nil),
+	)
 	if err != nil {
-		return fmt.Errorf("failed to get namespace path for container %s: %w", opts.ContainerName, err)
+		return fmt.Errorf("failed to load topology of lab %q: %w", labName, err)
 	}
 
-	nodeNS, err := ns.GetNS(nsPath)
+	return fn(lab)
+}
+
+// withNetemInterface opens the namespace holding the target interface and runs
+// fn inside it with an rtnetlink socket bound to that namespace.
+func withNetemInterface(target *clabcore.NetemTarget, fn func(tcnl *gotc.Tc, iface *net.Interface) error) error {
+	nodeNS, err := ns.GetNS(target.NSPath)
 	if err != nil {
-		return fmt.Errorf("failed to open network namespace %s: %w", nsPath, err)
+		return fmt.Errorf("failed to open network namespace %s: %w", target.NSPath, err)
 	}
 	defer nodeNS.Close()
 
@@ -2065,25 +2245,45 @@ func (s *Service) SetNetem(ctx context.Context, opts NetemSetOptions) error {
 		}
 	}()
 
-	err = nodeNS.Do(func(_ ns.NetNS) error {
-		netemIfLink, err := resolveNetemLink(opts.Interface)
+	return nodeNS.Do(func(_ ns.NetNS) error {
+		link, err := resolveNetemLink(target.Iface)
 		if err != nil {
 			var lnf netlink.LinkNotFoundError
 			if errors.As(err, &lnf) {
-				return fmt.Errorf("%w: %s", ErrNetemInterfaceNotFound, opts.Interface)
+				return fmt.Errorf("%w: %s", ErrNetemInterfaceNotFound, target.Iface)
 			}
 			return err
 		}
 
-		netemIfName := netemIfLink.Attrs().Name
-		iface, err := net.InterfaceByName(netemIfName)
+		iface, err := net.InterfaceByName(link.Attrs().Name)
 		if err != nil {
-			return fmt.Errorf("%w: %s", ErrNetemInterfaceNotFound, netemIfName)
+			return fmt.Errorf("%w: %s", ErrNetemInterfaceNotFound, link.Attrs().Name)
 		}
 
-		_, err = clabnetem.SetImpairments(
+		return fn(tcnl, iface)
+	})
+}
+
+// SetNetem applies netem impairments to an interface of a node. Interfaces of
+// stitched links are impaired on their host-side tools interface, like the CLI does.
+func (s *Service) SetNetem(ctx context.Context, opts NetemSetOptions) error {
+	ctx, cancel := s.ensureTimeout(ctx)
+	defer cancel()
+
+	// Best-effort: ensure netem kernel module is loaded (helps on some distros).
+	if err := exec.CommandContext(ctx, "modprobe", "sch_netem").Run(); err != nil {
+		log.Warn("failed to load sch_netem kernel module", "err", err)
+	}
+
+	target, err := s.resolveNetemTarget(ctx, opts.Target, opts.Interface)
+	if err != nil {
+		return err
+	}
+
+	err = withNetemInterface(target, func(tcnl *gotc.Tc, iface *net.Interface) error {
+		_, err := clabnetem.SetImpairments(
 			tcnl,
-			opts.ContainerName,
+			target.DisplayName,
 			iface,
 			opts.Delay,
 			opts.Jitter,
@@ -2098,7 +2298,7 @@ func (s *Service) SetNetem(ctx context.Context, opts NetemSetOptions) error {
 	}
 
 	log.Info("netem impairments set",
-		"container", opts.ContainerName,
+		"node", target.DisplayName,
 		"interface", opts.Interface,
 		"delay", opts.Delay.String(),
 		"jitter", opts.Jitter.String(),
@@ -2134,73 +2334,38 @@ func resolveNetemLink(iface string) (netlink.Link, error) {
 	return nil, err
 }
 
-// ResetNetem removes netem impairments from a specific interface in a container's network namespace.
-func (s *Service) ResetNetem(ctx context.Context, containerName, iface string) error {
+// ResetNetem removes netem impairments from an interface of a node.
+func (s *Service) ResetNetem(ctx context.Context, nodeTarget NetemTarget, ifaceName string) error {
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
-	rt, err := s.getContainerRuntime()
+	target, err := s.resolveNetemTarget(ctx, nodeTarget, ifaceName)
 	if err != nil {
 		return err
 	}
 
-	nsPath, err := rt.GetNSPath(ctx, containerName)
-	if err != nil {
-		return fmt.Errorf("failed to get namespace path for container %s: %w", containerName, err)
-	}
-
-	nodeNS, err := ns.GetNS(nsPath)
-	if err != nil {
-		return fmt.Errorf("failed to open network namespace %s: %w", nsPath, err)
-	}
-	defer nodeNS.Close()
-
-	tcnl, err := clabnetem.NewTC(int(nodeNS.Fd()))
-	if err != nil {
-		return fmt.Errorf("failed to open rtnetlink socket: %w", err)
-	}
-	defer func() {
-		if closeErr := tcnl.Close(); closeErr != nil {
-			log.Warn("failed to close rtnetlink socket", "err", closeErr)
-		}
-	}()
-
-	return nodeNS.Do(func(_ ns.NetNS) error {
-		netemIfLink, err := resolveNetemLink(iface)
-		if err != nil {
-			var lnf netlink.LinkNotFoundError
-			if errors.As(err, &lnf) {
-				return fmt.Errorf("%w: %s", ErrNetemInterfaceNotFound, iface)
-			}
-			return err
-		}
-
-		netemIfIface, err := net.InterfaceByName(netemIfLink.Attrs().Name)
-		if err != nil {
-			return fmt.Errorf("%w: %s", ErrNetemInterfaceNotFound, netemIfLink.Attrs().Name)
-		}
-
+	return withNetemInterface(target, func(tcnl *gotc.Tc, iface *net.Interface) error {
 		qdiscs, qdiscErr := clabnetem.Impairments(tcnl)
-		if qdiscErr == nil && !hasNetemQdisc(qdiscs, netemIfIface.Index) {
+		if qdiscErr == nil && !hasNetemQdisc(qdiscs, iface.Index) {
 			log.Debug("netem reset skipped because interface has no netem qdisc",
-				"container", containerName,
-				"interface", iface,
+				"node", target.DisplayName,
+				"interface", ifaceName,
 			)
 			return nil
 		}
 		if qdiscErr != nil {
 			log.Debug("failed to pre-check netem qdiscs before reset",
-				"container", containerName,
-				"interface", iface,
+				"node", target.DisplayName,
+				"interface", ifaceName,
 				"err", qdiscErr,
 			)
 		}
 
-		if err := clabnetem.DeleteImpairments(tcnl, netemIfIface); err != nil {
+		if err := clabnetem.DeleteImpairments(tcnl, iface); err != nil {
 			if isNetemAlreadyClearError(err) {
 				log.Debug("netem reset delete raced with already-cleared qdisc",
-					"container", containerName,
-					"interface", iface,
+					"node", target.DisplayName,
+					"interface", ifaceName,
 					"err", err,
 				)
 				return nil
@@ -2233,24 +2398,63 @@ func isNetemAlreadyClearError(err error) bool {
 		strings.Contains(message, "cannot find qdisc")
 }
 
-// ShowNetem returns the current netem impairments for interfaces that have netem qdisc set.
-func (s *Service) ShowNetem(ctx context.Context, containerName string) ([]clabtypes.ImpairmentData, error) {
+// ShowNetem returns the netem impairments of a node.
+func (s *Service) ShowNetem(ctx context.Context, target NetemTarget) ([]clabtypes.ImpairmentData, error) {
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
-	rt, err := s.getContainerRuntime()
+	node, err := s.resolveNetemNode(ctx, target)
 	if err != nil {
 		return nil, err
 	}
 
-	nsPath, err := rt.GetNSPath(ctx, containerName)
+	return netemNodeImpairments(node)
+}
+
+// ShowLabNetem returns the netem impairments of every deployed node of a lab,
+// keyed by topology node name (`clab tools netem show --name <lab>`).
+func (s *Service) ShowLabNetem(ctx context.Context, labName, username string) (map[string][]clabtypes.ImpairmentData, error) {
+	ctx, cancel := s.ensureTimeout(ctx)
+	defer cancel()
+
+	nodes := map[string]*clabcore.NetemNode{}
+	err := s.withRunningLab(labName, username, func(lab *clabcore.CLab) error {
+		for name, labNode := range lab.Nodes {
+			if isInternalNodeConfig(labNode.Config()) {
+				continue
+			}
+			nsPath, err := labNode.GetNSPath(ctx)
+			if err != nil {
+				log.Warn("skipping netem show for node without a namespace", "lab", labName, "node", name, "err", err)
+				continue
+			}
+			nodes[name] = clabcore.NewNetemNode(nsPath, name, lab.Config.Name, name)
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get namespace path for container %s: %w", containerName, err)
+		return nil, err
 	}
 
-	nodeNS, err := ns.GetNS(nsPath)
+	result := make(map[string][]clabtypes.ImpairmentData, len(nodes))
+	for name, node := range nodes {
+		impairments, err := netemNodeImpairments(node)
+		if err != nil {
+			log.Warn("failed to read netem impairments", "lab", labName, "node", name, "err", err)
+			continue
+		}
+		result[name] = impairments
+	}
+
+	return result, nil
+}
+
+// netemNodeImpairments lists the netem qdiscs in a node's namespace plus those on
+// host-side tools interfaces of its stitched links.
+func netemNodeImpairments(node *clabcore.NetemNode) ([]clabtypes.ImpairmentData, error) {
+	nodeNS, err := ns.GetNS(node.NSPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open network namespace %s: %w", nsPath, err)
+		return nil, fmt.Errorf("failed to open network namespace %s: %w", node.NSPath, err)
 	}
 	defer nodeNS.Close()
 
@@ -2264,7 +2468,8 @@ func (s *Service) ShowNetem(ctx context.Context, containerName string) ([]clabty
 		}
 	}()
 
-	var impairments []clabtypes.ImpairmentData
+	impairments := []clabtypes.ImpairmentData{}
+	var ifaceNames []string
 	err = nodeNS.Do(func(_ ns.NetNS) error {
 		qdiscs, err := clabnetem.Impairments(tcnl)
 		if err != nil {
@@ -2278,10 +2483,81 @@ func (s *Service) ShowNetem(ctx context.Context, containerName string) ([]clabty
 			impairments = append(impairments, qdiscToImpairmentData(&qdiscs[idx]))
 		}
 
+		// Tools interfaces are published under the topology-facing name, which
+		// is the alias when a kind remaps interface names.
+		links, err := netlink.LinkList()
+		if err != nil {
+			return err
+		}
+		for _, link := range links {
+			name := link.Attrs().Alias
+			if name == "" {
+				name = link.Attrs().Name
+			}
+			ifaceNames = append(ifaceNames, name)
+		}
+
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	hostImpairments, err := toolsInterfaceImpairments(node, ifaceNames)
+	if err != nil {
+		return nil, err
+	}
+
+	return append(impairments, hostImpairments...), nil
+}
+
+// toolsInterfaceImpairments returns the impairments set on the host-namespace
+// tools interfaces that stitched links publish for the given node interfaces.
+func toolsInterfaceImpairments(node *clabcore.NetemNode, ifaces []string) ([]clabtypes.ImpairmentData, error) {
+	toolsIfaces := map[uint32]string{} // host ifindex -> display name
+	for _, iface := range ifaces {
+		toolsIface := node.ToolsIfaceFor(iface)
+		if toolsIface == "" {
+			continue
+		}
+		link, err := netlink.LinkByName(toolsIface)
+		if err != nil {
+			continue
+		}
+		toolsIfaces[uint32(link.Attrs().Index)] = iface + " (host)"
+	}
+	if len(toolsIfaces) == 0 {
+		return nil, nil
+	}
+
+	if hostNetNSErr != nil {
+		return nil, fmt.Errorf("failed to open host network namespace: %w", hostNetNSErr)
+	}
+
+	tcnl, err := clabnetem.NewTC(int(hostNetNS.Fd()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to open rtnetlink socket: %w", err)
+	}
+	defer func() {
+		if closeErr := tcnl.Close(); closeErr != nil {
+			log.Warn("failed to close rtnetlink socket", "err", closeErr)
+		}
+	}()
+
+	qdiscs, err := clabnetem.Impairments(tcnl)
+	if err != nil {
+		return nil, err
+	}
+
+	var impairments []clabtypes.ImpairmentData
+	for idx := range qdiscs {
+		display, ok := toolsIfaces[qdiscs[idx].Ifindex]
+		if !ok || qdiscs[idx].Kind != "netem" {
+			continue
+		}
+		data := qdiscToImpairmentData(&qdiscs[idx])
+		data.Interface = display
+		impairments = append(impairments, data)
 	}
 
 	return impairments, nil
@@ -2474,6 +2750,9 @@ func (s *Service) generateTopologyConfig(
 		},
 	}
 
+	// Config.Mgmt is not serialized since containerlab 0.80; the mgmt block is
+	// rendered from MgmtNetworks.
+	config.MgmtNetworks = clabtypes.MgmtNetworks{config.Mgmt}
 	config.Mgmt.Network = network
 
 	if ipv4range != "" && ipv4range != "<nil>" {
