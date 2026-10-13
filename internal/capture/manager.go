@@ -31,6 +31,10 @@ const (
 
 var sanitizeContainerNameRx = regexp.MustCompile(`[^a-zA-Z0-9_.-]+`)
 
+// Upstream points packetflix at "gostwire.ghost-in-da-edge", which Podman's DNS
+// cannot resolve. The bare service name resolves on both Docker and Podman.
+var discoveryServiceHostRx = regexp.MustCompile(`--discovery-service=gostwire\.[^"'\s]*`)
+
 var edgesharkComposeURL = defaultEdgesharkComposeURL
 
 var (
@@ -804,6 +808,8 @@ func (m *Manager) prepareEdgesharkComposeFile(
 	if err != nil {
 		return "", func() {}, fmt.Errorf("failed to read edgeshark compose file: %w", err)
 	}
+
+	data = discoveryServiceHostRx.ReplaceAll(data, []byte("--discovery-service=gostwire"))
 
 	extraEnv := parseExtraEnvVars(m.cfg.EdgesharkExtraEnvVars)
 	if len(extraEnv) > 0 {
