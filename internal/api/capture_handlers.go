@@ -97,6 +97,7 @@ func buildCaptureSpecs(
 		normalizedTargets = append(normalizedTargets, models.CaptureTarget{
 			ContainerName: containerName,
 			InterfaceName: ifaceName,
+			NodeNamespace: target.NodeNamespace,
 		})
 	}
 
@@ -120,10 +121,10 @@ func buildCaptureSpecs(
 		}
 
 		containerName := containerInfo.Name
-		ifaceName, hostNetns := resolveCaptureInterface(
+		ifaceName, hostNetns := resolveCaptureTargetInterface(
 			interfacesByContainer,
 			containerName,
-			target.InterfaceName,
+			target,
 		)
 		specKey := captureSpecKey{containerName: containerName, hostNetns: hostNetns}
 
@@ -221,6 +222,20 @@ func listCaptureLabContainers(
 	interfacesByContainer := clab.CaptureInterfacesByContainer(containers, containerInterfaces)
 
 	return infos, interfacesByContainer, true
+}
+
+// resolveCaptureTargetInterface returns the interface to capture for target
+// and whether it lives in the host network namespace. A node-namespace target
+// is captured under its own name inside the node.
+func resolveCaptureTargetInterface(
+	interfacesByContainer map[string][]clab.CaptureInterface,
+	containerName string,
+	target models.CaptureTarget,
+) (string, bool) {
+	if target.NodeNamespace {
+		return target.InterfaceName, false
+	}
+	return resolveCaptureInterface(interfacesByContainer, containerName, target.InterfaceName)
 }
 
 func resolveCaptureInterface(

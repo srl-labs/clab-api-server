@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/srl-labs/clab-api-server/internal/clab"
+	"github.com/srl-labs/clab-api-server/internal/models"
 )
 
 func TestResolveCaptureInterfacePrefersStitchPeerByAlias(t *testing.T) {
@@ -64,5 +65,42 @@ func TestResolveCaptureInterfaceKeepsUnverifiedStitchNameInContainer(t *testing.
 		if name != "clab-s-12345678" || hostNetns {
 			t.Fatalf("resolve %q = (%q, %v), want container-scoped interface", requested, name, hostNetns)
 		}
+	}
+}
+
+func TestResolveCaptureTargetKeepsNodeNamespacePort(t *testing.T) {
+	interfaces := map[string][]clab.CaptureInterface{
+		"clab-demo-srl1": {
+			{Name: "clab-s-12345678", Alias: "e1-1", HostNetworkNamespace: true},
+			{Name: "mgmt0"},
+		},
+	}
+
+	name, hostNetns := resolveCaptureTargetInterface(interfaces, "clab-demo-srl1", models.CaptureTarget{
+		ContainerName: "clab-demo-srl1",
+		InterfaceName: "e1-1",
+		NodeNamespace: true,
+	})
+	if name != "e1-1" {
+		t.Fatalf("resolved interface = %q, want the port inside the node", name)
+	}
+	if hostNetns {
+		t.Fatal("node-namespace target must stay in the container network namespace")
+	}
+}
+
+func TestResolveCaptureTargetResolvesAliasByDefault(t *testing.T) {
+	interfaces := map[string][]clab.CaptureInterface{
+		"clab-demo-srl1": {
+			{Name: "clab-s-12345678", Alias: "e1-1", HostNetworkNamespace: true},
+		},
+	}
+
+	name, hostNetns := resolveCaptureTargetInterface(interfaces, "clab-demo-srl1", models.CaptureTarget{
+		ContainerName: "clab-demo-srl1",
+		InterfaceName: "e1-1",
+	})
+	if name != "clab-s-12345678" || !hostNetns {
+		t.Fatalf("resolved %q (host netns %v), want the stitch peer in the host namespace", name, hostNetns)
 	}
 }
