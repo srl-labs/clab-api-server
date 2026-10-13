@@ -275,6 +275,12 @@ definitions:
       labPath:
         description: Path to the topology file used (relative)
         type: string
+      mgmt_network:
+        description: |-
+          MgmtNetwork is the management network the node is attached to; with
+          several management networks (mgmt list in the topology) it tells them apart.
+        example: clab
+        type: string
       name:
         description: Name of the container node (e.g., "lab01-client1")
         type: string
@@ -284,6 +290,11 @@ definitions:
       owner:
         description: OS user from clab inspect output (Used for authorization)
         type: string
+      ports:
+        description: Published ports, as in `clab inspect --format json`
+        items:
+          $ref: '#/definitions/models.ClabPortBinding'
+        type: array
       state:
         description: e.g., "running"
         type: string
@@ -313,6 +324,21 @@ definitions:
       items:
         $ref: '#/definitions/models.ClabContainerInfo'
       type: array
+    type: object
+  models.ClabPortBinding:
+    properties:
+      host_ip:
+        example: 0.0.0.0
+        type: string
+      host_port:
+        example: 8080
+        type: integer
+      port:
+        example: 80
+        type: integer
+      protocol:
+        example: tcp
+        type: string
     type: object
   models.CustomIconInfo:
     properties:
@@ -807,7 +833,7 @@ definitions:
   models.NetemResetRequest:
     properties:
       containerName:
-        description: Container/node name to reset impairments on (e.g., "clab-my-lab-srl1").
+        description: Container name to reset impairments on (e.g., "clab-my-lab-srl1").
         example: clab-my-lab-srl1
         type: string
       interface:
@@ -815,14 +841,23 @@ definitions:
           "eth1" or "mgmt0").
         example: eth1
         type: string
+      labName:
+        description: Lab name of the topology node to reset impairments on. Used with
+          nodeName instead of containerName.
+        example: my-lab
+        type: string
+      nodeName:
+        description: Topology node name to reset impairments on. Used with labName
+          instead of containerName.
+        example: srl1
+        type: string
     required:
-    - containerName
     - interface
     type: object
   models.NetemSetRequest:
     properties:
       containerName:
-        description: Container/node name to apply impairments on (e.g., "clab-my-lab-srl1").
+        description: Container name to apply impairments on (e.g., "clab-my-lab-srl1").
         example: clab-my-lab-srl1
         type: string
       corruption:
@@ -842,16 +877,25 @@ definitions:
         description: Duration string, requires Delay
         example: 5ms
         type: string
+      labName:
+        description: Lab name of the topology node to apply impairments on. Used with
+          nodeName instead of containerName.
+        example: my-lab
+        type: string
       loss:
         description: Percentage (0.0 to 100.0)
         example: 10.5
         type: number
+      nodeName:
+        description: Topology node name to apply impairments on. Used with labName
+          instead of containerName.
+        example: srl1
+        type: string
       rate:
         description: Kbit/s (non-negative integer)
         example: 1000
         type: integer
     required:
-    - containerName
     - interface
     type: object
   models.NetemShowResponse:
@@ -1035,6 +1079,75 @@ definitions:
       success:
         example: true
         type: boolean
+    type: object
+  models.TailscaleDevice:
+    properties:
+      authUrl:
+        description: AuthURL is the login URL to open while the device waits for authentication.
+        example: https://login.tailscale.com/a/0123456789ab
+        type: string
+      backendState:
+        description: BackendState is the tailscaled state, e.g. NeedsLogin or Running.
+        example: NeedsLogin
+        type: string
+      containerName:
+        example: clab-mylab-ts
+        type: string
+      dnsName:
+        example: clab-mylab.tailnet-1234.ts.net
+        type: string
+      error:
+        description: Error reports why the tailnet state could not be read.
+        type: string
+      forwards:
+        description: Forwards lists the tailnet ports the SSO proxy forwards to nodes
+          (/ts ports).
+        items:
+          $ref: '#/definitions/models.TailscaleForward'
+        type: array
+      hostName:
+        example: clab-mylab
+        type: string
+      nodeName:
+        example: srl1
+        type: string
+      online:
+        type: boolean
+      role:
+        description: |-
+          Role is "proxy" for the SSO proxy (mgmt.tailscale.auth-mode: sso), "sidecar"
+          for the auth-key sidecar of nodeName, or "node" for a node of the tailscale kind.
+        example: proxy
+        type: string
+      state:
+        example: running
+        type: string
+      tailscaleIps:
+        items:
+          type: string
+        type: array
+    type: object
+  models.TailscaleForward:
+    properties:
+      listenPort:
+        example: 2201
+        type: integer
+      nodeName:
+        example: srl1
+        type: string
+      target:
+        example: 172.20.20.2:22
+        type: string
+    type: object
+  models.TailscaleStatusResponse:
+    properties:
+      devices:
+        items:
+          $ref: '#/definitions/models.TailscaleDevice'
+        type: array
+      labName:
+        example: mylab
+        type: string
     type: object
   models.TerminalProtocol:
     enum:
@@ -1806,6 +1919,19 @@ paths:
         in: query
         name: skipLabdirAcl
         type: boolean
+      - description: Override the management network name (like --network); not allowed
+          with multiple management networks
+        in: query
+        name: network
+        type: string
+      - description: Override the management network IPv4 subnet (like --ipv4-subnet)
+        in: query
+        name: ipv4Subnet
+        type: string
+      - description: Override the management network IPv6 subnet (like --ipv6-subnet)
+        in: query
+        name: ipv6Subnet
+        type: string
       produces:
       - application/json
       responses:
@@ -2007,6 +2133,19 @@ paths:
         in: query
         name: includeLogs
         type: boolean
+      - description: Override the management network name (like --network); not allowed
+          with multiple management networks
+        in: query
+        name: network
+        type: string
+      - description: Override the management network IPv4 subnet (like --ipv4-subnet)
+        in: query
+        name: ipv4Subnet
+        type: string
+      - description: Override the management network IPv6 subnet (like --ipv6-subnet)
+        in: query
+        name: ipv6Subnet
+        type: string
       produces:
       - application/json
       responses:
@@ -2274,6 +2413,19 @@ paths:
         in: query
         name: includeLogs
         type: boolean
+      - description: Override the management network name (like --network); not allowed
+          with multiple management networks
+        in: query
+        name: network
+        type: string
+      - description: Override the management network IPv4 subnet (like --ipv4-subnet)
+        in: query
+        name: ipv4Subnet
+        type: string
+      - description: Override the management network IPv6 subnet (like --ipv6-subnet)
+        in: query
+        name: ipv6Subnet
+        type: string
       produces:
       - application/json
       responses:
@@ -3211,6 +3363,46 @@ paths:
       summary: Stop lab nodes
       tags:
       - Labs
+  /api/v1/labs/{labName}/tailscale:
+    get:
+      description: |-
+        Reports the Tailscale devices containerlab runs for a lab: the SSO proxy (`mgmt.tailscale.auth-mode: sso`), the auth-key sidecars of nodes, and nodes of the `tailscale` kind.
+
+        These are internal helper containers that are not listed as lab nodes. While the SSO proxy waits for authentication, `authUrl` holds the login URL to open; `forwards` lists the tailnet ports it forwards to nodes.
+      parameters:
+      - description: Lab Name
+        in: path
+        name: labName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.TailscaleStatusResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get lab Tailscale status
+      tags:
+      - Labs
   /api/v1/labs/{labName}/topology/annotations:
     get:
       description: Returns annotations for the specified lab. For deployed labs, the
@@ -3747,6 +3939,19 @@ paths:
         in: query
         name: skipLabdirAcl
         type: boolean
+      - description: Override the management network name (like --network); not allowed
+          with multiple management networks
+        in: query
+        name: network
+        type: string
+      - description: Override the management network IPv4 subnet (like --ipv4-subnet)
+        in: query
+        name: ipv4Subnet
+        type: string
+      - description: Override the management network IPv6 subnet (like --ipv6-subnet)
+        in: query
+        name: ipv6Subnet
+        type: string
       produces:
       - application/json
       responses:
@@ -4520,9 +4725,10 @@ paths:
     post:
       consumes:
       - application/json
-      description: Resets (removes) netem impairments from a specific interface of
-        a containerlab node owned by the authenticated user. Superusers may operate
-        on any node.
+      description: |-
+        Resets (removes) netem impairments from a specific interface of a containerlab node owned by the authenticated user. Superusers may operate on any node.
+
+        Target the node either by `containerName`, or by `labName` and topology `nodeName`.
       parameters:
       - description: Netem Reset Parameters
         in: body
@@ -4546,8 +4752,7 @@ paths:
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "404":
-          description: Container or interface not found, or container not owned by
-            user
+          description: Node or interface not found, or node not owned by user
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "500":
@@ -4563,9 +4768,10 @@ paths:
     post:
       consumes:
       - application/json
-      description: Sets netem impairments (delay, jitter, loss, rate limiting, corruption)
-        on a specific interface of a containerlab node owned by the authenticated
-        user. Superusers may operate on any node.
+      description: |-
+        Sets netem impairments (delay, jitter, loss, rate limiting, corruption) on a specific interface of a containerlab node owned by the authenticated user. Superusers may operate on any node.
+
+        Target the node either by `containerName`, or by `labName` and topology `nodeName`. Interfaces of stitched links (e.g. vxlan-stitch) are impaired on their host-side interface.
       parameters:
       - description: Netem Set Parameters
         in: body
@@ -4589,8 +4795,7 @@ paths:
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "404":
-          description: Container or interface not found, or container not owned by
-            user
+          description: Node or interface not found, or node not owned by user
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "500":
@@ -4604,13 +4809,22 @@ paths:
       - Tools - Netem
   /api/v1/tools/netem/show:
     get:
-      description: Lists netem impairments for a containerlab node owned by the authenticated
-        user. Superusers may inspect any node.
+      description: |-
+        Lists netem impairments for a containerlab node owned by the authenticated user. Superusers may inspect any node.
+
+        Target the node either by `containerName`, or by `labName` and topology `nodeName`. With `labName` alone, impairments of every deployed node of the lab are returned, keyed by node name.
       parameters:
-      - description: Container/node name
+      - description: Container name
         in: query
         name: containerName
-        required: true
+        type: string
+      - description: Lab name (with nodeName, or alone to show all nodes)
+        in: query
+        name: labName
+        type: string
+      - description: Topology node name (requires labName)
+        in: query
+        name: nodeName
         type: string
       produces:
       - application/json
@@ -4628,7 +4842,7 @@ paths:
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "404":
-          description: Container not found, or container not owned by user
+          description: Node not found, or node not owned by user
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "500":
