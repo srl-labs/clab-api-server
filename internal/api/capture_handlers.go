@@ -65,6 +65,22 @@ func resolveLabDirectory(containerInfo *models.ClabContainerInfo) string {
 	return ""
 }
 
+// captureSpecKey identifies one capture session: one network namespace.
+type captureSpecKey struct {
+	containerName string
+	hostNetns     bool
+}
+
+// newCaptureSpecKey groups a node's own interfaces per container. Host-side link
+// ends all live in the host network namespace, so the ends of several nodes, such
+// as both ends of a link, share one session.
+func newCaptureSpecKey(containerName string, hostNetns bool) captureSpecKey {
+	if hostNetns {
+		return captureSpecKey{hostNetns: true}
+	}
+	return captureSpecKey{containerName: containerName}
+}
+
 func buildCaptureSpecs(
 	c *gin.Context,
 	username string,
@@ -107,10 +123,6 @@ func buildCaptureSpecs(
 	}
 
 	specs := make([]capture.ContainerCaptureSpec, 0, len(targets))
-	type captureSpecKey struct {
-		containerName string
-		hostNetns     bool
-	}
 	indexByTarget := make(map[captureSpecKey]int, len(targets))
 	seenInterfacesByTarget := make(map[captureSpecKey]map[string]struct{}, len(targets))
 
@@ -126,7 +138,7 @@ func buildCaptureSpecs(
 			containerName,
 			target,
 		)
-		specKey := captureSpecKey{containerName: containerName, hostNetns: hostNetns}
+		specKey := newCaptureSpecKey(containerName, hostNetns)
 
 		specIdx, exists := indexByTarget[specKey]
 		if !exists {

@@ -104,3 +104,15 @@ func TestResolveCaptureTargetResolvesAliasByDefault(t *testing.T) {
 		t.Fatalf("resolved %q (host netns %v), want the stitch peer in the host namespace", name, hostNetns)
 	}
 }
+
+func TestCaptureSpecKeySharesHostSideEndsAcrossNodes(t *testing.T) {
+	if newCaptureSpecKey("clab-demo-sros1", true) != newCaptureSpecKey("clab-demo-srl1", true) {
+		t.Fatal("host-side link ends of different nodes must share one capture session")
+	}
+	if newCaptureSpecKey("clab-demo-sros1", false) == newCaptureSpecKey("clab-demo-srl1", false) {
+		t.Fatal("interfaces inside different nodes must get their own capture session")
+	}
+	if newCaptureSpecKey("clab-demo-srl1", false) == newCaptureSpecKey("clab-demo-srl1", true) {
+		t.Fatal("a node's own interfaces and its host-side ends must not share a session")
+	}
+}
