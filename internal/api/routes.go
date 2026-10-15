@@ -104,6 +104,9 @@ func SetupRoutes(router *gin.Engine) {
 				// Apply on-disk topology file for this lab name
 				labSpecific.POST("/apply", ApplyTopologyHandler) // POST /api/v1/labs/{labName}/apply
 
+				// Validate on-disk topology file for this lab name
+				labSpecific.POST("/validate", ValidateTopologyHandler) // POST /api/v1/labs/{labName}/validate
+
 				// Topology-aware lab node lifecycle actions
 				labSpecific.POST("/start", StartLabNodesHandler)     // POST /api/v1/labs/{labName}/start
 				labSpecific.POST("/stop", StopLabNodesHandler)       // POST /api/v1/labs/{labName}/stop
