@@ -743,6 +743,60 @@ definitions:
         description: Interface type (e.g., "veth", "device", "dummy")
         type: string
     type: object
+  models.LabLink:
+    properties:
+      a:
+        $ref: '#/definitions/models.LinkEndpoint'
+      b:
+        $ref: '#/definitions/models.LinkEndpoint'
+      type:
+        description: |-
+          Link type: "veth" for veth pairs, "macvlan" for macvlan interfaces whose
+          B endpoint is the parent interface.
+        example: veth
+        type: string
+    type: object
+  models.LinkEndpoint:
+    properties:
+      alias:
+        description: Interface alias (e.g. "ethernet-1/1").
+        example: ethernet-1/1
+        type: string
+      container:
+        description: Container name, set when Namespace is "node".
+        example: clab-mylab-srl1
+        type: string
+      ifindex:
+        description: Interface index inside its namespace.
+        example: 12
+        type: integer
+      interface:
+        description: Interface name, empty when the interface could not be looked
+          up.
+        example: e1-1
+        type: string
+      mac:
+        example: aa:c1:ab:00:00:01
+        type: string
+      master:
+        description: Device the interface is enslaved to, such as a bridge.
+        example: br-clab
+        type: string
+      mtu:
+        example: 9500
+        type: integer
+      namespace:
+        description: 'Namespace the interface lives in: "node", "host" or "external".'
+        example: node
+        type: string
+      node:
+        description: Topology node name, set when Namespace is "node".
+        example: srl1
+        type: string
+      state:
+        example: up
+        type: string
+    type: object
   models.LoginRequest:
     properties:
       password:
@@ -2695,6 +2749,55 @@ paths:
       security:
       - BearerAuth: []
       summary: List lab interfaces
+      tags:
+      - Labs
+  /api/v1/labs/{labName}/links:
+    get:
+      description: |-
+        Returns the links of a running lab as they currently exist in the kernel, including links created or removed after deployment.
+
+        **Notes**
+        - Each veth pair is listed once. Endpoint A is always in a lab node; endpoint B is in a lab node, the host namespace (e.g. a management or lab bridge port) or an external namespace.
+        - macvlan interfaces are listed with their parent interface as endpoint B.
+        - To follow changes, re-query when /api/v1/events reports interface create or delete events for the lab.
+      parameters:
+      - description: Name of the lab
+        in: path
+        name: labName
+        required: true
+        type: string
+      - description: Only return links with an endpoint on this node
+        in: query
+        name: node
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Lab links
+          schema:
+            items:
+              $ref: '#/definitions/models.LabLink'
+            type: array
+        "400":
+          description: Invalid lab name
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Lab not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: List lab links
       tags:
       - Labs
   /api/v1/labs/{labName}/nodes/{nodeName}/browser-ports:

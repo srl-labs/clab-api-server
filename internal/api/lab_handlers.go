@@ -1048,6 +1048,83 @@ func InspectInterfacesHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+// @Summary List lab links
+// @Description Returns the links of a running lab as they currently exist in the kernel, including links created or removed after deployment.
+// @Description
+// @Description **Notes**
+// @Description - Each veth pair is listed once. Endpoint A is always in a lab node; endpoint B is in a lab node, the host namespace (e.g. a management or lab bridge port) or an external namespace.
+// @Description - macvlan interfaces are listed with their parent interface as endpoint B.
+// @Description - To follow changes, re-query when /api/v1/events reports interface create or delete events for the lab.
+// @Tags Labs
+// @Security BearerAuth
+// @Produce json
+// @Param labName path string true "Name of the lab"
+// @Param node query string false "Only return links with an endpoint on this node"
+// @Success 200 {object} models.LabLinks "Lab links"
+// @Failure 400 {object} models.ErrorResponse "Invalid lab name"
+// @Failure 401 {object} models.ErrorResponse "Unauthorized"
+// @Failure 404 {object} models.ErrorResponse "Lab not found"
+// @Failure 500 {object} models.ErrorResponse "Internal server error"
+// @Router /api/v1/labs/{labName}/links [get]
+func ListLabLinksHandler(c *gin.Context) {
+	username := c.GetString("username")
+	labName := c.Param("labName")
+	nodeFilter := c.Query("node")
+
+	if !isValidLabName(labName) {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in lab name."})
+		return
+	}
+	if nodeFilter != "" && !isValidNodeName(nodeFilter) {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in node query parameter."})
+		return
+	}
+
+	_, ownerCheckErr := verifyLabOwnership(c, username, labName)
+	if ownerCheckErr != nil {
+		return
+	}
+
+	svc := GetClabService()
+	if svc == nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Containerlab service not initialized"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
+	defer cancel()
+
+	containers, err := svc.ListContainers(ctx, clab.ListOptions{LabName: labName})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to list containers for lab '%s': %s", labName, err.Error())})
+		return
+	}
+
+	if len(containers) == 0 {
+		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' not found.", labName)})
+		return
+	}
+
+	links, err := svc.ListLabLinks(ctx, containers)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to get links for lab '%s': %s", labName, err.Error())})
+		return
+	}
+
+	if nodeFilter != "" {
+		filtered := models.LabLinks{}
+		for _, link := range links {
+			if link.A.Node == nodeFilter || link.B.Node == nodeFilter {
+				filtered = append(filtered, link)
+			}
+		}
+		links = filtered
+	}
+
+	log.Debugf("ListLabLinks user '%s': Listed %d links for lab '%s'.", username, len(links), labName)
+	c.JSON(http.StatusOK, links)
+}
+
 // @Summary List labs
 // @Description Returns details for all running labs.
 // @Description

@@ -111,6 +111,7 @@ func SetupRoutes(router *gin.Engine) {
 
 				// Inspect lab interfaces
 				labSpecific.GET("/interfaces", InspectInterfacesHandler) // GET /api/v1/labs/{labName}/interfaces
+				labSpecific.GET("/links", ListLabLinksHandler)           // GET /api/v1/labs/{labName}/links
 
 				// Save lab config
 				labSpecific.POST("/save", SaveLabConfigHandler) // POST /api/v1/labs/{labName}/save
