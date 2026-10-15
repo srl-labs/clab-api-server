@@ -168,6 +168,46 @@ type InterfaceInfo struct {
 	State   string `json:"state"`   // Interface state (e.g., "up", "down", "unknown")
 }
 
+// Namespaces a link endpoint can live in.
+const (
+	LinkNamespaceNode     = "node"     // network namespace of a node of the lab
+	LinkNamespaceHost     = "host"     // network namespace of the host
+	LinkNamespaceExternal = "external" // any other network namespace
+)
+
+// LabLinks lists the links of a running lab as they exist in the kernel.
+type LabLinks []LabLink
+
+// LabLink describes a link with at least one endpoint in a node of the lab.
+type LabLink struct {
+	// Link type: "veth" for veth pairs, "macvlan" for macvlan interfaces whose
+	// B endpoint is the parent interface.
+	Type string       `json:"type" example:"veth"`
+	A    LinkEndpoint `json:"a"`
+	B    LinkEndpoint `json:"b"`
+}
+
+// LinkEndpoint describes one end of a link.
+type LinkEndpoint struct {
+	// Namespace the interface lives in: "node", "host" or "external".
+	Namespace string `json:"namespace" example:"node"`
+	// Topology node name, set when Namespace is "node".
+	Node string `json:"node,omitempty" example:"srl1"`
+	// Container name, set when Namespace is "node".
+	Container string `json:"container,omitempty" example:"clab-mylab-srl1"`
+	// Interface name, empty when the interface could not be looked up.
+	Interface string `json:"interface,omitempty" example:"e1-1"`
+	// Interface alias (e.g. "ethernet-1/1").
+	Alias string `json:"alias,omitempty" example:"ethernet-1/1"`
+	// Interface index inside its namespace.
+	IfIndex int    `json:"ifindex" example:"12"`
+	MAC     string `json:"mac,omitempty" example:"aa:c1:ab:00:00:01"`
+	MTU     int    `json:"mtu,omitempty" example:"9500"`
+	State   string `json:"state,omitempty" example:"up"`
+	// Device the interface is enslaved to, such as a bridge.
+	Master string `json:"master,omitempty" example:"br-clab"`
+}
+
 // ExecRequest represents the payload for executing a command on lab nodes.
 type ExecRequest struct {
 	Command string `json:"command" binding:"required" example:"ip addr show eth1"`

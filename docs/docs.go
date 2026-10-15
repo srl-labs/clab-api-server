@@ -2435,6 +2435,73 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/v1/labs/{labName}/links": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns the links of a running lab as they currently exist in the kernel, including links created or removed after deployment.\n\n**Notes**\n- Each veth pair is listed once. Endpoint A is always in a lab node; endpoint B is in a lab node, the host namespace (e.g. a management or lab bridge port) or an external namespace.\n- macvlan interfaces are listed with their parent interface as endpoint B.\n- To follow changes, re-query when /api/v1/events reports interface create or delete events for the lab.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Labs"
+                ],
+                "summary": "List lab links",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Name of the lab",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Only return links with an endpoint on this node",
+                        "name": "node",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Lab links",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.LabLink"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid lab name",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Lab not found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/labs/{labName}/nodes/{nodeName}/browser-ports": {
             "get": {
                 "security": [
@@ -7143,6 +7210,74 @@ const docTemplate = `{
                 "type": {
                     "description": "Interface type (e.g., \"veth\", \"device\", \"dummy\")",
                     "type": "string"
+                }
+            }
+        },
+        "models.LabLink": {
+            "type": "object",
+            "properties": {
+                "a": {
+                    "$ref": "#/definitions/models.LinkEndpoint"
+                },
+                "b": {
+                    "$ref": "#/definitions/models.LinkEndpoint"
+                },
+                "type": {
+                    "description": "Link type: \"veth\" for veth pairs, \"macvlan\" for macvlan interfaces whose\nB endpoint is the parent interface.",
+                    "type": "string",
+                    "example": "veth"
+                }
+            }
+        },
+        "models.LinkEndpoint": {
+            "type": "object",
+            "properties": {
+                "alias": {
+                    "description": "Interface alias (e.g. \"ethernet-1/1\").",
+                    "type": "string",
+                    "example": "ethernet-1/1"
+                },
+                "container": {
+                    "description": "Container name, set when Namespace is \"node\".",
+                    "type": "string",
+                    "example": "clab-mylab-srl1"
+                },
+                "ifindex": {
+                    "description": "Interface index inside its namespace.",
+                    "type": "integer",
+                    "example": 12
+                },
+                "interface": {
+                    "description": "Interface name, empty when the interface could not be looked up.",
+                    "type": "string",
+                    "example": "e1-1"
+                },
+                "mac": {
+                    "type": "string",
+                    "example": "aa:c1:ab:00:00:01"
+                },
+                "master": {
+                    "description": "Device the interface is enslaved to, such as a bridge.",
+                    "type": "string",
+                    "example": "br-clab"
+                },
+                "mtu": {
+                    "type": "integer",
+                    "example": 9500
+                },
+                "namespace": {
+                    "description": "Namespace the interface lives in: \"node\", \"host\" or \"external\".",
+                    "type": "string",
+                    "example": "node"
+                },
+                "node": {
+                    "description": "Topology node name, set when Namespace is \"node\".",
+                    "type": "string",
+                    "example": "srl1"
+                },
+                "state": {
+                    "type": "string",
+                    "example": "up"
                 }
             }
         },
