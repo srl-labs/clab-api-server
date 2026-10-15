@@ -44,13 +44,27 @@ var interfaceNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
 // isValidCertName checks certificate/key file base names
 var certNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
 
+// nodeNameRegex allows dots, which containerlab accepts in node names (e.g. "node.1")
+var nodeNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
+
+// nodeFilterRegex allows comma-separated node names
+var nodeFilterRegex = regexp.MustCompile(`^[a-zA-Z0-9_.,-]+$`)
+
 // isValidNodeFilter checks the node filter format (basic check)
 func isValidNodeFilter(filter string) bool {
 	if filter == "" {
 		return true // Empty is valid (no filter)
 	}
-	// Check for potentially unsafe characters, allow comma, alphanumeric, hyphen, underscore
-	return regexp.MustCompile(`^[a-zA-Z0-9_,-]+$`).MatchString(filter)
+	// Check for potentially unsafe characters, allow comma, alphanumeric, hyphen, underscore, dot
+	return nodeFilterRegex.MatchString(filter)
+}
+
+// isValidNodeName validation for a single node (or container) name
+func isValidNodeName(name string) bool {
+	if name == "" || len(name) > 128 {
+		return false
+	}
+	return nodeNameRegex.MatchString(name)
 }
 
 // isValidExportTemplate checks the export template format (basic check)
