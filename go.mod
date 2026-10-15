@@ -16,7 +16,7 @@ require (
 	github.com/msteinert/pam v1.2.0
 	github.com/shirou/gopsutil/v4 v4.26.8
 	github.com/spf13/viper v1.21.0
-	github.com/srl-labs/containerlab v0.80.0
+	github.com/srl-labs/containerlab v0.81.1
 	github.com/stretchr/testify v1.12.1
 	github.com/swaggo/files v1.0.1
 	github.com/swaggo/gin-swagger v1.6.1
@@ -62,7 +62,7 @@ require (
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/chzyer/readline v1.5.1 // indirect
 	github.com/cilium/ebpf v0.22.0 // indirect
-	github.com/clabernetes/clabernetes v0.8.1-0.20260827171658-2a1f5c2ed0be // indirect
+	github.com/clabernetes/clabernetes v0.10.0 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/cloudflare/circl v1.6.5 // indirect
