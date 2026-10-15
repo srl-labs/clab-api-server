@@ -4262,6 +4262,70 @@
                 }
             }
         },
+        "/api/v1/labs/{labName}/validate": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Parses and validates an on-disk topology like `containerlab validate`, without deploying it or changing any lab state.\n\n**Notes**\n- `path` defaults to the running lab topology path when the lab exists, otherwise `\u003clabName\u003e.clab.yml`.\n- A topology containerlab rejects returns 200 with `valid=false` and the validation error.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Labs"
+                ],
+                "summary": "Validate on-disk topology for lab",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Lab name",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Workspace-relative or legacy lab-relative topology path (defaults to running topology path or \u003clabName\u003e.clab.yml)",
+                        "name": "path",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Validation result",
+                        "schema": {
+                            "$ref": "#/definitions/models.ValidateTopologyResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid input",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Lab or topology file not found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/ssh/sessions": {
             "get": {
                 "security": [
@@ -8107,6 +8171,35 @@
                 },
                 "shell": {
                     "type": "string"
+                }
+            }
+        },
+        "models.ValidateTopologyResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "description": "Error is containerlab's validation error when Valid is false.",
+                    "type": "string"
+                },
+                "labName": {
+                    "type": "string",
+                    "example": "lab01"
+                },
+                "links": {
+                    "type": "integer",
+                    "example": 1
+                },
+                "nodes": {
+                    "type": "integer",
+                    "example": 2
+                },
+                "path": {
+                    "type": "string",
+                    "example": "/home/alice/.clab/lab01/lab01.clab.yml"
+                },
+                "valid": {
+                    "type": "boolean",
+                    "example": true
                 }
             }
         },
