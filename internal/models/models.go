@@ -77,6 +77,17 @@ type ApplyLabResponse struct {
 	NodeChangeReasons map[string]string `json:"nodeChangeReasons"`
 }
 
+// ValidateTopologyResponse reports whether containerlab accepts a topology file.
+type ValidateTopologyResponse struct {
+	Valid   bool   `json:"valid" example:"true"`
+	Path    string `json:"path" example:"/home/alice/.clab/lab01/lab01.clab.yml"`
+	LabName string `json:"labName,omitempty" example:"lab01"`
+	Nodes   int    `json:"nodes" example:"2"`
+	Links   int    `json:"links" example:"1"`
+	// Error is containerlab's validation error when Valid is false.
+	Error string `json:"error,omitempty"`
+}
+
 // ErrorResponse represents a standard error message format
 type ErrorResponse struct {
 	Error string `json:"error" example:"Invalid credentials or user not in allowed group"`

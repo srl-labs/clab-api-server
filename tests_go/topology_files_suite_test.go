@@ -294,6 +294,60 @@ func (s *TopologyFilesSuite) TestApplyTopologyFileAddsNode() {
 	s.assertInspectNodeNames(labName, s.apiUserHeaders, []string{"srl1", "srl2", "srl3"}, nil)
 }
 
+func (s *TopologyFilesSuite) TestValidateTopologyFile() {
+	labName := fmt.Sprintf("%s-validate-%s", s.cfg.LabNamePrefix, s.randomSuffix(5))
+	validPath := labName + ".clab.yml"
+	invalidPath := "broken.clab.yml"
+	validTopology := strings.ReplaceAll(s.cfg.SimpleTopologyContent, "{lab_name}", labName)
+	invalidTopology := fmt.Sprintf("name: %s\ntopology:\n  nodes:\n    n1:\n      kind: linux\n      image: alpine\n  links:\n    - endpoints: [\"n1:eth1\", \"missing:eth1\"]\n", labName)
+
+	defer s.deleteTopologyFile(labName, validPath)
+	defer s.deleteTopologyFile(labName, invalidPath)
+
+	for path, content := range map[string]string{validPath: validTopology, invalidPath: invalidTopology} {
+		bodyBytes, statusCode, err := s.doRequest("PUT", s.topologyFileURL(labName, path), s.apiUserHeaders, bytes.NewBufferString(content), s.cfg.RequestTimeout)
+		s.Require().NoError(err)
+		s.Require().Equal(http.StatusOK, statusCode, "Expected 200 writing %s. Body: %s", path, string(bodyBytes))
+	}
+
+	type validateResponse struct {
+		Valid   bool   `json:"valid"`
+		LabName string `json:"labName"`
+		Nodes   int    `json:"nodes"`
+		Error   string `json:"error"`
+	}
+	validate := func(query string) ([]byte, int) {
+		s.T().Helper()
+		validateURL := fmt.Sprintf("%s/api/v1/labs/%s/validate%s", s.cfg.APIURL, labName, query)
+		bodyBytes, statusCode, err := s.doRequest("POST", validateURL, s.apiUserHeaders, nil, s.cfg.RequestTimeout)
+		s.Require().NoError(err)
+		return bodyBytes, statusCode
+	}
+
+	s.logTest("Validating default topology file for lab '%s'", labName)
+	bodyBytes, statusCode := validate("")
+	s.Require().Equal(http.StatusOK, statusCode, "Expected 200 validating topology. Body: %s", string(bodyBytes))
+	var resp validateResponse
+	s.Require().NoError(json.Unmarshal(bodyBytes, &resp), "Failed to unmarshal validate response. Body: %s", string(bodyBytes))
+	s.Require().True(resp.Valid, "Expected valid topology. Body: %s", string(bodyBytes))
+	s.Require().Equal(labName, resp.LabName)
+	s.Require().Positive(resp.Nodes)
+
+	s.logTest("Validating broken topology file for lab '%s'", labName)
+	bodyBytes, statusCode = validate("?path=" + url.QueryEscape(invalidPath))
+	s.Require().Equal(http.StatusOK, statusCode, "Expected 200 validating broken topology. Body: %s", string(bodyBytes))
+	resp = validateResponse{}
+	s.Require().NoError(json.Unmarshal(bodyBytes, &resp), "Failed to unmarshal validate response. Body: %s", string(bodyBytes))
+	s.Require().False(resp.Valid, "Expected invalid topology. Body: %s", string(bodyBytes))
+	s.Require().NotEmpty(resp.Error, "Expected validation error. Body: %s", string(bodyBytes))
+
+	bodyBytes, statusCode = validate("?path=" + url.QueryEscape("missing.clab.yml"))
+	s.Require().Equal(http.StatusNotFound, statusCode, "Expected 404 for missing topology. Body: %s", string(bodyBytes))
+
+	bodyBytes, statusCode = validate("?path=" + url.QueryEscape("../escape.clab.yml"))
+	s.Require().Equal(http.StatusBadRequest, statusCode, "Expected 400 for path traversal. Body: %s", string(bodyBytes))
+}
+
 func (s *TopologyFilesSuite) TestTopologyFileRejectsInvalidPaths() {
 	labName := fmt.Sprintf("%s-topofile-invalid-%s", s.cfg.LabNamePrefix, s.randomSuffix(5))
 	invalidURL := s.topologyFileURL(labName, "../escape.clab.yml")

@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -810,6 +811,118 @@ func ApplyTopologyHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, result)
+}
+
+// @Summary Validate on-disk topology for lab
+// @Description Parses and validates an on-disk topology like `containerlab validate`, without deploying it or changing any lab state.
+// @Description
+// @Description **Notes**
+// @Description - `path` defaults to the running lab topology path when the lab exists, otherwise `<labName>.clab.yml`.
+// @Description - A topology containerlab rejects returns 200 with `valid=false` and the validation error.
+// @Description Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
+// @Tags Labs
+// @Security BearerAuth
+// @Produce json
+// @Param labName path string true "Lab name"
+// @Param path query string false "Workspace-relative or legacy lab-relative topology path (defaults to running topology path or <labName>.clab.yml)"
+// @Success 200 {object} models.ValidateTopologyResponse "Validation result"
+// @Failure 400 {object} models.ErrorResponse "Invalid input"
+// @Failure 401 {object} models.ErrorResponse "Unauthorized"
+// @Failure 404 {object} models.ErrorResponse "Lab or topology file not found"
+// @Failure 500 {object} models.ErrorResponse "Internal server error"
+// @Router /api/v1/labs/{labName}/validate [post]
+// ValidateTopologyHandler validates an on-disk topology identified by lab name.
+func ValidateTopologyHandler(c *gin.Context) {
+	username := c.GetString("username")
+	labName := c.Param("labName")
+	if !isValidLabName(labName) {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in lab name."})
+		return
+	}
+
+	svc := GetClabService()
+	if svc == nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Containerlab service not initialized"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
+	defer cancel()
+
+	labInfo, exists, checkErr := getLabInfo(ctx, username, labName)
+	if checkErr != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Error checking lab '%s' status: %s", labName, checkErr.Error())})
+		return
+	}
+
+	targetOwner := username
+	if exists {
+		if labInfo == nil {
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Error checking lab '%s' status: missing lab information", labName)})
+			return
+		}
+		if !canAccessLab(username, labInfo) {
+			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("lab '%s' not found or not owned by user", labName)})
+			return
+		}
+		if strings.TrimSpace(labInfo.Owner) != "" {
+			targetOwner = labInfo.Owner
+		}
+	}
+
+	topologyPath := ""
+	requestedPath := strings.TrimSpace(c.Query("path"))
+	if requestedPath != "" {
+		resolvedPath, _, _, _, resolveErr := resolveTopologyFilePath(targetOwner, labName, requestedPath)
+		if resolveErr != nil {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: resolveErr.Error()})
+			return
+		}
+		topologyPath = resolvedPath
+	} else if exists && strings.TrimSpace(labInfo.AbsLabPath) != "" {
+		topologyPath = filepath.Clean(labInfo.AbsLabPath)
+	} else {
+		labDir, _, _, dirErr := getLabDirectoryInfo(targetOwner, labName)
+		if dirErr != nil {
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: dirErr.Error()})
+			return
+		}
+		topologyPath = filepath.Join(labDir, labName+".clab.yml")
+	}
+
+	if _, statErr := os.Stat(topologyPath); statErr != nil {
+		if os.IsNotExist(statErr) {
+			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Topology file not found for lab '%s'.", labName)})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to stat topology file: %s", statErr.Error())})
+		return
+	}
+
+	result, validateErr := svc.Validate(ctx, clab.ValidateOptions{
+		TopoPath: topologyPath,
+		Username: targetOwner,
+	})
+	if validateErr != nil {
+		if errors.Is(validateErr, clab.ErrInvalidTopology) {
+			c.JSON(http.StatusOK, models.ValidateTopologyResponse{
+				Valid: false,
+				Path:  topologyPath,
+				Error: validateErr.Error(),
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to validate lab '%s': %s", labName, validateErr.Error())})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.ValidateTopologyResponse{
+		Valid:   true,
+		Path:    topologyPath,
+		LabName: result.LabName,
+		Nodes:   result.Nodes,
+		Links:   result.Links,
+	})
 }
 
 // @Summary Read lab topology file

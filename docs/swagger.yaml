@@ -1378,6 +1378,27 @@ definitions:
       shell:
         type: string
     type: object
+  models.ValidateTopologyResponse:
+    properties:
+      error:
+        description: Error is containerlab's validation error when Valid is false.
+        type: string
+      labName:
+        example: lab01
+        type: string
+      links:
+        example: 1
+        type: integer
+      nodes:
+        example: 2
+        type: integer
+      path:
+        example: /home/alice/.clab/lab01/lab01.clab.yml
+        type: string
+      valid:
+        example: true
+        type: boolean
+    type: object
   models.VersionCheckResponse:
     properties:
       checkResult:
@@ -4009,6 +4030,54 @@ paths:
       summary: Reconcile lab custom icons
       tags:
       - UI
+  /api/v1/labs/{labName}/validate:
+    post:
+      description: |-
+        Parses and validates an on-disk topology like `containerlab validate`, without deploying it or changing any lab state.
+
+        **Notes**
+        - `path` defaults to the running lab topology path when the lab exists, otherwise `<labName>.clab.yml`.
+        - A topology containerlab rejects returns 200 with `valid=false` and the validation error.
+        Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
+      parameters:
+      - description: Lab name
+        in: path
+        name: labName
+        required: true
+        type: string
+      - description: Workspace-relative or legacy lab-relative topology path (defaults
+          to running topology path or <labName>.clab.yml)
+        in: query
+        name: path
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Validation result
+          schema:
+            $ref: '#/definitions/models.ValidateTopologyResponse'
+        "400":
+          description: Invalid input
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Lab or topology file not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Validate on-disk topology for lab
+      tags:
+      - Labs
   /api/v1/labs/archive:
     post:
       consumes:

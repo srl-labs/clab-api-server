@@ -804,6 +804,91 @@ func (s *Service) Apply(ctx context.Context, opts ApplyOptions) (*clabcore.Apply
 	return result, nil
 }
 
+// ErrInvalidTopology marks a topology that containerlab rejected during validation.
+var ErrInvalidTopology = errors.New("invalid topology")
+
+// ValidateOptions contains options for validating a topology file.
+type ValidateOptions struct {
+	TopoPath string
+	Username string
+}
+
+// ValidateResult describes a topology that passed validation.
+type ValidateResult struct {
+	LabName string
+	Nodes   int
+	Links   int
+}
+
+// Validate parses and validates a topology the same way `containerlab validate`
+// does, without touching runtime state. Topology errors are wrapped in
+// ErrInvalidTopology.
+func (s *Service) Validate(ctx context.Context, opts ValidateOptions) (*ValidateResult, error) {
+	ctx, cancel := s.ensureTimeout(ctx)
+	defer cancel()
+
+	if strings.TrimSpace(opts.TopoPath) == "" {
+		return nil, fmt.Errorf("topology path is required")
+	}
+
+	workDir, err := s.prepareWorkDir(opts.Username)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare working directory: %w", err)
+	}
+
+	unlock := lockContainerlabOperation()
+	defer unlock()
+
+	restoreOwnerEnv := setProcessOwnerEnv(opts.Username)
+	defer restoreOwnerEnv()
+
+	originalDir, _ := os.Getwd()
+	if chErr := os.Chdir(workDir); chErr != nil {
+		return nil, fmt.Errorf("failed to change to work directory: %w", chErr)
+	}
+	defer func() {
+		if restoreErr := os.Chdir(originalDir); restoreErr != nil {
+			log.Warn("Failed to restore working directory", "error", restoreErr)
+		}
+	}()
+
+	clab, err := clabcore.NewContainerLab(
+		clabcore.WithTimeout(defaultTimeout),
+		clabcore.WithTopoPath(opts.TopoPath, nil),
+		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{
+			Timeout: defaultTimeout,
+		}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidTopology, err)
+	}
+
+	result := &ValidateResult{LabName: clab.Config.Name}
+
+	// Lab runtimes do not instantiate native nodes; their own compiler validates the topology.
+	if clab.LabRuntime != nil && clab.Config.Name != "" {
+		if err := clab.ValidateLabRuntimeTopology(ctx); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidTopology, err)
+		}
+		result.Nodes = len(clab.Config.Topology.Nodes)
+		result.Links = len(clab.Config.Topology.Links)
+		return result, nil
+	}
+
+	if clab.Config.Name == "" || len(clab.Nodes) == 0 {
+		return nil, fmt.Errorf("%w: topology file %q defines no name or nodes", ErrInvalidTopology,
+			clab.TopoPaths.TopologyFilenameBase())
+	}
+
+	if err := clab.ResolveLinks(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidTopology, err)
+	}
+
+	result.Nodes = len(clab.Nodes)
+	result.Links = len(clab.Links)
+	return result, nil
+}
+
 // Destroy destroys a lab using the containerlab library.
 func (s *Service) Destroy(ctx context.Context, opts DestroyOptions) error {
 	ctx, cancel := s.ensureTimeout(ctx)
