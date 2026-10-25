@@ -88,6 +88,22 @@ type ValidateTopologyResponse struct {
 	Error string `json:"error,omitempty"`
 }
 
+// RenderedTopologyResponse is a topology file after containerlab's template and
+// environment variable expansion.
+type RenderedTopologyResponse struct {
+	// Path is the requested workspace-relative topology path.
+	Path string `json:"path" example:"lab01/lab01.clab.gotmpl"`
+	// Content is the rendered topology YAML.
+	Content string `json:"content" example:"name: lab01"`
+	// LabName is the rendered top-level name with Git name variables expanded.
+	LabName string `json:"labName,omitempty" example:"lab01"`
+	// VarsFiles lists the variable files used for rendering relative to the
+	// topology file's directory, including files containerlab discovered next to it.
+	VarsFiles []string `json:"varsFiles" example:"lab01.clab_vars.yml"`
+	// Error is containerlab's error when it rejects the rendered YAML.
+	Error string `json:"error,omitempty"`
+}
+
 // ErrorResponse represents a standard error message format
 type ErrorResponse struct {
 	Error string `json:"error" example:"Invalid credentials or user not in allowed group"`

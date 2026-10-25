@@ -298,10 +298,11 @@ The standalone UI uses these authenticated endpoints:
 - `GET|PUT|DELETE|HEAD /api/v1/labs/{labName}/topology/file?path=<relativePath>` - file operations using paths returned by the listing
 - `POST /api/v1/labs/{labName}/topology/file/rename` - rename a file
 - `POST /api/v1/labs/{labName}/deploy?path=<relativePath>` - deploy a selected on-disk topology
+- `GET /api/v1/labs/{labName}/topology/rendered?path=<relativePath>` - render a topology template without deploying it
 
 You can keep multiple topologies and shared artifacts in one Git repository under
-`~/.clab` (or `CLAB_LABS_ROOT/<username>`). Discovery includes every `*.clab.yml`
-and `*.clab.yaml` file in nested directories. For example, `repo/labs/topology1.clab.yaml`
+`~/.clab` (or `CLAB_LABS_ROOT/<username>`). Discovery includes every `*.clab.yml`,
+`*.clab.yaml` and `*.clab.gotmpl` file in nested directories. For example, `repo/labs/topology1.clab.yaml`
 and `repo/labs/topology2.clab.yaml` appear as separate entries:
 
 ```json
@@ -329,11 +330,32 @@ lab-relative file requests still work. Explicit workspace paths take precedence
 when their first directory exists in the workspace. New repository entries use
 the YAML `name`, falling back to the filename when necessary. The path identifies
 the document; lab names must still be distinct to deploy labs simultaneously.
+`__gitBranch__` and `__gitHash__` in a YAML `name` are expanded like containerlab does.
 Hidden files/directories (including `.git`), `node_modules`, `__pycache__`, symbolic
 links, and runtime directories containing `.state.clab.yaml` or `topology-data.json`
 are excluded from discovery. Repositories named `clab-*` remain discoverable.
 
 Enable browser access by setting `CORS_ALLOWED_ORIGINS` (for example `https://localhost:5173`).
+
+### Topology templates
+
+Containerlab renders every topology as a Go template. Files named `*.clab.gotmpl`
+are listed like other topologies and read their variables from
+`<name>.clab_vars.{yaml,yml,json}` next to the template (for example
+`lab.clab.gotmpl` uses `lab.clab_vars.yml`) and subtemplates from `clab_templates/*.gotmpl`.
+Preview the result without deploying:
+
+```bash
+curl -k -H "Authorization: Bearer <token>" \
+  'https://localhost:8090/api/v1/labs/lab/topology/rendered?path=repo%2Flabs%2Flab.clab.gotmpl'
+```
+
+The response contains the rendered `content`, the rendered `labName`, and the
+`varsFiles` that were used. Template errors return 422. To use another variables
+file, pass `varsPath` relative to the topology's directory (like `containerlab --vars`)
+to the rendered, deploy, redeploy (`PUT /api/v1/labs/{labName}`), and destroy
+(`DELETE /api/v1/labs/{labName}`) endpoints. Pass the same `varsPath` to destroy and
+redeploy that the lab was deployed with.
 
 ### Shared labs
 

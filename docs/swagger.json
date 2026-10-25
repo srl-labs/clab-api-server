@@ -878,7 +878,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Recursively discovers editable *.clab.yml and *.clab.yaml files in the authenticated user's lab workspace. YAML and annotation paths are relative to the workspace root. Hidden directories, dependency caches, containerlab runtime directories, and symbolic links are excluded.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
+                "description": "Recursively discovers editable *.clab.yml, *.clab.yaml and *.clab.gotmpl files in the authenticated user's lab workspace. YAML and annotation paths are relative to the workspace root. Hidden directories, dependency caches, containerlab runtime directories, and symbolic links are excluded.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
                 "produces": [
                     "application/json"
                 ],
@@ -1498,6 +1498,12 @@
                         "in": "query"
                     },
                     {
+                        "type": "string",
+                        "description": "Template variables file (like --vars) relative to the lab's topology file directory, used for the destroy and deploy phases",
+                        "name": "varsPath",
+                        "in": "query"
+                    },
+                    {
                         "type": "boolean",
                         "description": "Stream lifecycle output as NDJSON events",
                         "name": "stream",
@@ -1536,7 +1542,7 @@
                         }
                     },
                     "400": {
-                        "description": "Invalid lab name",
+                        "description": "Invalid input",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -1548,7 +1554,7 @@
                         }
                     },
                     "404": {
-                        "description": "Lab not found",
+                        "description": "Lab or vars file not found",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -1620,6 +1626,12 @@
                         "in": "query"
                     },
                     {
+                        "type": "string",
+                        "description": "Template variables file (like --vars) relative to the lab's topology file directory",
+                        "name": "varsPath",
+                        "in": "query"
+                    },
+                    {
                         "type": "boolean",
                         "description": "Stream lifecycle output as NDJSON events",
                         "name": "stream",
@@ -1640,7 +1652,7 @@
                         }
                     },
                     "400": {
-                        "description": "Invalid lab name",
+                        "description": "Invalid input",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -1652,7 +1664,7 @@
                         }
                     },
                     "404": {
-                        "description": "Lab not found",
+                        "description": "Lab or vars file not found",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -1943,7 +1955,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Deploys an on-disk topology from the authenticated user's lab directory.\n\n**Notes**\n- `path` defaults to `\u003clabName\u003e.clab.yml` when omitted.\n- `stream=true` returns `application/x-ndjson` lifecycle events.\n- `includeLogs=true` includes captured lifecycle logs in the JSON response.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
+                "description": "Deploys an on-disk topology from the authenticated user's lab directory.\n\n**Notes**\n- `path` defaults to `\u003clabName\u003e.clab.yml` when omitted.\n- `varsPath` selects the template variables file like `--vars`, relative to the topology file's directory and inside the same workspace; when omitted, containerlab uses `\u003ctopology name without extension\u003e_vars.{yaml,yml,json}` next to the topology.\n- `stream=true` returns `application/x-ndjson` lifecycle events.\n- `includeLogs=true` includes captured lifecycle logs in the JSON response.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
                 "produces": [
                     "application/json"
                 ],
@@ -1963,6 +1975,12 @@
                         "type": "string",
                         "description": "Workspace-relative or legacy lab-relative topology path (defaults to \u003clabName\u003e.clab.yml)",
                         "name": "path",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Template variables file relative to the topology file's directory (like --vars)",
+                        "name": "varsPath",
                         "in": "query"
                     },
                     {
@@ -2058,7 +2076,7 @@
                         }
                     },
                     "404": {
-                        "description": "Topology file not found",
+                        "description": "Topology or vars file not found",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -4007,6 +4025,83 @@
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/labs/{labName}/topology/rendered": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Renders a topology file the way containerlab does before deploying it: Go template execution with variables from `\u003ctopology name without extension\u003e_vars.{yaml,yml,json}` or `varsPath`, `clab_templates/*.gotmpl` subtemplates, and `${VAR:=default}` environment expansion. Nothing is deployed and no lab state changes.\n\n**Notes**\n- `path` resolves like the topology file endpoints. `varsPath` is relative to the topology file's directory (like `containerlab --vars` run from there) and must stay inside the topology's workspace.\n- `varsFiles` lists the variable files used, relative to the topology file's directory.\n- A topology that renders but is rejected by containerlab returns 200 with the rendered content and `error` set.\n- Template parse or execution errors return 422.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Labs"
+                ],
+                "summary": "Render lab topology file",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Lab name",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Workspace-relative path from the topology listing, or legacy lab-relative path",
+                        "name": "path",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Template variables file relative to the topology file's directory (like --vars); defaults to containerlab's vars file discovery",
+                        "name": "varsPath",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Rendered topology",
+                        "schema": {
+                            "$ref": "#/definitions/models.RenderedTopologyResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid input",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Topology or vars file not found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "422": {
+                        "description": "Topology template could not be rendered",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -7642,6 +7737,40 @@
                 },
                 "newPassword": {
                     "type": "string"
+                }
+            }
+        },
+        "models.RenderedTopologyResponse": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "description": "Content is the rendered topology YAML.",
+                    "type": "string",
+                    "example": "name: lab01"
+                },
+                "error": {
+                    "description": "Error is containerlab's error when it rejects the rendered YAML.",
+                    "type": "string"
+                },
+                "labName": {
+                    "description": "LabName is the rendered top-level name with Git name variables expanded.",
+                    "type": "string",
+                    "example": "lab01"
+                },
+                "path": {
+                    "description": "Path is the requested workspace-relative topology path.",
+                    "type": "string",
+                    "example": "lab01/lab01.clab.gotmpl"
+                },
+                "varsFiles": {
+                    "description": "VarsFiles lists the variable files used for rendering relative to the\ntopology file's directory, including files containerlab discovered next to it.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "example": [
+                        "lab01.clab_vars.yml"
+                    ]
                 }
             }
         },
