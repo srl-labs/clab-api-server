@@ -88,6 +88,12 @@ func main() {
 		basicLogger.Infof("Configuration file '%s' loaded successfully (or skipped if default and not found).", envFile)
 	}
 
+	// Containerlab expands ${VAR} in user topologies from the process environment,
+	// so drop the server's own settings (JWT secret, TLS paths, ...) before any lab work.
+	if removed := config.ScrubProcessEnv(); len(removed) > 0 {
+		basicLogger.Infof("Removed server configuration variables from process environment: %s", strings.Join(removed, ", "))
+	}
+
 	// --- Initialize Logger Based on Config ---
 	log.SetOutput(os.Stderr)
 	log.SetTimeFormat("2006-01-02 15:04:05")

@@ -252,6 +252,7 @@ When authenticating via the API, provide the Linux username and password to rece
 * **Ownership** – Lab ownership is tracked via container labels. Regular users manage their own labs and labs in `CLAB_SHARED_LABS_ROOT`; superusers can manage all labs.
 * **SSH sessions** – Allocated ports forward to container port 22 with automatic expiration.
 * **Security controls** – PAM for credential validation, JWT for session management, input validation, and HTTPS by default.
+* **Environment isolation** – After loading its configuration, the server removes its own settings (every variable in the [Configuration Reference](#configuration-reference) except `CLAB_RUNTIME`) from its process environment, so `${VAR}` references in topology files cannot read them. Other variables, such as proxy settings, `DOCKER_*` and containerlab `CLAB_*` options, stay visible to containerlab and to topology expansion, so do not store secrets in them.
 
 ## API Documentation
 
