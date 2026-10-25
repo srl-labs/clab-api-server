@@ -128,6 +128,8 @@ func SetupRoutes(router *gin.Engine) {
 				labSpecific.POST("/gotty/:action", LabGoTTYShareHandler) // POST /api/v1/labs/{labName}/gotty/{action}
 				labSpecific.POST("/fcli", RunLabFcliHandler)             // POST /api/v1/labs/{labName}/fcli
 				labSpecific.POST("/graph/drawio", GenerateLabDrawioHandler)
+				labSpecific.POST("/graph/mermaid", GenerateLabMermaidHandler)
+				labSpecific.POST("/graph/dot", GenerateLabDotHandler)
 				labSpecific.GET("/tailscale", GetLabTailscaleStatusHandler) // GET /api/v1/labs/{labName}/tailscale
 
 				// Execute command in lab

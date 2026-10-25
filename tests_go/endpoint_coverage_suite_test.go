@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/suite"
@@ -74,6 +75,55 @@ func (s *EndpointCoverageSuite) TestShareToolRoutesValidateAction() {
 	s.Require().NoError(err)
 	s.Require().Equal(http.StatusBadRequest, statusCode, "Expected 400 for invalid gotty port. Body: %s", string(bodyBytes))
 	s.assertJSONError(bodyBytes, "Invalid gotty port")
+
+	gottyAttachURL := fmt.Sprintf("%s/api/v1/labs/%s/gotty/attach", s.cfg.APIURL, s.labName)
+	for _, body := range []map[string]string{
+		{"username": "a'; rm -rf /", "password": "secret"},
+		{"username": "alice", "password": "$(id)"},
+		{"shell": "bash; id"},
+		{"username": "alice"},
+	} {
+		bodyBytes, statusCode, err = s.doRequest("POST", gottyAttachURL, s.apiUserHeaders, bytes.NewBuffer(s.mustMarshal(body)), s.cfg.RequestTimeout)
+		s.Require().NoError(err)
+		s.Require().Equal(http.StatusBadRequest, statusCode, "Expected 400 for invalid gotty options %v. Body: %s", body, string(bodyBytes))
+		s.assertJSONError(bodyBytes, "gotty")
+		s.Require().NotContains(string(bodyBytes), "$(id)")
+	}
+}
+
+func (s *EndpointCoverageSuite) TestTextGraphRoutesValidateInput() {
+	mermaidURL := fmt.Sprintf("%s/api/v1/labs/%s/graph/mermaid", s.cfg.APIURL, s.labName)
+	bodyBytes, statusCode, err := s.doRequest("POST", mermaidURL, s.apiUserHeaders, bytes.NewBuffer(s.mustMarshal(map[string]string{"direction": "sideways"})), s.cfg.RequestTimeout)
+	s.Require().NoError(err)
+	s.Require().Equal(http.StatusBadRequest, statusCode, "Expected 400 for invalid mermaid direction. Body: %s", string(bodyBytes))
+	s.assertJSONError(bodyBytes, "invalid direction")
+
+	bodyBytes, statusCode, err = s.doRequest("POST", mermaidURL, s.apiUserHeaders, bytes.NewBuffer(s.mustMarshal(map[string]string{"direction": "lr"})), s.cfg.RequestTimeout)
+	s.Require().NoError(err)
+	s.Require().Equal(http.StatusOK, statusCode, "Expected 200 for mermaid export. Body: %s", string(bodyBytes))
+	var mermaidResp struct {
+		FileName  string `json:"fileName"`
+		Content   string `json:"content"`
+		Format    string `json:"format"`
+		Direction string `json:"direction"`
+	}
+	s.Require().NoError(json.Unmarshal(bodyBytes, &mermaidResp), "Body: %s", string(bodyBytes))
+	s.Assert().Equal("mermaid", mermaidResp.Format)
+	s.Assert().Equal("LR", mermaidResp.Direction)
+	s.Assert().Contains(mermaidResp.Content, "graph LR")
+	s.Assert().True(strings.HasSuffix(mermaidResp.FileName, ".mermaid"), "fileName = %q", mermaidResp.FileName)
+
+	dotURL := fmt.Sprintf("%s/api/v1/labs/%s/graph/dot", s.cfg.APIURL, s.labName)
+	bodyBytes, statusCode, err = s.doRequest("POST", dotURL, s.apiUserHeaders, nil, s.cfg.RequestTimeout)
+	s.Require().NoError(err)
+	s.Require().Equal(http.StatusOK, statusCode, "Expected 200 for dot export. Body: %s", string(bodyBytes))
+	var dotResp struct {
+		FileName string `json:"fileName"`
+		Format   string `json:"format"`
+	}
+	s.Require().NoError(json.Unmarshal(bodyBytes, &dotResp), "Body: %s", string(bodyBytes))
+	s.Assert().Equal("dot", dotResp.Format)
+	s.Assert().True(strings.HasSuffix(dotResp.FileName, ".dot"), "fileName = %q", dotResp.FileName)
 }
 
 func (s *EndpointCoverageSuite) TestGracefulTimeoutValidation() {

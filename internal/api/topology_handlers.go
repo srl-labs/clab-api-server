@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -132,6 +133,12 @@ func GenerateTopologyHandler(c *gin.Context) {
 	})
 
 	if err != nil {
+		var kindErr *clab.GenerateKindError
+		if errors.As(err, &kindErr) {
+			log.Warnf("GenerateTopology failed for user '%s': %v", username, err)
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: kindErr.Error()})
+			return
+		}
 		log.Errorf("GenerateTopology failed for user '%s': %v", username, err)
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to generate topology '%s': %s", req.Name, err.Error())})
 		return

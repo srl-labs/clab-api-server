@@ -649,8 +649,58 @@ definitions:
       message:
         type: string
     type: object
+  models.GoTTYShareRequest:
+    properties:
+      password:
+        example: secret
+        type: string
+      port:
+        example: 8080
+        type: integer
+      shell:
+        example: bash
+        type: string
+      username:
+        example: admin
+        type: string
+    type: object
+  models.GraphExportRequest:
+    properties:
+      direction:
+        description: 'Direction of the mermaid flowchart: TD, TB, BT, RL or LR (default
+          TD).'
+        example: TD
+        type: string
+    type: object
+  models.GraphExportResponse:
+    properties:
+      content:
+        type: string
+      direction:
+        example: TD
+        type: string
+      fileName:
+        example: lab01.clab.mermaid
+        type: string
+      format:
+        enum:
+        - mermaid
+        - dot
+        example: mermaid
+        type: string
+      output:
+        type: string
+    type: object
   models.HealthResponse:
     properties:
+      features:
+        description: Features lists optional API features this server supports.
+        example:
+        - validate
+        - graph-mermaid
+        items:
+          type: string
+        type: array
       startTime:
         description: When the server started
         type: string
@@ -1133,6 +1183,13 @@ definitions:
         description: SSH username
         type: string
     type: object
+  models.SSHXShareRequest:
+    properties:
+      enableReaders:
+        description: EnableReaders also creates a read-only access link.
+        example: true
+        type: boolean
+    type: object
   models.SaveConfigResponse:
     properties:
       message:
@@ -1161,6 +1218,16 @@ definitions:
       message:
         type: string
       output:
+        type: string
+      readOnlyLink:
+        description: ReadOnlyLink is the SSHX read-only access link when readers are
+          enabled.
+        type: string
+      shell:
+        description: Shell is the effective GoTTY shell (attach/reattach only).
+        type: string
+      username:
+        description: Username is the effective GoTTY login name (attach/reattach only).
         type: string
     type: object
   models.SimpleSuccessResponse:
@@ -2684,7 +2751,16 @@ paths:
       - Labs - Tools
   /api/v1/labs/{labName}/gotty/{action}:
     post:
-      description: Executes GoTTY share action (attach, detach, reattach) for a lab.
+      consumes:
+      - application/json
+      description: |-
+        Executes GoTTY share action (attach, detach, reattach) for a lab.
+
+        **Notes**
+        - The optional body applies to attach/reattach only and is ignored for detach. A body `port` wins over the `port` query.
+        - `username` and `password` must be given together (defaults admin/admin); `shell` defaults to bash.
+        - username: `^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$`; password: `^[A-Za-z0-9._@%+=,!-]{1,64}$`, not starting with `-`; shell: `^/?[A-Za-z0-9_][A-Za-z0-9_./-]{0,63}$` without `..`.
+        - The response reports the effective `username` and `shell`; the password is never returned.
       parameters:
       - description: Lab Name
         in: path
@@ -2700,6 +2776,11 @@ paths:
         in: query
         name: port
         type: integer
+      - description: GoTTY options (attach/reattach only)
+        in: body
+        name: gotty_request
+        schema:
+          $ref: '#/definitions/models.GoTTYShareRequest'
       produces:
       - application/json
       responses:
@@ -2728,6 +2809,56 @@ paths:
       summary: GoTTY share action
       tags:
       - Labs - Sharing
+  /api/v1/labs/{labName}/graph/dot:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Generates a Graphviz dot graph from a lab topology like `containerlab graph --dot` and returns the file content.
+
+        **Notes**
+        - `path` defaults to the running lab topology path when the lab exists, otherwise `<labName>.clab.yml`. The lab does not need to be deployed.
+        - The file is written to `<labDir>/graph/<topology name>.dot`.
+        Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
+      parameters:
+      - description: Lab Name
+        in: path
+        name: labName
+        required: true
+        type: string
+      - description: Workspace-relative or legacy lab-relative topology path (defaults
+          to running topology path or <labName>.clab.yml)
+        in: query
+        name: path
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.GraphExportResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Generate dot graph
+      tags:
+      - Labs - Graph
   /api/v1/labs/{labName}/graph/drawio:
     post:
       consumes:
@@ -2771,6 +2902,62 @@ paths:
       security:
       - BearerAuth: []
       summary: Generate draw.io graph
+      tags:
+      - Labs - Graph
+  /api/v1/labs/{labName}/graph/mermaid:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Generates a mermaid flowchart from a lab topology like `containerlab graph --mermaid` and returns the file content.
+
+        **Notes**
+        - `path` defaults to the running lab topology path when the lab exists, otherwise `<labName>.clab.yml`. The lab does not need to be deployed.
+        - `direction` is one of TD, TB, BT, RL, LR (case-insensitive, default TD).
+        - The file is written to `<labDir>/graph/<topology name>.mermaid`.
+        Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
+      parameters:
+      - description: Lab Name
+        in: path
+        name: labName
+        required: true
+        type: string
+      - description: Workspace-relative or legacy lab-relative topology path (defaults
+          to running topology path or <labName>.clab.yml)
+        in: query
+        name: path
+        type: string
+      - description: Mermaid options
+        in: body
+        name: graph_request
+        schema:
+          $ref: '#/definitions/models.GraphExportRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.GraphExportResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Generate mermaid graph
       tags:
       - Labs - Graph
   /api/v1/labs/{labName}/interfaces:
@@ -3398,7 +3585,14 @@ paths:
       - Labs
   /api/v1/labs/{labName}/sshx/{action}:
     post:
-      description: Executes SSHX share action (attach, detach, reattach) for a lab.
+      consumes:
+      - application/json
+      description: |-
+        Executes SSHX share action (attach, detach, reattach) for a lab.
+
+        **Notes**
+        - The optional body applies to attach/reattach only and is ignored for detach.
+        - `enableReaders=true` also creates a read-only access link, returned as `readOnlyLink`.
       parameters:
       - description: Lab Name
         in: path
@@ -3410,6 +3604,11 @@ paths:
         name: action
         required: true
         type: string
+      - description: SSHX options (attach/reattach only)
+        in: body
+        name: sshx_request
+        schema:
+          $ref: '#/definitions/models.SSHXShareRequest'
       produces:
       - application/json
       responses:

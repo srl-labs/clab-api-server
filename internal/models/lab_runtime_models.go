@@ -17,7 +17,28 @@ type NodeBrowserPortsResponse struct {
 type ShareToolResponse struct {
 	Message string `json:"message"`
 	Link    string `json:"link,omitempty"`
-	Output  string `json:"output,omitempty"`
+	// ReadOnlyLink is the SSHX read-only access link when readers are enabled.
+	ReadOnlyLink string `json:"readOnlyLink,omitempty"`
+	// Username is the effective GoTTY login name (attach/reattach only).
+	Username string `json:"username,omitempty"`
+	// Shell is the effective GoTTY shell (attach/reattach only).
+	Shell  string `json:"shell,omitempty"`
+	Output string `json:"output,omitempty"`
+}
+
+// SSHXShareRequest holds optional SSHX attach/reattach options.
+type SSHXShareRequest struct {
+	// EnableReaders also creates a read-only access link.
+	EnableReaders bool `json:"enableReaders,omitempty" example:"true"`
+}
+
+// GoTTYShareRequest holds optional GoTTY attach/reattach options.
+// Username and password must be given together.
+type GoTTYShareRequest struct {
+	Port     int    `json:"port,omitempty" example:"8080"`
+	Username string `json:"username,omitempty" example:"admin"`
+	Password string `json:"password,omitempty" example:"secret"`
+	Shell    string `json:"shell,omitempty" example:"bash"`
 }
 
 type FcliCommandRequest struct {
@@ -40,6 +61,21 @@ type DrawioGenerateResponse struct {
 	Layout   string `json:"layout"`
 	Message  string `json:"message,omitempty"`
 	Output   string `json:"output,omitempty"`
+}
+
+// GraphExportRequest holds optional text graph export options.
+type GraphExportRequest struct {
+	// Direction of the mermaid flowchart: TD, TB, BT, RL or LR (default TD).
+	Direction string `json:"direction,omitempty" example:"TD"`
+}
+
+// GraphExportResponse returns a generated text graph of a lab topology.
+type GraphExportResponse struct {
+	FileName  string `json:"fileName" example:"lab01.clab.mermaid"`
+	Content   string `json:"content"`
+	Format    string `json:"format" example:"mermaid" enums:"mermaid,dot"`
+	Direction string `json:"direction,omitempty" example:"TD"`
+	Output    string `json:"output,omitempty"`
 }
 
 type CaptureCloseAllResponse struct {

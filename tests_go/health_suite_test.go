@@ -94,6 +94,7 @@ func (s *HealthSuite) TestPublicHealthEndpoint() {
 		Uptime    string    `json:"uptime"`
 		StartTime time.Time `json:"startTime"`
 		Version   string    `json:"version"`
+		Features  []string  `json:"features"`
 	}
 
 	err = json.Unmarshal(bodyBytes, &healthResp)
@@ -106,6 +107,9 @@ func (s *HealthSuite) TestPublicHealthEndpoint() {
 	s.Assert().NotEmpty(healthResp.Uptime, "Uptime field is empty")
 	s.Assert().NotZero(healthResp.StartTime, "StartTime should not be zero")
 	s.Assert().NotEmpty(healthResp.Version, "Version field is empty")
+	for _, feature := range []string{"validate", "graph-mermaid", "graph-dot", "sshx-readers", "gotty-options"} {
+		s.Assert().Contains(healthResp.Features, feature, "Health features missing %q", feature)
+	}
 
 	if !s.T().Failed() {
 		s.logSuccess("Successfully retrieved health information: status=%s, uptime=%s, version=%s",
