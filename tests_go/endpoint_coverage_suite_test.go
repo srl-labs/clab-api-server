@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -152,4 +154,52 @@ func (s *EndpointCoverageSuite) TestFcliAndDrawioRoutesValidateInput() {
 	s.Require().NoError(err)
 	s.Require().Equal(http.StatusBadRequest, statusCode, "Expected 400 for invalid drawio layout. Body: %s", string(bodyBytes))
 	s.assertJSONError(bodyBytes, "Invalid layout")
+}
+
+func (s *EndpointCoverageSuite) TestLabOpsRoutesValidateInput() {
+	healthBody, statusCode, err := s.doRequest("GET", s.cfg.APIURL+"/health", nil, nil, s.cfg.RequestTimeout)
+	s.Require().NoError(err)
+	s.Require().Equal(http.StatusOK, statusCode, "Expected 200 for health. Body: %s", string(healthBody))
+	var health struct {
+		Features []string `json:"features"`
+	}
+	s.Require().NoError(json.Unmarshal(healthBody, &health))
+	for _, feature := range []string{"exec-filters", "lab-lifecycle-node-filter", "save-copy", "inspect-details", "snapshot-save", "deploy-restore"} {
+		s.Require().Contains(health.Features, feature)
+	}
+
+	labURL := fmt.Sprintf("%s/api/v1/labs/%s", s.cfg.APIURL, s.labName)
+	execBody := s.mustMarshal(map[string]string{"command": "true"})
+	for _, tc := range []struct {
+		method, target string
+		body           []byte
+		status         int
+		contains       string
+	}{
+		{"POST", labURL + "/exec?label=missing-equals", execBody, http.StatusBadRequest, "label"},
+		{"POST", labURL + "/exec?nodes=no-such-node", execBody, http.StatusNotFound, "No nodes"},
+		{"POST", labURL + "/start?nodeFilter=bad%20node", nil, http.StatusBadRequest, "nodeFilter"},
+		{"POST", labURL + "/restart?nodeFilter=no-such-node", nil, http.StatusNotFound, "no-such-node"},
+		{"POST", labURL + "/save?copy=" + url.QueryEscape("/etc"), nil, http.StatusBadRequest, "copy"},
+		{"GET", labURL + "?details=maybe", nil, http.StatusBadRequest, "details"},
+		{"POST", labURL + "/snapshots", s.mustMarshal(map[string]string{"timeout": "2h"}), http.StatusBadRequest, "timeout"},
+		{"POST", labURL + "/snapshots", s.mustMarshal(map[string]string{"outputDir": "/etc"}), http.StatusBadRequest, "outputDir"},
+		{"POST", labURL + "/deploy?restore=r1", nil, http.StatusBadRequest, "restore"},
+	} {
+		var body io.Reader
+		if tc.body != nil {
+			body = bytes.NewBuffer(tc.body)
+		}
+		bodyBytes, statusCode, err := s.doRequest(tc.method, tc.target, s.apiUserHeaders, body, s.cfg.RequestTimeout)
+		s.Require().NoError(err)
+		s.Require().Equal(tc.status, statusCode, "%s %s. Body: %s", tc.method, tc.target, string(bodyBytes))
+		s.assertJSONError(bodyBytes, tc.contains)
+	}
+
+	detailsBody, statusCode, err := s.doRequest("GET", labURL+"?details=true", s.apiUserHeaders, nil, s.cfg.RequestTimeout)
+	s.Require().NoError(err)
+	s.Require().Equal(http.StatusOK, statusCode, "Expected 200 for inspect details. Body: %s", string(detailsBody))
+	var details map[string][]map[string]interface{}
+	s.Require().NoError(json.Unmarshal(detailsBody, &details))
+	s.Require().NotEmpty(details[s.labName], "Expected runtime containers for lab %s", s.labName)
 }

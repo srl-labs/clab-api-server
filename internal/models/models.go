@@ -301,6 +301,9 @@ type SaveConfigResponse struct {
 	Message string `json:"message"`
 	// Detailed output from the 'clab save' command (often from stderr).
 	Output string `json:"output"`
+	// CopyDir is the <copy>/<lab dir> directory the configs were copied to when
+	// copy was requested: workspace-relative, @shared/... or absolute.
+	CopyDir string `json:"copyDir,omitempty" example:"lab1/backups/clab-lab1"`
 }
 
 // TopologyEntry describes an editable topology file exposed to the standalone UI.

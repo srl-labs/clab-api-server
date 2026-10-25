@@ -705,6 +705,22 @@ const docTemplate = `{
                         "description": "Override the management network IPv6 subnet (like --ipv6-subnet)",
                         "name": "ipv6Subnet",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Restore nodes from \u003cnode\u003e.tar snapshots in this directory (like --restore-all); relative to the topology directory or absolute, inside the workspace",
+                        "name": "restoreAll",
+                        "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "multi",
+                        "description": "Restore one node from a snapshot file as node=path (like --restore); repeatable, overrides restoreAll",
+                        "name": "restore",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -832,6 +848,22 @@ const docTemplate = `{
                         "type": "string",
                         "description": "Override the management network IPv6 subnet (like --ipv6-subnet)",
                         "name": "ipv6Subnet",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Restore nodes from \u003cnode\u003e.tar snapshots in this directory (like --restore-all); relative to the topology directory or absolute, inside the workspace",
+                        "name": "restoreAll",
+                        "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "multi",
+                        "description": "Restore one node from a snapshot file as node=path (like --restore); repeatable, overrides restoreAll",
+                        "name": "restore",
                         "in": "query"
                     }
                 ],
@@ -1378,7 +1410,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns details for a specific running lab.",
+                "description": "Returns details for a specific running lab.\n\n**Notes**\n- ` + "`" + `details=true` + "`" + ` returns what ` + "`" + `containerlab inspect --details` + "`" + ` prints for the lab instead: a JSON object ` + "`" + `{ \"\u003clabName\u003e\": [ runtime container objects ] }` + "`" + ` with fields such as ` + "`" + `Names` + "`" + `, ` + "`" + `ID` + "`" + `, ` + "`" + `ShortID` + "`" + `, ` + "`" + `Image` + "`" + `, ` + "`" + `State` + "`" + `, ` + "`" + `Status` + "`" + `, ` + "`" + `Labels` + "`" + `, ` + "`" + `Pid` + "`" + `, ` + "`" + `NetworkName` + "`" + `, ` + "`" + `NetworkSettings` + "`" + `, ` + "`" + `Mounts` + "`" + ` and ` + "`" + `Ports` + "`" + `. Internal helper containers are excluded.",
                 "produces": [
                     "application/json"
                 ],
@@ -1393,11 +1425,17 @@ const docTemplate = `{
                         "name": "labName",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Return runtime container details like containerlab inspect --details",
+                        "name": "details",
+                        "in": "query"
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "Lab containers",
+                        "description": "Lab containers, or the details object when details=true",
                         "schema": {
                             "type": "array",
                             "items": {
@@ -2052,6 +2090,22 @@ const docTemplate = `{
                         "description": "Override the management network IPv6 subnet (like --ipv6-subnet)",
                         "name": "ipv6Subnet",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Restore nodes from \u003cnode\u003e.tar snapshots in this directory (like --restore-all); relative to the topology directory or absolute, inside the workspace",
+                        "name": "restoreAll",
+                        "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "multi",
+                        "description": "Restore one node from a snapshot file as node=path (like --restore); repeatable, overrides restoreAll",
+                        "name": "restore",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -2107,7 +2161,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Executes a command on nodes within a lab.",
+                "description": "Executes a command on nodes within a lab.\n\n**Notes**\n- ` + "`" + `nodes` + "`" + ` (comma-separated topology node names) and ` + "`" + `label` + "`" + ` (repeatable ` + "`" + `key=value` + "`" + `, like ` + "`" + `containerlab exec --label` + "`" + `) combine with AND and always stay within the lab.\n- ` + "`" + `nodeFilter` + "`" + ` cannot be combined with ` + "`" + `nodes` + "`" + ` or ` + "`" + `label` + "`" + `.\n- With ` + "`" + `nodes` + "`" + ` or ` + "`" + `label` + "`" + `, a filter that matches no container returns 404.",
                 "consumes": [
                     "application/json"
                 ],
@@ -2128,8 +2182,24 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Execute only on this specific node",
+                        "description": "Execute only on this specific container",
                         "name": "nodeFilter",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Comma-separated topology node names to execute on",
+                        "name": "nodes",
+                        "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "multi",
+                        "description": "Label filter in key=value form; repeat for several labels",
+                        "name": "label",
                         "in": "query"
                     },
                     {
@@ -2162,7 +2232,7 @@ const docTemplate = `{
                         }
                     },
                     "404": {
-                        "description": "Lab not found",
+                        "description": "Lab not found or no node matches the filters",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -3320,7 +3390,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Restarts all nodes in a deployed lab while preserving containerlab dataplane links.\n\n**Notes**\n- ` + "`" + `stream=true` + "`" + ` returns ` + "`" + `application/x-ndjson` + "`" + ` lifecycle events.\n- ` + "`" + `includeLogs=true` + "`" + ` includes captured lifecycle logs in the JSON response.",
+                "description": "Restarts all nodes in a deployed lab while preserving containerlab dataplane links.\n\n**Notes**\n- ` + "`" + `stream=true` + "`" + ` returns ` + "`" + `application/x-ndjson` + "`" + ` lifecycle events.\n- ` + "`" + `includeLogs=true` + "`" + ` includes captured lifecycle logs in the JSON response.\n- ` + "`" + `nodeFilter` + "`" + ` limits the action to the listed topology nodes; unknown nodes return 404.",
                 "produces": [
                     "application/json"
                 ],
@@ -3335,6 +3405,12 @@ const docTemplate = `{
                         "name": "labName",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Comma-separated topology node names to act on (default: all nodes)",
+                        "name": "nodeFilter",
+                        "in": "query"
                     },
                     {
                         "type": "boolean",
@@ -3390,7 +3466,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Saves the running configuration for nodes in a lab.",
+                "description": "Saves the running configuration for nodes in a lab.\n\n**Notes**\n- ` + "`" + `copy` + "`" + ` works like ` + "`" + `containerlab save --copy` + "`" + `: each saved config is also copied to ` + "`" + `\u003ccopy\u003e/\u003clab dir\u003e/\u003cnode\u003e/\u003cfile\u003e-YYMMDD_HHMMSS.\u003cext\u003e` + "`" + ` with a ` + "`" + `\u003cfile\u003e` + "`" + ` symlink to the newest copy. The path is relative to the topology directory (or absolute) and must stay inside the user's workspace, or the shared root for shared labs.",
                 "produces": [
                     "application/json"
                 ],
@@ -3410,6 +3486,12 @@ const docTemplate = `{
                         "type": "string",
                         "description": "Save config only for specific nodes",
                         "name": "nodeFilter",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Also copy saved configs into this directory (relative to the topology directory or absolute)",
+                        "name": "copy",
                         "in": "query"
                     }
                 ],
@@ -3434,6 +3516,81 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Lab not found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/labs/{labName}/snapshots": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Saves VM snapshots of vrnetlab-based nodes, like ` + "`" + `containerlab tools snapshot save` + "`" + `. Each snapshot is written to ` + "`" + `\u003coutputDir\u003e/\u003cnode\u003e.tar` + "`" + `; non-vrnetlab nodes are skipped.\n\n**Notes**\n- ` + "`" + `outputDir` + "`" + ` is relative to the lab's topology directory (or absolute) and must stay inside the user's workspace, or the shared root for shared labs. Defaults to ` + "`" + `snapshots` + "`" + `.\n- ` + "`" + `timeout` + "`" + ` is the per-node wait as a Go duration (default ` + "`" + `5m` + "`" + `, maximum ` + "`" + `30m` + "`" + `).\n- Nodes run concurrently. The response is 200 even when nodes fail; read each result's ` + "`" + `status` + "`" + ` (` + "`" + `success` + "`" + `, ` + "`" + `failed` + "`" + `, ` + "`" + `skipped` + "`" + `).\n- The lab is locked for other lifecycle operations while snapshots run.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Labs"
+                ],
+                "summary": "Save VM snapshots",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Name of the lab",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Snapshot options",
+                        "name": "snapshot_request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/models.SnapshotSaveRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Per-node snapshot results",
+                        "schema": {
+                            "$ref": "#/definitions/models.SnapshotSaveResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid input",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Lab or node not found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Lab busy with another operation",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -3530,7 +3687,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Starts all nodes in a deployed lab while preserving containerlab dataplane links.\n\n**Notes**\n- ` + "`" + `stream=true` + "`" + ` returns ` + "`" + `application/x-ndjson` + "`" + ` lifecycle events.\n- ` + "`" + `includeLogs=true` + "`" + ` includes captured lifecycle logs in the JSON response.",
+                "description": "Starts all nodes in a deployed lab while preserving containerlab dataplane links.\n\n**Notes**\n- ` + "`" + `stream=true` + "`" + ` returns ` + "`" + `application/x-ndjson` + "`" + ` lifecycle events.\n- ` + "`" + `includeLogs=true` + "`" + ` includes captured lifecycle logs in the JSON response.\n- ` + "`" + `nodeFilter` + "`" + ` limits the action to the listed topology nodes; unknown nodes return 404.",
                 "produces": [
                     "application/json"
                 ],
@@ -3545,6 +3702,12 @@ const docTemplate = `{
                         "name": "labName",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Comma-separated topology node names to act on (default: all nodes)",
+                        "name": "nodeFilter",
+                        "in": "query"
                     },
                     {
                         "type": "boolean",
@@ -3600,7 +3763,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Stops all nodes in a deployed lab while preserving containerlab dataplane links.\n\n**Notes**\n- ` + "`" + `stream=true` + "`" + ` returns ` + "`" + `application/x-ndjson` + "`" + ` lifecycle events.\n- ` + "`" + `includeLogs=true` + "`" + ` includes captured lifecycle logs in the JSON response.",
+                "description": "Stops all nodes in a deployed lab while preserving containerlab dataplane links.\n\n**Notes**\n- ` + "`" + `stream=true` + "`" + ` returns ` + "`" + `application/x-ndjson` + "`" + ` lifecycle events.\n- ` + "`" + `includeLogs=true` + "`" + ` includes captured lifecycle logs in the JSON response.\n- ` + "`" + `nodeFilter` + "`" + ` limits the action to the listed topology nodes; unknown nodes return 404.",
                 "produces": [
                     "application/json"
                 ],
@@ -3615,6 +3778,12 @@ const docTemplate = `{
                         "name": "labName",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Comma-separated topology node names to act on (default: all nodes)",
+                        "name": "nodeFilter",
+                        "in": "query"
                     },
                     {
                         "type": "boolean",
@@ -6433,7 +6602,7 @@ const docTemplate = `{
         },
         "/health": {
             "get": {
-                "description": "Returns basic health status for the API server.",
+                "description": "Returns basic health status for the API server.\n\n**Notes**\n- ` + "`" + `features` + "`" + ` lists optional API capabilities (for example ` + "`" + `exec-filters` + "`" + ` or ` + "`" + `snapshot-save` + "`" + `) so clients can detect what this server supports.",
                 "produces": [
                     "application/json"
                 ],
@@ -7461,14 +7630,14 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "features": {
-                    "description": "Features lists optional API features this server supports.",
+                    "description": "Features lists optional API features this server supports, so clients can\nhide what older servers do not provide.",
                     "type": "array",
                     "items": {
                         "type": "string"
                     },
                     "example": [
                         "validate",
-                        "graph-mermaid"
+                        "exec-filters"
                     ]
                 },
                 "startTime": {
@@ -8165,6 +8334,11 @@ const docTemplate = `{
         "models.SaveConfigResponse": {
             "type": "object",
             "properties": {
+                "copyDir": {
+                    "description": "CopyDir is the \u003ccopy\u003e/\u003clab dir\u003e directory the configs were copied to when\ncopy was requested: workspace-relative, @shared/... or absolute.",
+                    "type": "string",
+                    "example": "lab1/backups/clab-lab1"
+                },
                 "message": {
                     "description": "Message indicating overall success.",
                     "type": "string"
@@ -8224,6 +8398,92 @@ const docTemplate = `{
                 "success": {
                     "type": "boolean",
                     "example": true
+                }
+            }
+        },
+        "models.SnapshotNodeResult": {
+            "type": "object",
+            "properties": {
+                "durationMs": {
+                    "type": "integer",
+                    "example": 45000
+                },
+                "error": {
+                    "type": "string"
+                },
+                "node": {
+                    "type": "string",
+                    "example": "r1"
+                },
+                "path": {
+                    "description": "Path is the snapshot file, workspace-relative (or @shared/...) when inside a workspace root.",
+                    "type": "string",
+                    "example": "lab1/snapshots/r1.tar"
+                },
+                "reason": {
+                    "description": "Reason explains skipped nodes.",
+                    "type": "string",
+                    "example": "not a vrnetlab node (kind=nokia_srlinux, image=ghcr.io/nokia/srlinux)"
+                },
+                "sizeBytes": {
+                    "type": "integer",
+                    "example": 104857600
+                },
+                "status": {
+                    "description": "Status is \"success\", \"failed\" or \"skipped\".",
+                    "type": "string",
+                    "enum": [
+                        "success",
+                        "failed",
+                        "skipped"
+                    ],
+                    "example": "success"
+                }
+            }
+        },
+        "models.SnapshotSaveRequest": {
+            "type": "object",
+            "properties": {
+                "nodes": {
+                    "description": "Nodes limits the snapshot to these topology node names (all nodes when empty).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "example": [
+                        "r1",
+                        "r2"
+                    ]
+                },
+                "outputDir": {
+                    "description": "OutputDir is a path relative to the topology directory, or an absolute path,\ninside the user's workspace (or the shared root for shared labs). Defaults to \"snapshots\".",
+                    "type": "string",
+                    "example": "snapshots"
+                },
+                "timeout": {
+                    "description": "Timeout is the per-node wait as a Go duration (default 5m, maximum 30m).",
+                    "type": "string",
+                    "example": "5m"
+                }
+            }
+        },
+        "models.SnapshotSaveResponse": {
+            "type": "object",
+            "properties": {
+                "outputDir": {
+                    "description": "OutputDir is workspace-relative (or @shared/...) when inside a workspace root.",
+                    "type": "string",
+                    "example": "lab1/snapshots"
+                },
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.SnapshotNodeResult"
+                    }
+                },
+                "summary": {
+                    "type": "string",
+                    "example": "2 succeeded, 0 failed, 1 skipped"
                 }
             }
         },

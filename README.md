@@ -162,6 +162,7 @@ docker run -d \
   -v /etc/group:/etc/group:ro \
   -v /etc/gshadow:/etc/gshadow:ro \
   -v /home:/home \
+  -v /var/lib/clab-api-server:/var/lib/clab-api-server \
   ghcr.io/srl-labs/clab-api-server/clab-api-server:latest
 ```
 > [!NOTE]
@@ -225,6 +226,7 @@ sudo systemctl status clab-api-server
 | `CLAB_LABS_ROOT` | unset | Optional absolute root for managed lab workspaces. When set, users store labs under `$CLAB_LABS_ROOT/<username>/`; otherwise labs use `<home>/.clab/`. |
 | `CLAB_SHARED_LABS_ROOT` | unset | Optional absolute folder shared by all authenticated API users, exposed as `@shared/` in workspace and topology file paths. |
 | `CLAB_HOSTS_FILE` | unset | Optional absolute host-visible hosts file to synchronize. The container entrypoint detects `/proc/1/root/etc/hosts` automatically when running with host PID mode. |
+| `CLAB_RESTORE_STAGING_DIR` | `/var/lib/clab-api-server/restore` | Server-owned folder (mode `0700`) holding the snapshot files that nodes deployed with `restore`/`restoreAll` mount. See [Snapshot restore](#snapshot-restore). |
 | `LOG_LEVEL` | `info` | Log verbosity (`debug`, `info`, `warn`, `error`) |
 | `CORS_ALLOWED_ORIGINS` | | Comma-separated browser origin allowlist (for standalone UI) |
 | `GIN_MODE` | `release` | Web framework mode (`debug` or `release`) |
@@ -408,6 +410,28 @@ remain private to the user who creates them, with existing superuser access.
 To run the shared-lab integration tests, configure the server as above and run
 `GOTEST_SHARED_LABS=true go test -count=1 ./tests_go -run TestSharedLabsSuite`.
 The tests use `tests_go/.env` and create and remove a temporary second API user.
+
+### Snapshot restore
+
+Deploy routes accept `restoreAll` and `restore` to start vrnetlab nodes from VM
+snapshots. The server opens each snapshot from the user's workspace once, checks
+it, and places that exact file at `$CLAB_RESTORE_STAGING_DIR/<lab>/<node>.tar`;
+only that path is mounted into the node. Changing the workspace path afterwards
+does not change what a node mounts.
+
+The staged file is a hard link when the staging folder is on the same
+filesystem and mount as the workspace, so it takes no extra space while the
+original exists. Otherwise the
+snapshot is copied, which needs as much free space as the snapshot itself. To
+avoid copies, point `CLAB_RESTORE_STAGING_DIR` to a folder on the same mount as
+the lab workspaces, for example `/home/.clab-api-restore` with the Docker
+deployment above. The folder and every parent must be owned by root and not writable by
+other users; the server creates missing folders. In a container, mount it at the
+same absolute path on the host.
+
+Staged files stay while the lab exists so node restarts keep working. They are
+replaced by the next restore of the same node and removed when the lab, or the
+node with a node filter, is destroyed through the API.
 
 ## Flashpost Collection
 

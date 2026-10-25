@@ -694,10 +694,12 @@ definitions:
   models.HealthResponse:
     properties:
       features:
-        description: Features lists optional API features this server supports.
+        description: |-
+          Features lists optional API features this server supports, so clients can
+          hide what older servers do not provide.
         example:
         - validate
-        - graph-mermaid
+        - exec-filters
         items:
           type: string
         type: array
@@ -1192,6 +1194,12 @@ definitions:
     type: object
   models.SaveConfigResponse:
     properties:
+      copyDir:
+        description: |-
+          CopyDir is the <copy>/<lab dir> directory the configs were copied to when
+          copy was requested: workspace-relative, @shared/... or absolute.
+        example: lab1/backups/clab-lab1
+        type: string
       message:
         description: Message indicating overall success.
         type: string
@@ -1235,6 +1243,75 @@ definitions:
       success:
         example: true
         type: boolean
+    type: object
+  models.SnapshotNodeResult:
+    properties:
+      durationMs:
+        example: 45000
+        type: integer
+      error:
+        type: string
+      node:
+        example: r1
+        type: string
+      path:
+        description: Path is the snapshot file, workspace-relative (or @shared/...)
+          when inside a workspace root.
+        example: lab1/snapshots/r1.tar
+        type: string
+      reason:
+        description: Reason explains skipped nodes.
+        example: not a vrnetlab node (kind=nokia_srlinux, image=ghcr.io/nokia/srlinux)
+        type: string
+      sizeBytes:
+        example: 104857600
+        type: integer
+      status:
+        description: Status is "success", "failed" or "skipped".
+        enum:
+        - success
+        - failed
+        - skipped
+        example: success
+        type: string
+    type: object
+  models.SnapshotSaveRequest:
+    properties:
+      nodes:
+        description: Nodes limits the snapshot to these topology node names (all nodes
+          when empty).
+        example:
+        - r1
+        - r2
+        items:
+          type: string
+        type: array
+      outputDir:
+        description: |-
+          OutputDir is a path relative to the topology directory, or an absolute path,
+          inside the user's workspace (or the shared root for shared labs). Defaults to "snapshots".
+        example: snapshots
+        type: string
+      timeout:
+        description: Timeout is the per-node wait as a Go duration (default 5m, maximum
+          30m).
+        example: 5m
+        type: string
+    type: object
+  models.SnapshotSaveResponse:
+    properties:
+      outputDir:
+        description: OutputDir is workspace-relative (or @shared/...) when inside
+          a workspace root.
+        example: lab1/snapshots
+        type: string
+      results:
+        items:
+          $ref: '#/definitions/models.SnapshotNodeResult'
+        type: array
+      summary:
+        example: 2 succeeded, 0 failed, 1 skipped
+        type: string
     type: object
   models.TailscaleDevice:
     properties:
@@ -2109,6 +2186,20 @@ paths:
         in: query
         name: ipv6Subnet
         type: string
+      - description: Restore nodes from <node>.tar snapshots in this directory (like
+          --restore-all); relative to the topology directory or absolute, inside the
+          workspace
+        in: query
+        name: restoreAll
+        type: string
+      - collectionFormat: multi
+        description: Restore one node from a snapshot file as node=path (like --restore);
+          repeatable, overrides restoreAll
+        in: query
+        items:
+          type: string
+        name: restore
+        type: array
       produces:
       - application/json
       responses:
@@ -2223,18 +2314,26 @@ paths:
       tags:
       - Labs
     get:
-      description: Returns details for a specific running lab.
+      description: |-
+        Returns details for a specific running lab.
+
+        **Notes**
+        - `details=true` returns what `containerlab inspect --details` prints for the lab instead: a JSON object `{ "<labName>": [ runtime container objects ] }` with fields such as `Names`, `ID`, `ShortID`, `Image`, `State`, `Status`, `Labels`, `Pid`, `NetworkName`, `NetworkSettings`, `Mounts` and `Ports`. Internal helper containers are excluded.
       parameters:
       - description: Name of the lab to inspect
         in: path
         name: labName
         required: true
         type: string
+      - description: Return runtime container details like containerlab inspect --details
+        in: query
+        name: details
+        type: boolean
       produces:
       - application/json
       responses:
         "200":
-          description: Lab containers
+          description: Lab containers, or the details object when details=true
           schema:
             items:
               $ref: '#/definitions/models.ClabContainerInfo'
@@ -2619,6 +2718,20 @@ paths:
         in: query
         name: ipv6Subnet
         type: string
+      - description: Restore nodes from <node>.tar snapshots in this directory (like
+          --restore-all); relative to the topology directory or absolute, inside the
+          workspace
+        in: query
+        name: restoreAll
+        type: string
+      - collectionFormat: multi
+        description: Restore one node from a snapshot file as node=path (like --restore);
+          repeatable, overrides restoreAll
+        in: query
+        items:
+          type: string
+        name: restore
+        type: array
       produces:
       - application/json
       responses:
@@ -2659,17 +2772,34 @@ paths:
     post:
       consumes:
       - application/json
-      description: Executes a command on nodes within a lab.
+      description: |-
+        Executes a command on nodes within a lab.
+
+        **Notes**
+        - `nodes` (comma-separated topology node names) and `label` (repeatable `key=value`, like `containerlab exec --label`) combine with AND and always stay within the lab.
+        - `nodeFilter` cannot be combined with `nodes` or `label`.
+        - With `nodes` or `label`, a filter that matches no container returns 404.
       parameters:
       - description: Name of the lab
         in: path
         name: labName
         required: true
         type: string
-      - description: Execute only on this specific node
+      - description: Execute only on this specific container
         in: query
         name: nodeFilter
         type: string
+      - description: Comma-separated topology node names to execute on
+        in: query
+        name: nodes
+        type: string
+      - collectionFormat: multi
+        description: Label filter in key=value form; repeat for several labels
+        in: query
+        items:
+          type: string
+        name: label
+        type: array
       - description: Command to execute
         in: body
         name: exec_request
@@ -2692,7 +2822,7 @@ paths:
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "404":
-          description: Lab not found
+          description: Lab not found or no node matches the filters
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "500":
@@ -3500,11 +3630,17 @@ paths:
         **Notes**
         - `stream=true` returns `application/x-ndjson` lifecycle events.
         - `includeLogs=true` includes captured lifecycle logs in the JSON response.
+        - `nodeFilter` limits the action to the listed topology nodes; unknown nodes return 404.
       parameters:
       - description: Lab Name
         in: path
         name: labName
         required: true
+        type: string
+      - description: 'Comma-separated topology node names to act on (default: all
+          nodes)'
+        in: query
+        name: nodeFilter
         type: string
       - description: Stream lifecycle output as NDJSON events
         in: query
@@ -3544,7 +3680,11 @@ paths:
       - Labs
   /api/v1/labs/{labName}/save:
     post:
-      description: Saves the running configuration for nodes in a lab.
+      description: |-
+        Saves the running configuration for nodes in a lab.
+
+        **Notes**
+        - `copy` works like `containerlab save --copy`: each saved config is also copied to `<copy>/<lab dir>/<node>/<file>-YYMMDD_HHMMSS.<ext>` with a `<file>` symlink to the newest copy. The path is relative to the topology directory (or absolute) and must stay inside the user's workspace, or the shared root for shared labs.
       parameters:
       - description: Name of the lab
         in: path
@@ -3554,6 +3694,11 @@ paths:
       - description: Save config only for specific nodes
         in: query
         name: nodeFilter
+        type: string
+      - description: Also copy saved configs into this directory (relative to the
+          topology directory or absolute)
+        in: query
+        name: copy
         type: string
       produces:
       - application/json
@@ -3581,6 +3726,61 @@ paths:
       security:
       - BearerAuth: []
       summary: Save lab configuration
+      tags:
+      - Labs
+  /api/v1/labs/{labName}/snapshots:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Saves VM snapshots of vrnetlab-based nodes, like `containerlab tools snapshot save`. Each snapshot is written to `<outputDir>/<node>.tar`; non-vrnetlab nodes are skipped.
+
+        **Notes**
+        - `outputDir` is relative to the lab's topology directory (or absolute) and must stay inside the user's workspace, or the shared root for shared labs. Defaults to `snapshots`.
+        - `timeout` is the per-node wait as a Go duration (default `5m`, maximum `30m`).
+        - Nodes run concurrently. The response is 200 even when nodes fail; read each result's `status` (`success`, `failed`, `skipped`).
+        - The lab is locked for other lifecycle operations while snapshots run.
+      parameters:
+      - description: Name of the lab
+        in: path
+        name: labName
+        required: true
+        type: string
+      - description: Snapshot options
+        in: body
+        name: snapshot_request
+        schema:
+          $ref: '#/definitions/models.SnapshotSaveRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Per-node snapshot results
+          schema:
+            $ref: '#/definitions/models.SnapshotSaveResponse'
+        "400":
+          description: Invalid input
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Lab or node not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "409":
+          description: Lab busy with another operation
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Save VM snapshots
       tags:
       - Labs
   /api/v1/labs/{labName}/sshx/{action}:
@@ -3645,11 +3845,17 @@ paths:
         **Notes**
         - `stream=true` returns `application/x-ndjson` lifecycle events.
         - `includeLogs=true` includes captured lifecycle logs in the JSON response.
+        - `nodeFilter` limits the action to the listed topology nodes; unknown nodes return 404.
       parameters:
       - description: Lab Name
         in: path
         name: labName
         required: true
+        type: string
+      - description: 'Comma-separated topology node names to act on (default: all
+          nodes)'
+        in: query
+        name: nodeFilter
         type: string
       - description: Stream lifecycle output as NDJSON events
         in: query
@@ -3695,11 +3901,17 @@ paths:
         **Notes**
         - `stream=true` returns `application/x-ndjson` lifecycle events.
         - `includeLogs=true` includes captured lifecycle logs in the JSON response.
+        - `nodeFilter` limits the action to the listed topology nodes; unknown nodes return 404.
       parameters:
       - description: Lab Name
         in: path
         name: labName
         required: true
+        type: string
+      - description: 'Comma-separated topology node names to act on (default: all
+          nodes)'
+        in: query
+        name: nodeFilter
         type: string
       - description: Stream lifecycle output as NDJSON events
         in: query
@@ -4434,6 +4646,20 @@ paths:
         in: query
         name: ipv6Subnet
         type: string
+      - description: Restore nodes from <node>.tar snapshots in this directory (like
+          --restore-all); relative to the topology directory or absolute, inside the
+          workspace
+        in: query
+        name: restoreAll
+        type: string
+      - collectionFormat: multi
+        description: Restore one node from a snapshot file as node=path (like --restore);
+          repeatable, overrides restoreAll
+        in: query
+        items:
+          type: string
+        name: restore
+        type: array
       produces:
       - application/json
       responses:
@@ -6018,7 +6244,11 @@ paths:
       - Version
   /health:
     get:
-      description: Returns basic health status for the API server.
+      description: |-
+        Returns basic health status for the API server.
+
+        **Notes**
+        - `features` lists optional API capabilities (for example `exec-filters` or `snapshot-save`) so clients can detect what this server supports.
       produces:
       - application/json
       responses:

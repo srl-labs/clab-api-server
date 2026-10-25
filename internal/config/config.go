@@ -22,6 +22,7 @@ type Config struct {
 	ClabLabsRoot                 string        `mapstructure:"CLAB_LABS_ROOT"`
 	ClabSharedLabsRoot           string        `mapstructure:"CLAB_SHARED_LABS_ROOT"`
 	ClabHostsFile                string        `mapstructure:"CLAB_HOSTS_FILE"`
+	ClabRestoreStagingDir        string        `mapstructure:"CLAB_RESTORE_STAGING_DIR"`
 	CapturePacketflixPort        int           `mapstructure:"CAPTURE_PACKETFLIX_PORT"`
 	CaptureRemoteHostname        string        `mapstructure:"CAPTURE_REMOTE_HOSTNAME"`
 	CaptureWiresharkDockerImage  string        `mapstructure:"CAPTURE_WIRESHARK_DOCKER_IMAGE"`
@@ -60,6 +61,7 @@ func LoadConfig(envFilePath string) error {
 	viper.SetDefault("CLAB_LABS_ROOT", "")
 	viper.SetDefault("CLAB_SHARED_LABS_ROOT", "")
 	viper.SetDefault("CLAB_HOSTS_FILE", "")
+	viper.SetDefault("CLAB_RESTORE_STAGING_DIR", "/var/lib/clab-api-server/restore")
 	viper.SetDefault("CAPTURE_PACKETFLIX_PORT", 5001)
 	viper.SetDefault("CAPTURE_REMOTE_HOSTNAME", "")
 	viper.SetDefault("CAPTURE_WIRESHARK_DOCKER_IMAGE", "ghcr.io/srl-labs/wireshark-vnc-docker:latest")
@@ -144,6 +146,17 @@ func LoadConfig(envFilePath string) error {
 			return fmt.Errorf("CLAB_HOSTS_FILE must be an absolute path")
 		}
 		AppConfig.ClabHostsFile = filepath.Clean(AppConfig.ClabHostsFile)
+	}
+
+	AppConfig.ClabRestoreStagingDir = strings.TrimSpace(AppConfig.ClabRestoreStagingDir)
+	if AppConfig.ClabRestoreStagingDir != "" {
+		if !filepath.IsAbs(AppConfig.ClabRestoreStagingDir) {
+			return fmt.Errorf("CLAB_RESTORE_STAGING_DIR must be an absolute path")
+		}
+		AppConfig.ClabRestoreStagingDir = filepath.Clean(AppConfig.ClabRestoreStagingDir)
+		if AppConfig.ClabRestoreStagingDir == string(filepath.Separator) {
+			return fmt.Errorf("CLAB_RESTORE_STAGING_DIR must not be the filesystem root")
+		}
 	}
 
 	// No need to convert - the value is already a time.Duration thanks to the type in the struct

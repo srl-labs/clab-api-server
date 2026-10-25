@@ -69,6 +69,8 @@ func resolveURLDeploySource(
 // @Param network query string false "Override the management network name (like --network); not allowed with multiple management networks"
 // @Param ipv4Subnet query string false "Override the management network IPv4 subnet (like --ipv4-subnet)"
 // @Param ipv6Subnet query string false "Override the management network IPv6 subnet (like --ipv6-subnet)"
+// @Param restoreAll query string false "Restore nodes from <node>.tar snapshots in this directory (like --restore-all); relative to the topology directory or absolute, inside the workspace"
+// @Param restore query []string false "Restore one node from a snapshot file as node=path (like --restore); repeatable, overrides restoreAll" collectionFormat(multi)
 // @Success 200 {object} models.ClabInspectOutput "Deployed lab details"
 // @Failure 400 {object} models.ErrorResponse "Invalid input"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
@@ -130,6 +132,10 @@ func DeployLabHandler(c *gin.Context) {
 		return
 	}
 	mgmt, valid := parseMgmtOverrideQuery(c)
+	if !valid {
+		return
+	}
+	restore, valid := parseRestoreQuery(c)
 	if !valid {
 		return
 	}
@@ -283,6 +289,9 @@ func DeployLabHandler(c *gin.Context) {
 		SkipLabDirACLs: skipLabdirAcl,
 	}
 	mgmt.applyTo(&deployOpts)
+	if !applyRestoreQuery(c, username, topoPathForClab, deployOpts.LabName, restore, &deployOpts) {
+		return
+	}
 
 	log.Infof("DeployLab user '%s': Deploying lab '%s'...", username, effectiveLabName)
 	containers, err := svc.Deploy(ctx, deployOpts)
@@ -316,6 +325,8 @@ func DeployLabHandler(c *gin.Context) {
 // @Param network query string false "Override the management network name (like --network); not allowed with multiple management networks"
 // @Param ipv4Subnet query string false "Override the management network IPv4 subnet (like --ipv4-subnet)"
 // @Param ipv6Subnet query string false "Override the management network IPv6 subnet (like --ipv6-subnet)"
+// @Param restoreAll query string false "Restore nodes from <node>.tar snapshots in this directory (like --restore-all); relative to the topology directory or absolute, inside the workspace"
+// @Param restore query []string false "Restore one node from a snapshot file as node=path (like --restore); repeatable, overrides restoreAll" collectionFormat(multi)
 // @Success 200 {object} models.ClabInspectOutput "Deployed lab details"
 // @Failure 400 {object} models.ErrorResponse "Invalid input"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
@@ -359,6 +370,10 @@ func DeployLabArchiveHandler(c *gin.Context) {
 		return
 	}
 	mgmt, valid := parseMgmtOverrideQuery(c)
+	if !valid {
+		return
+	}
+	restore, valid := parseRestoreQuery(c)
 	if !valid {
 		return
 	}
@@ -493,6 +508,9 @@ func DeployLabArchiveHandler(c *gin.Context) {
 		SkipLabDirACLs: skipLabdirAcl,
 	}
 	mgmt.applyTo(&deployOpts)
+	if !applyRestoreQuery(c, username, topoPathForClab, deployOpts.LabName, restore, &deployOpts) {
+		return
+	}
 
 	log.Infof("DeployLab (Archive) user '%s': Deploying lab '%s'...", username, labName)
 	containers, err := svc.Deploy(ctx, deployOpts)
@@ -928,11 +946,15 @@ func parseGracefulTimeoutQuery(c *gin.Context, graceful bool) (time.Duration, bo
 
 // @Summary Inspect lab
 // @Description Returns details for a specific running lab.
+// @Description
+// @Description **Notes**
+// @Description - `details=true` returns what `containerlab inspect --details` prints for the lab instead: a JSON object `{ "<labName>": [ runtime container objects ] }` with fields such as `Names`, `ID`, `ShortID`, `Image`, `State`, `Status`, `Labels`, `Pid`, `NetworkName`, `NetworkSettings`, `Mounts` and `Ports`. Internal helper containers are excluded.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce json
 // @Param labName path string true "Name of the lab to inspect"
-// @Success 200 {object} []models.ClabContainerInfo "Lab containers"
+// @Param details query boolean false "Return runtime container details like containerlab inspect --details"
+// @Success 200 {object} []models.ClabContainerInfo "Lab containers, or the details object when details=true"
 // @Failure 400 {object} models.ErrorResponse "Invalid lab name"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
 // @Failure 404 {object} models.ErrorResponse "Lab not found"
@@ -946,6 +968,15 @@ func InspectLabHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in lab name."})
 		return
 	}
+	details := false
+	if rawDetails, present := c.GetQuery("details"); present {
+		parsed, parseErr := strconv.ParseBool(rawDetails)
+		if parseErr != nil {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid 'details' query parameter. Use true or false."})
+			return
+		}
+		details = parsed
+	}
 
 	_, ownerCheckErr := verifyLabOwnership(c, username, labName)
 	if ownerCheckErr != nil {
@@ -955,6 +986,11 @@ func InspectLabHandler(c *gin.Context) {
 	svc := GetClabService()
 	if svc == nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Containerlab service not initialized"})
+		return
+	}
+
+	if details {
+		inspectLabDetails(c, svc, username, labName)
 		return
 	}
 
@@ -1199,11 +1235,15 @@ func ListLabsHandler(c *gin.Context) {
 
 // @Summary Save lab configuration
 // @Description Saves the running configuration for nodes in a lab.
+// @Description
+// @Description **Notes**
+// @Description - `copy` works like `containerlab save --copy`: each saved config is also copied to `<copy>/<lab dir>/<node>/<file>-YYMMDD_HHMMSS.<ext>` with a `<file>` symlink to the newest copy. The path is relative to the topology directory (or absolute) and must stay inside the user's workspace, or the shared root for shared labs.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce json
 // @Param labName path string true "Name of the lab"
 // @Param nodeFilter query string false "Save config only for specific nodes"
+// @Param copy query string false "Also copy saved configs into this directory (relative to the topology directory or absolute)"
 // @Success 200 {object} models.SaveConfigResponse "Configuration saved"
 // @Failure 400 {object} models.ErrorResponse "Invalid input"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
@@ -1223,6 +1263,10 @@ func SaveLabConfigHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in nodeFilter."})
 		return
 	}
+	copyRaw, copyRequested, ok := parseRequiredLabPathQuery(c, "copy")
+	if !ok {
+		return
+	}
 
 	originalTopoPath, ownerCheckErr := verifyLabOwnership(c, username, labName)
 	if ownerCheckErr != nil {
@@ -1231,6 +1275,20 @@ func SaveLabConfigHandler(c *gin.Context) {
 	if originalTopoPath == "" {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Could not determine topology path for save."})
 		return
+	}
+
+	var copyDst resolvedLabPath
+	if copyRequested {
+		resolved, err := resolveLabOutputDir(username, originalTopoPath, copyRaw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid 'copy' query parameter: " + err.Error()})
+			return
+		}
+		if err := ensureLabPathRoot(resolved); err != nil {
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to prepare copy destination: " + err.Error()})
+			return
+		}
+		copyDst = resolved
 	}
 
 	svc := GetClabService()
@@ -1249,36 +1307,54 @@ func SaveLabConfigHandler(c *gin.Context) {
 		Username:   username,
 		NodeFilter: nodeFilterSlice,
 	}
+	if copyRequested {
+		copyOut := copyDst.outputDir()
+		saveOpts.CopyOut = &copyOut
+	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Minute)
 	defer cancel()
 
 	log.Infof("SaveLabConfig user '%s': Saving config for lab '%s'...", username, labName)
-	if err := svc.SaveConfig(ctx, saveOpts); err != nil {
+	saveResult, err := svc.SaveConfig(ctx, saveOpts)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to save config for lab '%s': %s", labName, err.Error())})
 		return
 	}
 
-	log.Infof("SaveLabConfig user '%s': Config saved successfully for lab '%s'.", username, labName)
-	c.JSON(http.StatusOK, models.SaveConfigResponse{
+	response := models.SaveConfigResponse{
 		Message: fmt.Sprintf("Configuration save command executed successfully for lab '%s'.", labName),
 		Output:  "Configuration saved",
-	})
+	}
+	if copyRequested && saveResult != nil && saveResult.CopyDir != "" {
+		response.CopyDir = copyDst.displayChild(saveResult.CopyDir)
+		response.Output = "Configuration saved and copied to " + response.CopyDir
+	}
+
+	log.Infof("SaveLabConfig user '%s': Config saved successfully for lab '%s'.", username, labName)
+	c.JSON(http.StatusOK, response)
 }
 
 // @Summary Execute command in lab
 // @Description Executes a command on nodes within a lab.
+// @Description
+// @Description **Notes**
+// @Description - `nodes` (comma-separated topology node names) and `label` (repeatable `key=value`, like `containerlab exec --label`) combine with AND and always stay within the lab.
+// @Description - `nodeFilter` cannot be combined with `nodes` or `label`.
+// @Description - With `nodes` or `label`, a filter that matches no container returns 404.
 // @Tags Labs
 // @Security BearerAuth
 // @Accept json
 // @Produce json
 // @Param labName path string true "Name of the lab"
-// @Param nodeFilter query string false "Execute only on this specific node"
+// @Param nodeFilter query string false "Execute only on this specific container"
+// @Param nodes query string false "Comma-separated topology node names to execute on"
+// @Param label query []string false "Label filter in key=value form; repeat for several labels" collectionFormat(multi)
 // @Param exec_request body models.ExecRequest true "Command to execute"
 // @Success 200 {object} models.ExecResponse "Execution result"
 // @Failure 400 {object} models.ErrorResponse "Invalid input"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
-// @Failure 404 {object} models.ErrorResponse "Lab not found"
+// @Failure 404 {object} models.ErrorResponse "Lab not found or no node matches the filters"
 // @Failure 500 {object} models.ErrorResponse "Internal server error"
 // @Router /api/v1/labs/{labName}/exec [post]
 func ExecCommandHandler(c *gin.Context) {
@@ -1292,6 +1368,14 @@ func ExecCommandHandler(c *gin.Context) {
 	}
 	if nodeFilter != "" && !isValidNodeName(nodeFilter) {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in nodeFilter."})
+		return
+	}
+	execFilters, ok := parseExecFilterQuery(c)
+	if !ok {
+		return
+	}
+	if execFilters.active() && nodeFilter != "" {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "'nodeFilter' cannot be combined with 'nodes' or 'label'."})
 		return
 	}
 	var req models.ExecRequest
@@ -1312,6 +1396,11 @@ func ExecCommandHandler(c *gin.Context) {
 	svc := GetClabService()
 	if svc == nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Containerlab service not initialized"})
+		return
+	}
+
+	if execFilters.active() {
+		runFilteredExec(c, svc, username, labName, req.Command, execFilters)
 		return
 	}
 
