@@ -437,6 +437,8 @@ func ImportTopologyFromURLHandler(c *gin.Context) {
 // @Param network query string false "Override the management network name (like --network); not allowed with multiple management networks"
 // @Param ipv4Subnet query string false "Override the management network IPv4 subnet (like --ipv4-subnet)"
 // @Param ipv6Subnet query string false "Override the management network IPv6 subnet (like --ipv6-subnet)"
+// @Param restoreAll query string false "Restore nodes from <node>.tar snapshots in this directory (like --restore-all); relative to the topology directory or absolute, inside the workspace"
+// @Param restore query []string false "Restore one node from a snapshot file as node=path (like --restore); repeatable, overrides restoreAll" collectionFormat(multi)
 // @Success 200 {object} models.ClabInspectOutput "Deployed lab details"
 // @Failure 400 {object} models.ErrorResponse "Invalid input"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
@@ -477,6 +479,10 @@ func DeployTopologyHandler(c *gin.Context) {
 		return
 	}
 	mgmt, valid := parseMgmtOverrideQuery(c)
+	if !valid {
+		return
+	}
+	restore, valid := parseRestoreQuery(c)
 	if !valid {
 		return
 	}
@@ -575,6 +581,9 @@ func DeployTopologyHandler(c *gin.Context) {
 		VarsFiles:      varsFiles,
 	}
 	mgmt.applyTo(&deployOptions)
+	if !applyRestoreQuery(c, username, topologyPath, labName, restore, &deployOptions) {
+		return
+	}
 
 	if streamLogs {
 		var inspectResult models.ClabInspectOutput

@@ -119,6 +119,9 @@ func SetupRoutes(router *gin.Engine) {
 				// Save lab config
 				labSpecific.POST("/save", SaveLabConfigHandler) // POST /api/v1/labs/{labName}/save
 
+				// Save VM snapshots of vrnetlab nodes
+				labSpecific.POST("/snapshots", SaveLabSnapshotsHandler) // POST /api/v1/labs/{labName}/snapshots
+
 				// Capture
 				labSpecific.POST("/capture/packetflix", BuildPacketflixCaptureHandler)                 // POST /api/v1/labs/{labName}/capture/packetflix
 				labSpecific.POST("/capture/wireshark-vnc-sessions", CreateWiresharkVncSessionsHandler) // POST /api/v1/labs/{labName}/capture/wireshark-vnc-sessions

@@ -178,10 +178,12 @@ func handleNodeLifecycle(c *gin.Context, action clab.NodeLifecycleAction) {
 // @Description **Notes**
 // @Description - `stream=true` returns `application/x-ndjson` lifecycle events.
 // @Description - `includeLogs=true` includes captured lifecycle logs in the JSON response.
+// @Description - `nodeFilter` limits the action to the listed topology nodes; unknown nodes return 404.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce json
 // @Param labName path string true "Lab Name"
+// @Param nodeFilter query string false "Comma-separated topology node names to act on (default: all nodes)"
 // @Param stream query boolean false "Stream lifecycle output as NDJSON events"
 // @Param includeLogs query boolean false "Include captured lifecycle logs in the JSON response"
 // @Success 200 {object} models.GenericSuccessResponse
@@ -200,10 +202,12 @@ func StartLabNodesHandler(c *gin.Context) {
 // @Description **Notes**
 // @Description - `stream=true` returns `application/x-ndjson` lifecycle events.
 // @Description - `includeLogs=true` includes captured lifecycle logs in the JSON response.
+// @Description - `nodeFilter` limits the action to the listed topology nodes; unknown nodes return 404.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce json
 // @Param labName path string true "Lab Name"
+// @Param nodeFilter query string false "Comma-separated topology node names to act on (default: all nodes)"
 // @Param stream query boolean false "Stream lifecycle output as NDJSON events"
 // @Param includeLogs query boolean false "Include captured lifecycle logs in the JSON response"
 // @Success 200 {object} models.GenericSuccessResponse
@@ -222,10 +226,12 @@ func StopLabNodesHandler(c *gin.Context) {
 // @Description **Notes**
 // @Description - `stream=true` returns `application/x-ndjson` lifecycle events.
 // @Description - `includeLogs=true` includes captured lifecycle logs in the JSON response.
+// @Description - `nodeFilter` limits the action to the listed topology nodes; unknown nodes return 404.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce json
 // @Param labName path string true "Lab Name"
+// @Param nodeFilter query string false "Comma-separated topology node names to act on (default: all nodes)"
 // @Param stream query boolean false "Stream lifecycle output as NDJSON events"
 // @Param includeLogs query boolean false "Include captured lifecycle logs in the JSON response"
 // @Success 200 {object} models.GenericSuccessResponse
@@ -248,6 +254,10 @@ func handleLabNodeLifecycle(c *gin.Context, action clab.NodeLifecycleAction) {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid lab name format."})
 		return
 	}
+	nodeNames, ok := parseLifecycleNodeFilter(c)
+	if !ok {
+		return
+	}
 
 	releaseLabOperation, ok := beginLabOperationOrConflict(c, labName, string(action))
 	if !ok {
@@ -265,15 +275,19 @@ func handleLabNodeLifecycle(c *gin.Context, action clab.NodeLifecycleAction) {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Containerlab service not initialized"})
 		return
 	}
+	if !verifyLifecycleNodesExist(c, svc, labName, nodeNames) {
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
 	defer cancel()
 
 	opts := clab.NodeLifecycleOptions{
-		LabName:  labName,
-		TopoPath: originalTopoPath,
-		Username: username,
-		Action:   action,
+		LabName:   labName,
+		TopoPath:  originalTopoPath,
+		Username:  username,
+		NodeNames: nodeNames,
+		Action:    action,
 	}
 
 	runLifecycle := func() error {
@@ -283,7 +297,7 @@ func handleLabNodeLifecycle(c *gin.Context, action clab.NodeLifecycleAction) {
 		return nil
 	}
 
-	successMessage := fmt.Sprintf("Lab '%s' nodes %s successfully.", labName, lifecyclePastTense(action))
+	successMessage := lifecycleSuccessMessage(labName, action, nodeNames)
 	if streamLogs {
 		streamLifecycleCommand(c, runLifecycle, successMessage)
 		return
@@ -292,7 +306,7 @@ func handleLabNodeLifecycle(c *gin.Context, action clab.NodeLifecycleAction) {
 	if includeLogs {
 		logs, lifecycleErr := captureLifecycleLogs(runLifecycle)
 		if lifecycleErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
+			c.JSON(lifecycleErrorStatus(lifecycleErr), gin.H{
 				"error": lifecycleErr.Error(),
 				"logs":  logs,
 			})
@@ -306,7 +320,7 @@ func handleLabNodeLifecycle(c *gin.Context, action clab.NodeLifecycleAction) {
 	}
 
 	if err := runLifecycle(); err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
+		c.JSON(lifecycleErrorStatus(err), models.ErrorResponse{Error: err.Error()})
 		return
 	}
 

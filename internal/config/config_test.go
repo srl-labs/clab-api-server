@@ -49,6 +49,9 @@ func TestLoadConfigDefaultsEnableTLSAutoCert(t *testing.T) {
 	if AppConfig.ClabHostsFile != "" {
 		t.Fatalf("expected CLAB_HOSTS_FILE default to be empty, got %q", AppConfig.ClabHostsFile)
 	}
+	if AppConfig.ClabRestoreStagingDir != "/var/lib/clab-api-server/restore" {
+		t.Fatalf("expected CLAB_RESTORE_STAGING_DIR default, got %q", AppConfig.ClabRestoreStagingDir)
+	}
 }
 
 func TestLoadConfigTerminalMaxSessionsPerUserOverride(t *testing.T) {
@@ -180,6 +183,47 @@ func TestLoadConfigRejectsRelativeClabHostsFile(t *testing.T) {
 	viper.Reset()
 	if err := LoadConfig(".env"); err == nil {
 		t.Fatal("expected LoadConfig to reject relative CLAB_HOSTS_FILE")
+	}
+}
+
+func TestLoadConfigRestoreStagingDir(t *testing.T) {
+	for _, tc := range []struct {
+		name, dir, want string
+		invalid         bool
+	}{
+		{name: "absolute", dir: "/srv/restore/../staging", want: "/srv/staging"},
+		{name: "relative", dir: "staging", invalid: true},
+		{name: "filesystem root", dir: "/", invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			originalWd, err := os.Getwd()
+			if err != nil {
+				t.Fatalf("get working directory: %v", err)
+			}
+			if err := os.Chdir(t.TempDir()); err != nil {
+				t.Fatalf("chdir temp dir: %v", err)
+			}
+			t.Cleanup(func() {
+				_ = os.Chdir(originalWd)
+				viper.Reset()
+			})
+
+			t.Setenv("CLAB_RESTORE_STAGING_DIR", tc.dir)
+			viper.Reset()
+			err = LoadConfig(".env")
+			if tc.invalid {
+				if err == nil {
+					t.Fatalf("expected LoadConfig to reject CLAB_RESTORE_STAGING_DIR %q", tc.dir)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadConfig returned error: %v", err)
+			}
+			if AppConfig.ClabRestoreStagingDir != tc.want {
+				t.Fatalf("expected CLAB_RESTORE_STAGING_DIR %q, got %q", tc.want, AppConfig.ClabRestoreStagingDir)
+			}
+		})
 	}
 }
 

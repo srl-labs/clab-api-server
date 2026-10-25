@@ -9,8 +9,9 @@ type HealthResponse struct {
 	Uptime    string    `json:"uptime"`            // Human-readable uptime
 	StartTime time.Time `json:"startTime"`         // When the server started
 	Version   string    `json:"version,omitempty"` // API server version
-	// Features lists optional API features this server supports.
-	Features []string `json:"features,omitempty" example:"validate,graph-mermaid"`
+	// Features lists optional API features this server supports, so clients can
+	// hide what older servers do not provide.
+	Features []string `json:"features" example:"validate,exec-filters"`
 }
 
 // MetricsResponse represents detailed system metrics with server info

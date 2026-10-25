@@ -297,6 +297,10 @@ type DeployOptions struct {
 	// VarsFiles are template variable files like --vars. When empty, containerlab
 	// discovers <topology>_vars.{yaml,yml,json} next to the topology.
 	VarsFiles []string
+	// RestoreNodeSnapshots lists "node=/absolute/snapshot.tar" entries like the
+	// --restore deploy flag. Paths must come from StageRestoreSnapshots so the
+	// mounted files live in the server-owned staging directory.
+	RestoreNodeSnapshots []string
 }
 
 // ApplyOptions contains options for applying topology changes to a lab.
@@ -350,6 +354,8 @@ type SaveOptions struct {
 	TopoPath   string
 	Username   string
 	NodeFilter []string
+	// CopyOut, when set, copies saved configs like `containerlab save --copy`.
+	CopyOut *OutputDir
 }
 
 type nodeConfigSaver interface {
@@ -361,7 +367,8 @@ type nodeConfigSaver interface {
 type InspectOptions struct {
 	LabName  string
 	Username string
-	Details  bool
+	// Details returns the raw runtime container objects, like `containerlab inspect --details`.
+	Details bool
 }
 
 // InterfacesOptions contains options for listing interfaces.
@@ -704,6 +711,9 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 	if opts.ExportTemplate != "" {
 		deployOpts.SetExportTemplate(opts.ExportTemplate)
 	}
+	if len(opts.RestoreNodeSnapshots) > 0 {
+		deployOpts.SetRestoreNodeSnapshots(opts.RestoreNodeSnapshots)
+	}
 
 	log.Info("Deploying lab",
 		"username", opts.Username,
@@ -994,6 +1004,11 @@ func (s *Service) Destroy(ctx context.Context, opts DestroyOptions) error {
 	if err := clab.Destroy(ctx, destroyOpts...); err != nil {
 		return fmt.Errorf("destroy failed: %w", err)
 	}
+	stagedLabName := opts.LabName
+	if stagedLabName == "" {
+		stagedLabName = clab.Config.Name
+	}
+	removeStagedRestoreSnapshots(stagedLabName, opts.NodeFilter)
 	if err := removeLabHostsFiles(clab.Config.Name); err != nil {
 		return fmt.Errorf("lab destroyed but host name resolution cleanup failed: %w", err)
 	}
@@ -1711,14 +1726,14 @@ func (s *Service) Exec(ctx context.Context, opts ExecOptions) (*clabexec.ExecCol
 }
 
 // SaveConfig saves the configuration of lab nodes.
-func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) error {
+func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) (*SaveResult, error) {
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
 	// Prepare clab working directory
 	workDir, err := s.prepareWorkDir(opts.Username)
 	if err != nil {
-		return fmt.Errorf("failed to prepare working directory: %w", err)
+		return nil, fmt.Errorf("failed to prepare working directory: %w", err)
 	}
 
 	unlock := lockContainerlabOperation()
@@ -1726,7 +1741,7 @@ func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) error {
 
 	originalDir, _ := os.Getwd()
 	if chErr := os.Chdir(workDir); chErr != nil {
-		return fmt.Errorf("failed to change to work directory: %w", chErr)
+		return nil, fmt.Errorf("failed to change to work directory: %w", chErr)
 	}
 	defer func() {
 		if restoreErr := os.Chdir(originalDir); restoreErr != nil {
@@ -1742,7 +1757,7 @@ func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) error {
 
 	clab, err := clabcore.NewContainerLab(clabOpts...)
 	if err != nil {
-		return fmt.Errorf("failed to create containerlab instance: %w", err)
+		return nil, fmt.Errorf("failed to create containerlab instance: %w", err)
 	}
 
 	log.Info("Saving lab configuration",
@@ -1752,28 +1767,51 @@ func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) error {
 
 	savers, err := selectNodeConfigSavers(clab.Nodes, opts.NodeFilter)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// Refresh the whole lab's entries even when only selected nodes are saved.
 	if err := syncLabHostsFiles(ctx, clab); err != nil {
-		return fmt.Errorf("failed to prepare host name resolution: %w", err)
+		return nil, fmt.Errorf("failed to prepare host name resolution: %w", err)
 	}
 
 	if clab.Config.Mgmt != nil {
 		if err := clablinks.SetMgmtNetUnderlyingBridge(clab.Config.Mgmt.Bridge); err != nil {
-			return fmt.Errorf("failed to configure management bridge: %w", err)
+			return nil, fmt.Errorf("failed to configure management bridge: %w", err)
 		}
 	}
 
-	if err := saveNodeConfigs(ctx, savers); err != nil {
-		return fmt.Errorf("save failed: %w", err)
+	result := &SaveResult{}
+	var afterSave func(nodeConfigSaver, *clabnodes.SaveConfigResult) error
+	if opts.CopyOut != nil {
+		labDir := clab.TopoPaths.TopologyLabDir()
+		labDirName, nameErr := copyLabDirName(labDir, clab.Config.Name)
+		if nameErr != nil {
+			return nil, nameErr
+		}
+		copier, copyErr := newSaveCopier(*opts.CopyOut, labDir, labDirName)
+		if copyErr != nil {
+			return nil, fmt.Errorf("failed to prepare save copy destination: %w", copyErr)
+		}
+		defer func() { _ = copier.Close() }()
+		result.CopyDir = copier.dir()
+		afterSave = func(node nodeConfigSaver, saved *clabnodes.SaveConfigResult) error {
+			if err := copier.copy(node.GetShortName(), saved); err != nil {
+				return fmt.Errorf("copy failed: %w", err)
+			}
+			return nil
+		}
+	}
+
+	if err := saveNodeConfigsThen(ctx, savers, afterSave); err != nil {
+		return result, fmt.Errorf("save failed: %w", err)
 	}
 
 	log.Info("Lab configuration saved successfully",
 		"username", opts.Username,
+		"copyDir", result.CopyDir,
 	)
 
-	return nil
+	return result, nil
 }
 
 func selectNodeConfigSavers(nodes map[string]clabnodes.Node, nodeFilter []string) ([]nodeConfigSaver, error) {
@@ -1792,6 +1830,16 @@ func selectNodeConfigSavers(nodes map[string]clabnodes.Node, nodeFilter []string
 }
 
 func saveNodeConfigs(ctx context.Context, nodes []nodeConfigSaver) error {
+	return saveNodeConfigsThen(ctx, nodes, nil)
+}
+
+// saveNodeConfigsThen saves nodes concurrently and runs afterSave for every
+// node whose save succeeded.
+func saveNodeConfigsThen(
+	ctx context.Context,
+	nodes []nodeConfigSaver,
+	afterSave func(nodeConfigSaver, *clabnodes.SaveConfigResult) error,
+) error {
 	var wg sync.WaitGroup
 	errorsCh := make(chan error, len(nodes))
 
@@ -1799,8 +1847,15 @@ func saveNodeConfigs(ctx context.Context, nodes []nodeConfigSaver) error {
 		wg.Add(1)
 		go func(node nodeConfigSaver) {
 			defer wg.Done()
-			if _, err := node.SaveConfig(ctx); err != nil {
+			result, err := node.SaveConfig(ctx)
+			if err != nil {
 				errorsCh <- fmt.Errorf("node %q: %w", node.GetShortName(), err)
+				return
+			}
+			if afterSave != nil {
+				if err := afterSave(node, result); err != nil {
+					errorsCh <- fmt.Errorf("node %q: %w", node.GetShortName(), err)
+				}
 			}
 		}(node)
 	}

@@ -33,6 +33,12 @@ var serverFeatures = []string{
 	"graph-dot",
 	"sshx-readers",
 	"gotty-options",
+	"exec-filters",
+	"lab-lifecycle-node-filter",
+	"save-copy",
+	"inspect-details",
+	"snapshot-save",
+	"deploy-restore",
 }
 
 // InitHealth sets the server start time for uptime tracking and stores the version
@@ -43,6 +49,9 @@ func InitHealth(version string) {
 
 // @Summary Get API server health
 // @Description Returns basic health status for the API server.
+// @Description
+// @Description **Notes**
+// @Description - `features` lists optional API capabilities (for example `exec-filters` or `snapshot-save`) so clients can detect what this server supports.
 // @Tags Health
 // @Produce json
 // @Success 200 {object} models.HealthResponse "Basic health information"
