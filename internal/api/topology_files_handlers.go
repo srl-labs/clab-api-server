@@ -43,7 +43,7 @@ func resolveDefaultTopologyDocPath(username, labName, docType string) (string, s
 }
 
 // @Summary List editable lab topology files
-// @Description Recursively discovers editable *.clab.yml and *.clab.yaml files in the authenticated user's lab workspace. YAML and annotation paths are relative to the workspace root. Hidden directories, dependency caches, containerlab runtime directories, and symbolic links are excluded.
+// @Description Recursively discovers editable *.clab.yml, *.clab.yaml and *.clab.gotmpl files in the authenticated user's lab workspace. YAML and annotation paths are relative to the workspace root. Hidden directories, dependency caches, containerlab runtime directories, and symbolic links are excluded.
 // @Description Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
 // @Tags Labs
 // @Security BearerAuth
@@ -216,8 +216,7 @@ func directoryHasTopLevelTopologyFiles(dirPath string) (bool, error) {
 			continue
 		}
 
-		name := strings.ToLower(entry.Name())
-		if strings.HasSuffix(name, ".clab.yml") || strings.HasSuffix(name, ".clab.yaml") {
+		if hasTopologyFileSuffix(entry.Name()) {
 			return true, nil
 		}
 	}
@@ -417,6 +416,7 @@ func ImportTopologyFromURLHandler(c *gin.Context) {
 // @Description
 // @Description **Notes**
 // @Description - `path` defaults to `<labName>.clab.yml` when omitted.
+// @Description - `varsPath` selects the template variables file like `--vars`, relative to the topology file's directory and inside the same workspace; when omitted, containerlab uses `<topology name without extension>_vars.{yaml,yml,json}` next to the topology.
 // @Description - `stream=true` returns `application/x-ndjson` lifecycle events.
 // @Description - `includeLogs=true` includes captured lifecycle logs in the JSON response.
 // @Description Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
@@ -425,6 +425,7 @@ func ImportTopologyFromURLHandler(c *gin.Context) {
 // @Produce json
 // @Param labName path string true "Lab name"
 // @Param path query string false "Workspace-relative or legacy lab-relative topology path (defaults to <labName>.clab.yml)"
+// @Param varsPath query string false "Template variables file relative to the topology file's directory (like --vars)"
 // @Param reconfigure query boolean false "Allow overwriting an existing lab"
 // @Param maxWorkers query int false "Limit concurrent workers"
 // @Param exportTemplate query string false "Custom Go template file for topology data export"
@@ -440,7 +441,7 @@ func ImportTopologyFromURLHandler(c *gin.Context) {
 // @Failure 400 {object} models.ErrorResponse "Invalid input"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
 // @Failure 403 {object} models.ErrorResponse "Forbidden"
-// @Failure 404 {object} models.ErrorResponse "Topology file not found"
+// @Failure 404 {object} models.ErrorResponse "Topology or vars file not found"
 // @Failure 409 {object} models.ErrorResponse "Conflict"
 // @Failure 500 {object} models.ErrorResponse "Internal server error"
 // @Router /api/v1/labs/{labName}/deploy [post]
@@ -512,6 +513,10 @@ func DeployTopologyHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to stat topology file: %s", statErr.Error())})
 		return
 	}
+	varsFiles, ok := varsFilesFromQuery(c, topologyPath, username)
+	if !ok {
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
 	defer cancel()
@@ -567,6 +572,7 @@ func DeployTopologyHandler(c *gin.Context) {
 		NodeFilter:     nodeFilterSlice,
 		SkipPostDeploy: skipPostDeploy,
 		SkipLabDirACLs: skipLabdirAcl,
+		VarsFiles:      varsFiles,
 	}
 	mgmt.applyTo(&deployOptions)
 
@@ -1172,9 +1178,15 @@ func RenameTopologyFileHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
-func isTopologyFileName(name string) bool {
+// hasTopologyFileSuffix reports whether name is a containerlab topology file or
+// topology template by its suffix.
+func hasTopologyFileSuffix(name string) bool {
 	lower := strings.ToLower(name)
-	return !strings.HasPrefix(name, ".") && (strings.HasSuffix(lower, ".clab.yml") || strings.HasSuffix(lower, ".clab.yaml"))
+	return strings.HasSuffix(lower, ".clab.yml") || strings.HasSuffix(lower, ".clab.yaml") || strings.HasSuffix(lower, clab.TopologyTemplateSuffix)
+}
+
+func isTopologyFileName(name string) bool {
+	return !strings.HasPrefix(name, ".") && hasTopologyFileSuffix(name)
 }
 
 func skipTopologyDirectory(path, name string) bool {
@@ -1203,16 +1215,27 @@ func discoveredTopologyLabName(baseDir, relativePath string, siblingCount int) s
 	}
 
 	// Repository filenames need not match the lab's runtime name.
-	var topology struct {
-		Name string `yaml:"name"`
+	if labName := topologyFileLabName(filepath.Join(baseDir, relativePath)); labName != "" {
+		return labName
 	}
-	if content, err := os.ReadFile(filepath.Join(baseDir, relativePath)); err == nil {
-		if yaml.Unmarshal(content, &topology) == nil && isValidLabName(topology.Name) {
-			return topology.Name
-		}
-	}
-	// Keep incomplete/invalid YAML visible so it can be repaired in the editor.
+	// Keep incomplete/invalid YAML and templated names visible so they can be
+	// repaired in the editor.
 	return sanitizeImportedLabName(stem)
+}
+
+// topologyFileLabName returns the literal top-level name of a topology file or
+// template with Git name variables expanded like containerlab does, or "" when
+// the name is missing, templated or not a valid lab name.
+func topologyFileLabName(absPath string) string {
+	content, err := os.ReadFile(absPath)
+	if err != nil {
+		return ""
+	}
+	labName := clab.ExpandLabNameGitTokens(topologyContentLabName(content), filepath.Dir(absPath))
+	if !isValidLabName(labName) {
+		return ""
+	}
+	return labName
 }
 
 func listTopologyEntries(baseDir string) ([]models.TopologyEntry, error) {
@@ -1290,10 +1313,12 @@ func resolveCanonicalTopologyRootPath(cleanLabDir, labName, cleanPath string) st
 	}
 
 	canonicalNames := map[string]struct{}{
-		labName + ".clab.yml":                   {},
-		labName + ".clab.yaml":                  {},
-		labName + ".clab.yml.annotations.json":  {},
-		labName + ".clab.yaml.annotations.json": {},
+		labName + ".clab.yml":                                       {},
+		labName + ".clab.yaml":                                      {},
+		labName + clab.TopologyTemplateSuffix:                       {},
+		labName + ".clab.yml.annotations.json":                      {},
+		labName + ".clab.yaml.annotations.json":                     {},
+		labName + clab.TopologyTemplateSuffix + ".annotations.json": {},
 	}
 	if _, ok := canonicalNames[cleanPath]; !ok {
 		return ""

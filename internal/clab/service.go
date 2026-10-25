@@ -294,6 +294,9 @@ type DeployOptions struct {
 	MgmtNetwork    string
 	MgmtIPv4Subnet string
 	MgmtIPv6Subnet string
+	// VarsFiles are template variable files like --vars. When empty, containerlab
+	// discovers <topology>_vars.{yaml,yml,json} next to the topology.
+	VarsFiles []string
 }
 
 // ApplyOptions contains options for applying topology changes to a lab.
@@ -317,6 +320,9 @@ type DestroyOptions struct {
 	KeepMgmtNet     bool
 	NodeFilter      []string
 	MaxWorkers      uint
+	// VarsFiles are template variable files like --vars, used to render the
+	// topology the lab was deployed from.
+	VarsFiles []string
 }
 
 // ListOptions contains options for listing labs/containers.
@@ -564,7 +570,7 @@ func (s *Service) ResolveTopologySource(
 func deployClabOptions(topoPath, labName string, opts DeployOptions) []clabcore.ClabOption {
 	clabOpts := []clabcore.ClabOption{
 		clabcore.WithTimeout(defaultTimeout),
-		clabcore.WithTopoPath(topoPath, nil),
+		clabcore.WithTopoPath(topoPath, opts.VarsFiles),
 		clabcore.WithTopologyName(labName),
 		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{
 			Timeout: defaultTimeout,
@@ -925,9 +931,9 @@ func (s *Service) Destroy(ctx context.Context, opts DestroyOptions) error {
 	clabOpts = append(clabOpts, clabcore.WithTimeout(clabTimeout))
 
 	if opts.TopoPath != "" {
-		clabOpts = append(clabOpts, clabcore.WithTopoPath(opts.TopoPath, nil))
+		clabOpts = append(clabOpts, clabcore.WithTopoPath(opts.TopoPath, opts.VarsFiles))
 	} else if opts.LabName != "" {
-		clabOpts = append(clabOpts, clabcore.WithTopologyFromLab(opts.LabName, nil))
+		clabOpts = append(clabOpts, clabcore.WithTopologyFromLab(opts.LabName, opts.VarsFiles))
 	} else {
 		return fmt.Errorf("either lab name or topology path is required")
 	}
@@ -970,6 +976,10 @@ func (s *Service) Destroy(ctx context.Context, opts DestroyOptions) error {
 
 	if len(opts.NodeFilter) > 0 {
 		destroyOpts = append(destroyOpts, clabcore.WithDestroyNodeFilter(opts.NodeFilter))
+	}
+
+	if len(opts.VarsFiles) > 0 {
+		destroyOpts = append(destroyOpts, clabcore.WithDestroyVarsFiles(opts.VarsFiles))
 	}
 
 	log.Info("Destroying lab",

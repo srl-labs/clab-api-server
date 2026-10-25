@@ -456,8 +456,7 @@ func DeployLabArchiveHandler(c *gin.Context) {
 			return
 		}
 		for _, entry := range entries {
-			entryNameLower := strings.ToLower(entry.Name())
-			if !entry.IsDir() && (strings.HasSuffix(entryNameLower, ".clab.yml") || strings.HasSuffix(entryNameLower, ".clab.yaml")) {
+			if !entry.IsDir() && hasTopologyFileSuffix(entry.Name()) {
 				topoPathForClab = filepath.Join(targetDir, entry.Name())
 				break
 			}
@@ -465,7 +464,7 @@ func DeployLabArchiveHandler(c *gin.Context) {
 	}
 
 	if topoPathForClab == "" {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "No '*.clab.yml' or '*.clab.yaml' file found in the archive."})
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "No '*.clab.yml', '*.clab.yaml' or '*.clab.gotmpl' file found in the archive."})
 		_ = os.RemoveAll(targetDir)
 		return
 	}
@@ -524,12 +523,13 @@ func DeployLabArchiveHandler(c *gin.Context) {
 // @Param gracefulTimeout query string false "Override graceful shutdown timeout when graceful=true (for example 5s or 2m)"
 // @Param keepMgmtNet query boolean false "Keep the management network"
 // @Param nodeFilter query string false "Destroy only specific nodes"
+// @Param varsPath query string false "Template variables file (like --vars) relative to the lab's topology file directory"
 // @Param stream query boolean false "Stream lifecycle output as NDJSON events"
 // @Param includeLogs query boolean false "Include captured lifecycle logs in the JSON response"
 // @Success 200 {object} models.GenericSuccessResponse "Lab destroyed successfully"
-// @Failure 400 {object} models.ErrorResponse "Invalid lab name"
+// @Failure 400 {object} models.ErrorResponse "Invalid input"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
-// @Failure 404 {object} models.ErrorResponse "Lab not found"
+// @Failure 404 {object} models.ErrorResponse "Lab or vars file not found"
 // @Failure 500 {object} models.ErrorResponse "Internal server error"
 // @Router /api/v1/labs/{labName} [delete]
 func DestroyLabHandler(c *gin.Context) {
@@ -570,6 +570,10 @@ func DestroyLabHandler(c *gin.Context) {
 	if ownerCheckErr != nil {
 		return
 	}
+	varsFiles, ok := runningLabVarsFilesFromQuery(ctx, c, username, labName, originalTopoPath)
+	if !ok {
+		return
+	}
 
 	svc := GetClabService()
 	if svc == nil {
@@ -601,6 +605,7 @@ func DestroyLabHandler(c *gin.Context) {
 		Cleanup:         cleanup, // Keep containerlab cleanup behavior for all topology locations.
 		KeepMgmtNet:     keepMgmtNet,
 		NodeFilter:      nodeFilterSlice,
+		VarsFiles:       varsFiles,
 	}
 
 	log.Infof("DestroyLab user '%s': Destroying lab '%s' (cleanup=%t, purgeLabDir=%t)...", username, labName, cleanup, purgeLabDir)
@@ -722,15 +727,16 @@ func DestroyLabHandler(c *gin.Context) {
 // @Param exportTemplate query string false "Custom Go template file for topology data export"
 // @Param skipPostDeploy query boolean false "Skip post-deploy actions"
 // @Param skipLabdirAcl query boolean false "Skip setting extended ACLs on lab directory"
+// @Param varsPath query string false "Template variables file (like --vars) relative to the lab's topology file directory, used for the destroy and deploy phases"
 // @Param stream query boolean false "Stream lifecycle output as NDJSON events"
 // @Param includeLogs query boolean false "Include captured lifecycle logs in the JSON response"
 // @Param network query string false "Override the management network name (like --network); not allowed with multiple management networks"
 // @Param ipv4Subnet query string false "Override the management network IPv4 subnet (like --ipv4-subnet)"
 // @Param ipv6Subnet query string false "Override the management network IPv6 subnet (like --ipv6-subnet)"
 // @Success 200 {object} models.ClabInspectOutput "Redeployed lab details"
-// @Failure 400 {object} models.ErrorResponse "Invalid lab name"
+// @Failure 400 {object} models.ErrorResponse "Invalid input"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
-// @Failure 404 {object} models.ErrorResponse "Lab not found"
+// @Failure 404 {object} models.ErrorResponse "Lab or vars file not found"
 // @Failure 500 {object} models.ErrorResponse "Internal server error"
 // @Router /api/v1/labs/{labName} [put]
 func RedeployLabHandler(c *gin.Context) {
@@ -799,6 +805,10 @@ func RedeployLabHandler(c *gin.Context) {
 	if info, exists, err := getLabInfo(ctx, username, labName); err == nil && exists && info != nil && info.Owner != "" {
 		targetOwner = info.Owner
 	}
+	varsFiles, ok := varsFilesFromQuery(c, originalTopoPath, username, targetOwner)
+	if !ok {
+		return
+	}
 
 	destroyOpts := clab.DestroyOptions{
 		TopoPath:        originalTopoPath,
@@ -808,6 +818,7 @@ func RedeployLabHandler(c *gin.Context) {
 		Cleanup:         cleanup,
 		KeepMgmtNet:     keepMgmtNet,
 		MaxWorkers:      uint(maxWorkers),
+		VarsFiles:       varsFiles,
 	}
 
 	deployOpts := clab.DeployOptions{
@@ -819,6 +830,7 @@ func RedeployLabHandler(c *gin.Context) {
 		ExportTemplate: exportTemplate,
 		SkipPostDeploy: skipPostDeploy,
 		SkipLabDirACLs: skipLabdirAcl,
+		VarsFiles:      varsFiles,
 	}
 	mgmt.applyTo(&deployOpts)
 
