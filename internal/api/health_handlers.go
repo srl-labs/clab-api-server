@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"slices"
 	"time"
 
 	"github.com/charmbracelet/log"
@@ -23,6 +24,16 @@ var serverStartTime time.Time
 
 // API server version (set in main during initialization)
 var apiServerVersion = "development"
+
+// serverFeatures lists optional API features advertised on /health so clients
+// can hide functionality that older servers do not provide. Append new entries.
+var serverFeatures = []string{
+	"validate",
+	"graph-mermaid",
+	"graph-dot",
+	"sshx-readers",
+	"gotty-options",
+}
 
 // InitHealth sets the server start time for uptime tracking and stores the version
 func InitHealth(version string) {
@@ -47,6 +58,7 @@ func HealthCheckHandler(c *gin.Context) {
 		Uptime:    uptimeStr,
 		StartTime: serverStartTime,
 		Version:   apiServerVersion,
+		Features:  slices.Clone(serverFeatures),
 	}
 
 	c.JSON(http.StatusOK, response)

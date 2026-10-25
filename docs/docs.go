@@ -2253,7 +2253,10 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Executes GoTTY share action (attach, detach, reattach) for a lab.",
+                "description": "Executes GoTTY share action (attach, detach, reattach) for a lab.\n\n**Notes**\n- The optional body applies to attach/reattach only and is ignored for detach. A body ` + "`" + `port` + "`" + ` wins over the ` + "`" + `port` + "`" + ` query.\n- ` + "`" + `username` + "`" + ` and ` + "`" + `password` + "`" + ` must be given together (defaults admin/admin); ` + "`" + `shell` + "`" + ` defaults to bash.\n- username: ` + "`" + `^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$` + "`" + `; password: ` + "`" + `^[A-Za-z0-9._@%+=,!-]{1,64}$` + "`" + `, not starting with ` + "`" + `-` + "`" + `; shell: ` + "`" + `^/?[A-Za-z0-9_][A-Za-z0-9_./-]{0,63}$` + "`" + ` without ` + "`" + `..` + "`" + `.\n- The response reports the effective ` + "`" + `username` + "`" + ` and ` + "`" + `shell` + "`" + `; the password is never returned.",
+                "consumes": [
+                    "application/json"
+                ],
                 "produces": [
                     "application/json"
                 ],
@@ -2281,6 +2284,14 @@ const docTemplate = `{
                         "description": "GoTTY port (attach/reattach only)",
                         "name": "port",
                         "in": "query"
+                    },
+                    {
+                        "description": "GoTTY options (attach/reattach only)",
+                        "name": "gotty_request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/models.GoTTYShareRequest"
+                        }
                     }
                 ],
                 "responses": {
@@ -2288,6 +2299,73 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/models.ShareToolResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/labs/{labName}/graph/dot": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Generates a Graphviz dot graph from a lab topology like ` + "`" + `containerlab graph --dot` + "`" + ` and returns the file content.\n\n**Notes**\n- ` + "`" + `path` + "`" + ` defaults to the running lab topology path when the lab exists, otherwise ` + "`" + `\u003clabName\u003e.clab.yml` + "`" + `. The lab does not need to be deployed.\n- The file is written to ` + "`" + `\u003clabDir\u003e/graph/\u003ctopology name\u003e.dot` + "`" + `.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Labs - Graph"
+                ],
+                "summary": "Generate dot graph",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Lab Name",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Workspace-relative or legacy lab-relative topology path (defaults to running topology path or \u003clabName\u003e.clab.yml)",
+                        "name": "path",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.GraphExportResponse"
                         }
                     },
                     "400": {
@@ -2357,6 +2435,81 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/models.DrawioGenerateResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/labs/{labName}/graph/mermaid": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Generates a mermaid flowchart from a lab topology like ` + "`" + `containerlab graph --mermaid` + "`" + ` and returns the file content.\n\n**Notes**\n- ` + "`" + `path` + "`" + ` defaults to the running lab topology path when the lab exists, otherwise ` + "`" + `\u003clabName\u003e.clab.yml` + "`" + `. The lab does not need to be deployed.\n- ` + "`" + `direction` + "`" + ` is one of TD, TB, BT, RL, LR (case-insensitive, default TD).\n- The file is written to ` + "`" + `\u003clabDir\u003e/graph/\u003ctopology name\u003e.mermaid` + "`" + `.\nShared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Labs - Graph"
+                ],
+                "summary": "Generate mermaid graph",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Lab Name",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Workspace-relative or legacy lab-relative topology path (defaults to running topology path or \u003clabName\u003e.clab.yml)",
+                        "name": "path",
+                        "in": "query"
+                    },
+                    {
+                        "description": "Mermaid options",
+                        "name": "graph_request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/models.GraphExportRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.GraphExportResponse"
                         }
                     },
                     "400": {
@@ -3301,7 +3454,10 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Executes SSHX share action (attach, detach, reattach) for a lab.",
+                "description": "Executes SSHX share action (attach, detach, reattach) for a lab.\n\n**Notes**\n- The optional body applies to attach/reattach only and is ignored for detach.\n- ` + "`" + `enableReaders=true` + "`" + ` also creates a read-only access link, returned as ` + "`" + `readOnlyLink` + "`" + `.",
+                "consumes": [
+                    "application/json"
+                ],
                 "produces": [
                     "application/json"
                 ],
@@ -3323,6 +3479,14 @@ const docTemplate = `{
                         "name": "action",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "description": "SSHX options (attach/reattach only)",
+                        "name": "sshx_request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/models.SSHXShareRequest"
+                        }
                     }
                 ],
                 "responses": {
@@ -7235,9 +7399,78 @@ const docTemplate = `{
                 }
             }
         },
+        "models.GoTTYShareRequest": {
+            "type": "object",
+            "properties": {
+                "password": {
+                    "type": "string",
+                    "example": "secret"
+                },
+                "port": {
+                    "type": "integer",
+                    "example": 8080
+                },
+                "shell": {
+                    "type": "string",
+                    "example": "bash"
+                },
+                "username": {
+                    "type": "string",
+                    "example": "admin"
+                }
+            }
+        },
+        "models.GraphExportRequest": {
+            "type": "object",
+            "properties": {
+                "direction": {
+                    "description": "Direction of the mermaid flowchart: TD, TB, BT, RL or LR (default TD).",
+                    "type": "string",
+                    "example": "TD"
+                }
+            }
+        },
+        "models.GraphExportResponse": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string"
+                },
+                "direction": {
+                    "type": "string",
+                    "example": "TD"
+                },
+                "fileName": {
+                    "type": "string",
+                    "example": "lab01.clab.mermaid"
+                },
+                "format": {
+                    "type": "string",
+                    "enum": [
+                        "mermaid",
+                        "dot"
+                    ],
+                    "example": "mermaid"
+                },
+                "output": {
+                    "type": "string"
+                }
+            }
+        },
         "models.HealthResponse": {
             "type": "object",
             "properties": {
+                "features": {
+                    "description": "Features lists optional API features this server supports.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "example": [
+                        "validate",
+                        "graph-mermaid"
+                    ]
+                },
                 "startTime": {
                     "description": "When the server started",
                     "type": "string"
@@ -7919,6 +8152,16 @@ const docTemplate = `{
                 }
             }
         },
+        "models.SSHXShareRequest": {
+            "type": "object",
+            "properties": {
+                "enableReaders": {
+                    "description": "EnableReaders also creates a read-only access link.",
+                    "type": "boolean",
+                    "example": true
+                }
+            }
+        },
         "models.SaveConfigResponse": {
             "type": "object",
             "properties": {
@@ -7959,6 +8202,18 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "output": {
+                    "type": "string"
+                },
+                "readOnlyLink": {
+                    "description": "ReadOnlyLink is the SSHX read-only access link when readers are enabled.",
+                    "type": "string"
+                },
+                "shell": {
+                    "description": "Shell is the effective GoTTY shell (attach/reattach only).",
+                    "type": "string"
+                },
+                "username": {
+                    "description": "Username is the effective GoTTY login name (attach/reattach only).",
                     "type": "string"
                 }
             }

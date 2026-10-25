@@ -1458,6 +1458,147 @@ func (s *Service) GenerateDrawioFile(ctx context.Context, opts DrawioGenerateOpt
 	}, nil
 }
 
+// Text graph formats produced by GenerateGraphExport.
+const (
+	GraphFormatMermaid = "mermaid"
+	GraphFormatDot     = "dot"
+)
+
+// GraphExportOptions contains options for exporting a topology as a text graph.
+type GraphExportOptions struct {
+	TopoPath string
+	Username string
+	// Format is GraphFormatMermaid or GraphFormatDot.
+	Format string
+	// Direction is the mermaid flowchart direction (mermaid only).
+	Direction string
+}
+
+// GraphExportResult describes a generated text graph file.
+type GraphExportResult struct {
+	Path    string
+	Content string
+}
+
+// GenerateGraphExport writes a mermaid or dot graph of a topology the same way
+// `containerlab graph --mermaid|--dot` does and returns the generated file.
+// Topology errors are wrapped in ErrInvalidTopology.
+func (s *Service) GenerateGraphExport(ctx context.Context, opts GraphExportOptions) (*GraphExportResult, error) {
+	ctx, cancel := s.ensureTimeout(ctx)
+	defer cancel()
+
+	if strings.TrimSpace(opts.TopoPath) == "" {
+		return nil, fmt.Errorf("topology path is required")
+	}
+
+	var ext string
+	switch opts.Format {
+	case GraphFormatMermaid:
+		ext = ".mermaid"
+	case GraphFormatDot:
+		ext = ".dot"
+	default:
+		return nil, fmt.Errorf("unsupported graph format: %q", opts.Format)
+	}
+
+	workDir, err := s.prepareWorkDir(opts.Username)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare working directory: %w", err)
+	}
+
+	unlock := lockContainerlabOperation()
+	defer unlock()
+
+	restoreOwnerEnv := setProcessOwnerEnv(opts.Username)
+	defer restoreOwnerEnv()
+
+	originalDir, _ := os.Getwd()
+	if chErr := os.Chdir(workDir); chErr != nil {
+		return nil, fmt.Errorf("failed to change to work directory: %w", chErr)
+	}
+	defer func() {
+		if restoreErr := os.Chdir(originalDir); restoreErr != nil {
+			log.Warn("Failed to restore working directory", "error", restoreErr)
+		}
+	}()
+
+	clab, err := clabcore.NewContainerLab(
+		clabcore.WithTimeout(defaultTimeout),
+		clabcore.WithTopoPath(opts.TopoPath, nil),
+		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{
+			Timeout: defaultTimeout,
+		}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidTopology, err)
+	}
+
+	if err := clab.ResolveLinks(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidTopology, err)
+	}
+
+	// Containerlab creates the lab and graph directories as the server user;
+	// hand any directory it creates here over to the lab owner afterwards.
+	labDir := clab.TopoPaths.TopologyLabDir()
+	_, labDirErr := os.Stat(labDir)
+	labDirExisted := labDirErr == nil
+	defer chownGraphOutput(opts.Username, labDir, labDirExisted, clab.TopoPaths.GraphDir())
+
+	switch opts.Format {
+	case GraphFormatMermaid:
+		direction := opts.Direction
+		if direction == "" {
+			direction = "TD"
+		}
+		err = clab.GenerateMermaidGraph(direction)
+	default:
+		err = clab.GenerateDotGraph(ctx)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate %s graph: %w", opts.Format, err)
+	}
+
+	graphPath := clab.TopoPaths.GraphFilename(ext)
+	content, err := os.ReadFile(graphPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read generated %s graph: %w", opts.Format, err)
+	}
+
+	return &GraphExportResult{
+		Path:    graphPath,
+		Content: string(content),
+	}, nil
+}
+
+// chownGraphOutput transfers the graph directory, and the lab directory when
+// the export created it, to the lab owner.
+func chownGraphOutput(owner, labDir string, labDirExisted bool, graphDir string) {
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return
+	}
+	uid, gid, err := lookupUserIDs(owner)
+	if err != nil {
+		log.Warn("Failed to resolve graph output owner", "user", owner, "error", err)
+		return
+	}
+
+	target := graphDir
+	if !labDirExisted {
+		target = labDir
+	}
+	if _, statErr := os.Stat(target); statErr != nil {
+		return
+	}
+	if chownErr := chownTree(target, uid, gid); chownErr != nil {
+		log.Warn("Failed to set ownership on graph output",
+			"path", target,
+			"user", owner,
+			"error", chownErr,
+		)
+	}
+}
+
 // ListContainerInterfaces lists interfaces for a specific container.
 func (s *Service) ListContainerInterfaces(ctx context.Context, container *clabruntime.GenericContainer) (*clabtypes.ContainerInterfaces, error) {
 	ctx, cancel := s.ensureTimeout(ctx)
@@ -2785,6 +2926,10 @@ func (s *Service) GenerateTopology(ctx context.Context, opts GenerateTopologyOpt
 	clab.Reg = clabnodes.NewNodeRegistry()
 	clab.RegisterNodes()
 
+	if err := checkGenerateableKinds(clab.Reg, nodeDefs); err != nil {
+		return nil, err
+	}
+
 	// Set default prefixes
 	nodePrefix := opts.NodePrefix
 	if nodePrefix == "" {
@@ -2818,6 +2963,27 @@ func (s *Service) GenerateTopology(ctx context.Context, opts GenerateTopologyOpt
 	}
 
 	return b, nil
+}
+
+// GenerateKindError reports a tier kind that containerlab cannot generate.
+type GenerateKindError struct {
+	Kind string
+}
+
+func (e *GenerateKindError) Error() string {
+	return fmt.Sprintf("kind '%s' cannot be used to generate a topology", e.Kind)
+}
+
+// checkGenerateableKinds rejects kinds that are not registered or not
+// generateable; their interface naming is unknown.
+func checkGenerateableKinds(reg *clabnodes.NodeRegistry, nodes []nodesDef) error {
+	attributes := reg.GetGenerateNodeAttributes()
+	for _, node := range nodes {
+		if !attributes[node.kind].IsGenerateable() {
+			return &GenerateKindError{Kind: node.kind}
+		}
+	}
+	return nil
 }
 
 // nodesDef is used internally for topology generation.

@@ -855,53 +855,8 @@ func ValidateTopologyHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
 	defer cancel()
 
-	labInfo, exists, checkErr := getLabInfo(ctx, username, labName)
-	if checkErr != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Error checking lab '%s' status: %s", labName, checkErr.Error())})
-		return
-	}
-
-	targetOwner := username
-	if exists {
-		if labInfo == nil {
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Error checking lab '%s' status: missing lab information", labName)})
-			return
-		}
-		if !canAccessLab(username, labInfo) {
-			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("lab '%s' not found or not owned by user", labName)})
-			return
-		}
-		if strings.TrimSpace(labInfo.Owner) != "" {
-			targetOwner = labInfo.Owner
-		}
-	}
-
-	topologyPath := ""
-	requestedPath := strings.TrimSpace(c.Query("path"))
-	if requestedPath != "" {
-		resolvedPath, _, _, _, resolveErr := resolveTopologyFilePath(targetOwner, labName, requestedPath)
-		if resolveErr != nil {
-			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: resolveErr.Error()})
-			return
-		}
-		topologyPath = resolvedPath
-	} else if exists && strings.TrimSpace(labInfo.AbsLabPath) != "" {
-		topologyPath = filepath.Clean(labInfo.AbsLabPath)
-	} else {
-		labDir, _, _, dirErr := getLabDirectoryInfo(targetOwner, labName)
-		if dirErr != nil {
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: dirErr.Error()})
-			return
-		}
-		topologyPath = filepath.Join(labDir, labName+".clab.yml")
-	}
-
-	if _, statErr := os.Stat(topologyPath); statErr != nil {
-		if os.IsNotExist(statErr) {
-			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Topology file not found for lab '%s'.", labName)})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to stat topology file: %s", statErr.Error())})
+	topologyPath, targetOwner, ok := resolveLabTopologyFile(ctx, c, username, labName)
+	if !ok {
 		return
 	}
 
@@ -929,6 +884,64 @@ func ValidateTopologyHandler(c *gin.Context) {
 		Nodes:   result.Nodes,
 		Links:   result.Links,
 	})
+}
+
+// resolveLabTopologyFile resolves the on-disk topology of a lab for file based
+// operations such as validate and graph exports. It uses the `path` query when
+// given, otherwise the running lab topology, otherwise <labName>.clab.yml in the
+// owner's lab directory, and returns the lab owner that operations run as.
+// On failure it writes the error response and returns ok=false.
+func resolveLabTopologyFile(ctx context.Context, c *gin.Context, username, labName string) (topologyPath, targetOwner string, ok bool) {
+	labInfo, exists, checkErr := getLabInfo(ctx, username, labName)
+	if checkErr != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Error checking lab '%s' status: %s", labName, checkErr.Error())})
+		return "", "", false
+	}
+
+	targetOwner = username
+	if exists {
+		if labInfo == nil {
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Error checking lab '%s' status: missing lab information", labName)})
+			return "", "", false
+		}
+		if !canAccessLab(username, labInfo) {
+			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("lab '%s' not found or not owned by user", labName)})
+			return "", "", false
+		}
+		if strings.TrimSpace(labInfo.Owner) != "" {
+			targetOwner = labInfo.Owner
+		}
+	}
+
+	requestedPath := strings.TrimSpace(c.Query("path"))
+	if requestedPath != "" {
+		resolvedPath, _, _, _, resolveErr := resolveTopologyFilePath(targetOwner, labName, requestedPath)
+		if resolveErr != nil {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: resolveErr.Error()})
+			return "", "", false
+		}
+		topologyPath = resolvedPath
+	} else if exists && strings.TrimSpace(labInfo.AbsLabPath) != "" {
+		topologyPath = filepath.Clean(labInfo.AbsLabPath)
+	} else {
+		labDir, _, _, dirErr := getLabDirectoryInfo(targetOwner, labName)
+		if dirErr != nil {
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: dirErr.Error()})
+			return "", "", false
+		}
+		topologyPath = filepath.Join(labDir, labName+".clab.yml")
+	}
+
+	if _, statErr := os.Stat(topologyPath); statErr != nil {
+		if os.IsNotExist(statErr) {
+			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Topology file not found for lab '%s'.", labName)})
+			return "", "", false
+		}
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to stat topology file: %s", statErr.Error())})
+		return "", "", false
+	}
+
+	return topologyPath, targetOwner, true
 }
 
 // @Summary Read lab topology file

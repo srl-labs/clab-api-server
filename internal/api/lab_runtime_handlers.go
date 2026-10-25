@@ -2,13 +2,13 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -398,11 +398,17 @@ func GetNodeBrowserPortsHandler(c *gin.Context) {
 
 // @Summary SSHX share action
 // @Description Executes SSHX share action (attach, detach, reattach) for a lab.
+// @Description
+// @Description **Notes**
+// @Description - The optional body applies to attach/reattach only and is ignored for detach.
+// @Description - `enableReaders=true` also creates a read-only access link, returned as `readOnlyLink`.
 // @Tags Labs - Sharing
 // @Security BearerAuth
+// @Accept json
 // @Produce json
 // @Param labName path string true "Lab Name"
 // @Param action path string true "Action (attach|detach|reattach)"
+// @Param sshx_request body models.SSHXShareRequest false "SSHX options (attach/reattach only)"
 // @Success 200 {object} models.ShareToolResponse
 // @Failure 400 {object} models.ErrorResponse
 // @Failure 401 {object} models.ErrorResponse
@@ -415,12 +421,20 @@ func LabSSHXShareHandler(c *gin.Context) {
 
 // @Summary GoTTY share action
 // @Description Executes GoTTY share action (attach, detach, reattach) for a lab.
+// @Description
+// @Description **Notes**
+// @Description - The optional body applies to attach/reattach only and is ignored for detach. A body `port` wins over the `port` query.
+// @Description - `username` and `password` must be given together (defaults admin/admin); `shell` defaults to bash.
+// @Description - username: `^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$`; password: `^[A-Za-z0-9._@%+=,!-]{1,64}$`, not starting with `-`; shell: `^/?[A-Za-z0-9_][A-Za-z0-9_./-]{0,63}$` without `..`.
+// @Description - The response reports the effective `username` and `shell`; the password is never returned.
 // @Tags Labs - Sharing
 // @Security BearerAuth
+// @Accept json
 // @Produce json
 // @Param labName path string true "Lab Name"
 // @Param action path string true "Action (attach|detach|reattach)"
 // @Param port query int false "GoTTY port (attach/reattach only)"
+// @Param gotty_request body models.GoTTYShareRequest false "GoTTY options (attach/reattach only)"
 // @Success 200 {object} models.ShareToolResponse
 // @Failure 400 {object} models.ErrorResponse
 // @Failure 401 {object} models.ErrorResponse
@@ -445,6 +459,42 @@ func handleLabShareAction(c *gin.Context, kind string) {
 		return
 	}
 
+	args := []string{"tools", kind, action, "-l", labName}
+	attaching := action == "attach" || action == "reattach"
+	enableReaders := false
+	var gottyOpts gottyShareOptions
+	if attaching {
+		switch kind {
+		case "sshx":
+			var req models.SSHXShareRequest
+			if err := bindOptionalJSON(c, &req); err != nil {
+				c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid request body: " + err.Error()})
+				return
+			}
+			enableReaders = req.EnableReaders
+			if enableReaders {
+				args = append(args, "--enable-readers")
+			}
+		case "gotty":
+			var req models.GoTTYShareRequest
+			if err := bindOptionalJSON(c, &req); err != nil {
+				c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid request body: " + redactSecret(err.Error(), req.Password)})
+				return
+			}
+			opts, err := resolveGoTTYShareOptions(req, c.Query("port"))
+			if errors.Is(err, errInvalidGottyPort) {
+				c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid gotty port value."})
+				return
+			}
+			if err != nil {
+				c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: err.Error()})
+				return
+			}
+			gottyOpts = opts
+			args = append(args, gottyOpts.args()...)
+		}
+	}
+
 	if _, err := verifyLabOwnership(c, username, labName); err != nil {
 		return
 	}
@@ -455,26 +505,14 @@ func handleLabShareAction(c *gin.Context, kind string) {
 		return
 	}
 
-	args := []string{"tools", kind, action, "-l", labName}
-	if kind == "gotty" && (action == "attach" || action == "reattach") {
-		port := defaultGottyPort
-		if rawPort := strings.TrimSpace(c.Query("port")); rawPort != "" {
-			parsed, err := strconv.Atoi(rawPort)
-			if err != nil || parsed <= 0 || parsed > 65535 {
-				c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid gotty port value."})
-				return
-			}
-			port = parsed
-		}
-		args = append(args, "--port", strconv.Itoa(port))
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
+	// containerlab echoes the GoTTY password in its output and the command
+	// error repeats the arguments, so neither may be returned unredacted.
 	output, err := svc.RunContainerlabTool(ctx, clab.ContainerlabToolRunOptions{Args: args})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: redactSecret(err.Error(), gottyOpts.Password)})
 		return
 	}
 
@@ -486,11 +524,19 @@ func handleLabShareAction(c *gin.Context, kind string) {
 	}
 
 	message := fmt.Sprintf("%s %s completed for lab '%s'.", strings.ToUpper(kind), action, labName)
-	c.JSON(http.StatusOK, models.ShareToolResponse{
+	response := models.ShareToolResponse{
 		Message: message,
 		Link:    link,
-		Output:  output,
-	})
+		Output:  redactSecret(output, gottyOpts.Password),
+	}
+	if enableReaders {
+		response.ReadOnlyLink = sshxReadOnlyLink(link)
+	}
+	if kind == "gotty" && attaching {
+		response.Username = gottyOpts.effectiveUsername()
+		response.Shell = gottyOpts.effectiveShell()
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // @Summary Run fcli command
@@ -652,6 +698,121 @@ func GenerateLabDrawioHandler(c *gin.Context) {
 		Layout:   effectiveLayout,
 		Message:  message,
 		Output:   drawioResult.Output,
+	})
+}
+
+// @Summary Generate mermaid graph
+// @Description Generates a mermaid flowchart from a lab topology like `containerlab graph --mermaid` and returns the file content.
+// @Description
+// @Description **Notes**
+// @Description - `path` defaults to the running lab topology path when the lab exists, otherwise `<labName>.clab.yml`. The lab does not need to be deployed.
+// @Description - `direction` is one of TD, TB, BT, RL, LR (case-insensitive, default TD).
+// @Description - The file is written to `<labDir>/graph/<topology name>.mermaid`.
+// @Description Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
+// @Tags Labs - Graph
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param labName path string true "Lab Name"
+// @Param path query string false "Workspace-relative or legacy lab-relative topology path (defaults to running topology path or <labName>.clab.yml)"
+// @Param graph_request body models.GraphExportRequest false "Mermaid options"
+// @Success 200 {object} models.GraphExportResponse
+// @Failure 400 {object} models.ErrorResponse
+// @Failure 401 {object} models.ErrorResponse
+// @Failure 404 {object} models.ErrorResponse
+// @Failure 500 {object} models.ErrorResponse
+// @Router /api/v1/labs/{labName}/graph/mermaid [post]
+func GenerateLabMermaidHandler(c *gin.Context) {
+	handleLabGraphExport(c, clab.GraphFormatMermaid)
+}
+
+// @Summary Generate dot graph
+// @Description Generates a Graphviz dot graph from a lab topology like `containerlab graph --dot` and returns the file content.
+// @Description
+// @Description **Notes**
+// @Description - `path` defaults to the running lab topology path when the lab exists, otherwise `<labName>.clab.yml`. The lab does not need to be deployed.
+// @Description - The file is written to `<labDir>/graph/<topology name>.dot`.
+// @Description Shared workspace paths start with @shared/ when CLAB_SHARED_LABS_ROOT is configured; all authenticated API users can access them.
+// @Tags Labs - Graph
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param labName path string true "Lab Name"
+// @Param path query string false "Workspace-relative or legacy lab-relative topology path (defaults to running topology path or <labName>.clab.yml)"
+// @Success 200 {object} models.GraphExportResponse
+// @Failure 400 {object} models.ErrorResponse
+// @Failure 401 {object} models.ErrorResponse
+// @Failure 404 {object} models.ErrorResponse
+// @Failure 500 {object} models.ErrorResponse
+// @Router /api/v1/labs/{labName}/graph/dot [post]
+func GenerateLabDotHandler(c *gin.Context) {
+	handleLabGraphExport(c, clab.GraphFormatDot)
+}
+
+func handleLabGraphExport(c *gin.Context, format string) {
+	username := c.GetString("username")
+	labName := strings.TrimSpace(c.Param("labName"))
+
+	if !isValidLabName(labName) {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid lab name format."})
+		return
+	}
+
+	direction := ""
+	if format == clab.GraphFormatMermaid {
+		var req models.GraphExportRequest
+		if err := bindOptionalJSON(c, &req); err != nil {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid request body: " + err.Error()})
+			return
+		}
+		normalized, err := normalizeMermaidDirection(req.Direction)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: err.Error()})
+			return
+		}
+		direction = normalized
+	}
+
+	svc := GetClabService()
+	if svc == nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Containerlab service not initialized"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
+	defer cancel()
+
+	topoPath, owner, ok := resolveLabTopologyFile(ctx, c, username, labName)
+	if !ok {
+		return
+	}
+
+	var result *clab.GraphExportResult
+	logs, generateErr := captureLifecycleLogs(func() error {
+		var err error
+		result, err = svc.GenerateGraphExport(ctx, clab.GraphExportOptions{
+			TopoPath:  topoPath,
+			Username:  owner,
+			Format:    format,
+			Direction: direction,
+		})
+		return err
+	})
+	if generateErr != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(generateErr, clab.ErrInvalidTopology) {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, models.ErrorResponse{Error: generateErr.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.GraphExportResponse{
+		FileName:  filepath.Base(result.Path),
+		Content:   result.Content,
+		Format:    format,
+		Direction: direction,
+		Output:    strings.Join(logs, "\n"),
 	})
 }
 
