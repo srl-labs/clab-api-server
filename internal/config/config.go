@@ -41,6 +41,7 @@ type Config struct {
 	SSHBasePort                  int           `mapstructure:"SSH_BASE_PORT"`   // Base port for SSH proxy allocation
 	SSHMaxPort                   int           `mapstructure:"SSH_MAX_PORT"`    // Maximum port for SSH proxy allocation
 	TerminalMaxSessionsPerUser   int           `mapstructure:"TERMINAL_MAX_SESSIONS_PER_USER"`
+	TerminalIdleTimeout          time.Duration `mapstructure:"TERMINAL_IDLE_TIMEOUT"`
 }
 
 var AppConfig Config
@@ -80,6 +81,7 @@ func LoadConfig(envFilePath string) error {
 	viper.SetDefault("SSH_BASE_PORT", 2223) // Default base port for SSH proxy
 	viper.SetDefault("SSH_MAX_PORT", 2322)  // Default max port for SSH proxy (allows 100 sessions)
 	viper.SetDefault("TERMINAL_MAX_SESSIONS_PER_USER", 128)
+	viper.SetDefault("TERMINAL_IDLE_TIMEOUT", "30m")
 
 	err := viper.ReadInConfig()
 

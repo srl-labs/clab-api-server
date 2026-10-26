@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,7 +25,8 @@ import (
 // @Description Returns logs for a lab node.
 // @Description
 // @Description **Notes**
-// @Description - When `follow=true`, the response streams as NDJSON (one JSON object per line) until the client disconnects or the 30-minute timeout.
+// @Description - When `follow=true`, the response streams as NDJSON (one JSON object per line) until the client disconnects or after 12 hours.
+// @Description - Streamed lines carry `stream` (`stdout` or `stderr`). A blank line is sent every 25 seconds while the node is quiet, so clients can tell a quiet node from a lost connection.
 // @Tags Logs
 // @Security BearerAuth
 // @Produce json,application/x-ndjson
@@ -132,144 +134,157 @@ func GetNodeLogsHandler(c *gin.Context) {
 
 	// Determine if we should stream logs or fetch once
 	if follow {
-		// --- Stream Logs ---
-		c.Writer.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
-		c.Writer.Header().Set("X-Content-Type-Options", "nosniff")
+		streamNodeLogs(c, username, containerName, append(args, "--follow"))
+		return
+	}
 
-		// Set up a context with timeout for streaming logs (30 minutes)
-		// This context will also be canceled when the client disconnects
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Minute)
-		defer cancel()
+	// --- Fetch Logs Once ---
+	// The runtime CLI writes the container's stderr to its own stderr, so both
+	// go into the logs, in the order the CLI writes them. exec.Cmd writes to
+	// one shared writer from one goroutine at a time.
+	var output strings.Builder
+	logsCmd := exec.CommandContext(c.Request.Context(), args[0], args[1:]...)
+	logsCmd.Stdout = &output
+	logsCmd.Stderr = &output
 
-		// Setup a notification channel to detect client disconnection
-		notifyChan := c.Writer.CloseNotify()
-		go func() {
-			<-notifyChan
-			log.Infof("Client disconnected from streaming logs for user '%s', container '%s'", username, containerName)
-			cancel() // Cancel the context to stop the command
-		}()
-
-		// Add --follow flag for streaming
-		streamCmd := append(args, "--follow")
-
-		// Execute command directly for streaming
-		// We can't use RunClabCommand here because we need to stream the output
-		cmd := exec.CommandContext(ctx, streamCmd[0], streamCmd[1:]...)
-
-		// Get pipes for stdout and stderr
-		stdout, err := cmd.StdoutPipe()
-		if err != nil {
-			log.Errorf("GetNodeLogs failed for user '%s': Could not create stdout pipe: %v", username, err)
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Could not create stdout pipe: %s", err.Error())})
-			return
+	if err := logsCmd.Run(); err != nil {
+		log.Errorf("GetNodeLogs failed for user '%s', container '%s': %v", username, containerName, err)
+		errMsg := fmt.Sprintf("Failed to get logs for container '%s': %s", containerName, err.Error())
+		if detail := strings.TrimSpace(output.String()); detail != "" {
+			errMsg += "\noutput: " + detail
 		}
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: errMsg})
+		return
+	}
 
-		stderr, err := cmd.StderrPipe()
-		if err != nil {
-			log.Errorf("GetNodeLogs failed for user '%s': Could not create stderr pipe: %v", username, err)
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Could not create stderr pipe: %s", err.Error())})
-			return
-		}
+	log.Infof("GetNodeLogs success for user '%s', container '%s'", username, containerName)
 
-		// Start the command
-		if err := cmd.Start(); err != nil {
-			log.Errorf("GetNodeLogs failed for user '%s': Could not start command: %v", username, err)
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Could not start command: %s", err.Error())})
-			return
-		}
+	// Return logs as JSON
+	response := models.LogsResponse{
+		ContainerName: containerName,
+		Logs:          output.String(),
+	}
+	c.JSON(http.StatusOK, response)
+}
 
-		// Use WaitGroup to ensure we capture all stderr output
-		var wg sync.WaitGroup
-		wg.Add(1)
+const (
+	logsFollowTimeout      = 12 * time.Hour
+	logsScannerMaxLineSize = 1024 * 1024
+)
 
-		// Capture stderr in a separate goroutine
-		var stderrOutput strings.Builder
-		go func() {
-			defer wg.Done()
-			scanner := bufio.NewScanner(stderr)
-			for scanner.Scan() {
-				stderrOutput.WriteString(scanner.Text() + "\n")
+type streamedLogLine struct {
+	stream string
+	line   string
+}
+
+// streamNodeLogs runs `<runtime> logs --follow` and streams stdout and stderr as NDJSON
+// lines, with heartbeats while the container is quiet.
+func streamNodeLogs(c *gin.Context, username, containerName string, args []string) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), logsFollowTimeout)
+	defer cancel()
+
+	// We can't use RunClabCommand here because we need to stream the output
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		log.Errorf("GetNodeLogs failed for user '%s': Could not create stdout pipe: %v", username, err)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Could not create stdout pipe: %s", err.Error())})
+		return
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		log.Errorf("GetNodeLogs failed for user '%s': Could not create stderr pipe: %v", username, err)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Could not create stderr pipe: %s", err.Error())})
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		log.Errorf("GetNodeLogs failed for user '%s': Could not start command: %v", username, err)
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Could not start command: %s", err.Error())})
+		return
+	}
+
+	// The runtime CLI writes the container's stderr to its own stderr, so both
+	// pipes carry log lines.
+	lines := make(chan streamedLogLine)
+	var readers sync.WaitGroup
+	scan := func(stream string, pipe io.Reader) {
+		defer readers.Done()
+		scanner := bufio.NewScanner(pipe)
+		scanner.Buffer(make([]byte, 0, 64*1024), logsScannerMaxLineSize)
+		for scanner.Scan() {
+			select {
+			case lines <- streamedLogLine{stream: stream, line: scanner.Text()}:
+			case <-ctx.Done():
+				return
 			}
-		}()
+		}
+		if err := scanner.Err(); err != nil && ctx.Err() == nil {
+			log.Warnf("GetNodeLogs %s scanner error for user '%s', container '%s': %v",
+				stream, username, containerName, err)
+		}
+	}
+	readers.Add(2)
+	go scan("stdout", stdout)
+	go scan("stderr", stderr)
+	go func() {
+		readers.Wait()
+		close(lines)
+	}()
 
-		// Stream the logs line by line as NDJSON
-		scanner := bufio.NewScanner(stdout)
-		c.Stream(func(w io.Writer) bool {
-			if !scanner.Scan() {
-				return false
+	c.Writer.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+	c.Writer.Header().Set("X-Content-Type-Options", "nosniff")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Status(http.StatusOK)
+	c.Writer.WriteHeaderNow()
+
+	writer := bufio.NewWriter(c.Writer)
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		cancel()
+		_ = cmd.Wait()
+		return
+	}
+	flusher.Flush()
+
+	heartbeat := time.NewTicker(ndjsonStreamHeartbeatInterval)
+	defer heartbeat.Stop()
+
+stream:
+	for {
+		select {
+		case <-ctx.Done():
+			break stream
+		case <-heartbeat.C:
+			if !writeNDJSONHeartbeat(writer, flusher) {
+				break stream
 			}
-			line := scanner.Text()
+		case entry, open := <-lines:
+			if !open {
+				break stream
+			}
 			payload, err := json.Marshal(models.LogLine{
 				ContainerName: containerName,
-				Line:          line,
+				Line:          entry.line,
+				Stream:        entry.stream,
 			})
 			if err != nil {
 				log.Errorf("GetNodeLogs failed to marshal log line for user '%s': %v", username, err)
-				return false
+				continue
 			}
-			_, _ = w.Write(append(payload, '\n'))
-			return true
-		})
-
-		// Wait for stderr goroutine to finish
-		wg.Wait()
-
-		// Check for command errors, but handle client disconnection gracefully
-		if err := cmd.Wait(); err != nil {
-			// Check if the error is due to context cancellation (client disconnect or timeout)
-			if ctx.Err() != nil {
-				if ctx.Err() == context.DeadlineExceeded {
-					log.Infof("Streaming logs timed out for user '%s', container '%s' after 30 minutes", username, containerName)
-				} else {
-					// This is likely due to client disconnection which we already logged
-				}
-			} else {
-				// Only log as error if it's not due to context cancellation
-				log.Warnf("GetNodeLogs command ended for user '%s', container '%s': %v. Stderr: %s",
-					username, containerName, err, stderrOutput.String())
+			if !writeNDJSONLine(writer, flusher, string(payload)) {
+				break stream
 			}
-			// Don't send an error response here since we've already started streaming
 		}
+	}
 
-		// Check for scanner errors
-		if err := scanner.Err(); err != nil && ctx.Err() == nil {
-			// Only log as error if it's not due to context cancellation
-			log.Errorf("GetNodeLogs scanner error for user '%s', container '%s': %v",
-				username, containerName, err)
-		}
-
-		return
-	} else {
-		// --- Fetch Logs Once ---
-		// Execute the first element as the command and pass the rest as arguments
-		cmd := args[0]
-		cmdArgs := args[1:]
-
-		// We can use exec.Command directly for better control over the execution
-		stdout, stderr, err := runCommand(c.Request.Context(), cmd, cmdArgs...)
-
-		if stderr != "" {
-			log.Warnf("GetNodeLogs stderr for user '%s', container '%s': %s", username, containerName, stderr)
-		}
-
-		if err != nil {
-			log.Errorf("GetNodeLogs failed for user '%s', container '%s': %v", username, containerName, err)
-			errMsg := fmt.Sprintf("Failed to get logs for container '%s': %s", containerName, err.Error())
-			if stderr != "" {
-				errMsg += "\nstderr: " + stderr
-			}
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: errMsg})
-			return
-		}
-
-		log.Infof("GetNodeLogs success for user '%s', container '%s'", username, containerName)
-
-		// Return logs as JSON
-		response := models.LogsResponse{
-			ContainerName: containerName,
-			Logs:          stdout,
-		}
-		c.JSON(http.StatusOK, response)
+	// Stop the command when the client left; drain so the readers finish.
+	cancel()
+	for range lines {
+	}
+	if err := cmd.Wait(); err != nil && ctx.Err() == nil {
+		log.Warnf("GetNodeLogs command ended for user '%s', container '%s': %v", username, containerName, err)
+	} else if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		log.Infof("Streaming logs ended for user '%s', container '%s' after %s", username, containerName, logsFollowTimeout)
 	}
 }
 

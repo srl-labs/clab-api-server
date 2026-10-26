@@ -39,6 +39,9 @@ var serverFeatures = []string{
 	"inspect-details",
 	"snapshot-save",
 	"deploy-restore",
+	"node-stats",
+	"log-stream",
+	"terminal-resume",
 }
 
 // InitHealth sets the server start time for uptime tracking and stores the version

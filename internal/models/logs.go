@@ -16,4 +16,6 @@ type LogsResponse struct {
 type LogLine struct {
 	ContainerName string `json:"containerName"`
 	Line          string `json:"line"`
+	// Stream is the container output the line came from: stdout or stderr.
+	Stream string `json:"stream,omitempty"`
 }
