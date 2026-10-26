@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -24,19 +25,34 @@ import (
 )
 
 const (
-	DefaultCleanupTick        = time.Minute
-	DefaultSessionTTL         = time.Hour
-	DefaultIdleTimeout        = 15 * time.Minute
+	DefaultCleanupTick = time.Minute
+	DefaultSessionTTL  = 12 * time.Hour
+	// DefaultIdleTimeout ends a resumable session this long after its last client left.
+	DefaultIdleTimeout        = 30 * time.Minute
 	DefaultMaxSessionsPerUser = 128
 	DefaultTerminalCols       = 120
 	DefaultTerminalRows       = 36
 	DefaultTelnetPort         = 5000
+	// DefaultScrollbackBytes is the recent output a session replays to a client that attaches again.
+	DefaultScrollbackBytes = 256 * 1024
+
+	// attachmentBufferChunks is the output a client may fall behind by before it is detached.
+	attachmentBufferChunks = 512
+	// exitDrainTimeout is how long the final output may take to arrive after the process exited.
+	exitDrainTimeout = time.Second
+)
+
+// Why an attachment ended.
+const (
+	DetachReasonClientLeft = "client left"
+	DetachReasonTakenOver  = "attached elsewhere"
+	DetachReasonSlowClient = "client too slow"
+	DetachReasonExited     = "session ended"
 )
 
 var (
 	ErrSessionNotFound   = errors.New("terminal session not found")
 	ErrSessionForbidden  = errors.New("terminal session not owned by user")
-	ErrSessionAttached   = errors.New("terminal session already has an active client")
 	ErrTooManySessions   = errors.New("too many terminal sessions for user")
 	ErrSessionExited     = errors.New("terminal session has already exited")
 	validSSHUsernameExpr = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_-]{0,31}$`)
@@ -83,6 +99,10 @@ type CreateSessionOptions struct {
 	Rows          int
 	SSHUsername   string
 	TelnetPort    int
+	// Resumable keeps the session running after its client left. Other
+	// sessions end with their client, which is what clients that never attach
+	// again expect.
+	Resumable bool
 }
 
 type Manager struct {
@@ -97,6 +117,9 @@ type Manager struct {
 	stoppedCh   chan struct{}
 }
 
+// Session is a terminal process on the server. A resumable session keeps
+// running while no client is attached, and remembers its recent output for the
+// next client.
 type Session struct {
 	manager *Manager
 
@@ -106,17 +129,68 @@ type Session struct {
 	labName      string
 	nodeName     string
 	protocol     models.TerminalProtocol
+	resumable    bool
 	createdAt    time.Time
 	expiresAt    time.Time
 	lastActivity time.Time
-	state        string
-	lastError    string
-	exitCode     *int
-	attached     bool
+	// detachedAt is when the last client left, or the creation time.
+	detachedAt time.Time
+	state      string
+	lastError  string
+	exitCode   *int
+	attachment *Attachment
+	scrollback scrollback
 
-	cmd     *exec.Cmd
-	ptyFile *os.File
-	doneCh  chan struct{}
+	cmd      *exec.Cmd
+	ptyFile  *os.File
+	pumpDone chan struct{}
+	doneCh   chan struct{}
+}
+
+// Attachment is one client's connection to a session. Its output channel
+// closes when the attachment ends; Reason says why.
+type Attachment struct {
+	// Replay is the session's recent output, to show before Output.
+	Replay []byte
+	output chan []byte
+	reason string
+	ended  bool
+}
+
+// Output delivers the session's output after Replay.
+func (a *Attachment) Output() <-chan []byte {
+	return a.output
+}
+
+// Reason says why the attachment ended. Read it once Output is closed.
+func (a *Attachment) Reason() string {
+	return a.reason
+}
+
+// scrollback keeps the most recent terminal output, up to limit bytes.
+type scrollback struct {
+	data  []byte
+	limit int
+}
+
+func (b *scrollback) write(p []byte) {
+	b.data = append(b.data, p...)
+	// Compact only at twice the limit, so a write costs O(1) on average.
+	if len(b.data) > 2*b.limit {
+		b.data = append([]byte(nil), b.data[len(b.data)-b.limit:]...)
+	}
+}
+
+// bytes returns the kept output, from the start of a line where the oldest output was cut.
+func (b *scrollback) bytes() []byte {
+	data := b.data
+	if over := len(data) - b.limit; over > 0 {
+		data = data[over:]
+		if i := bytes.IndexByte(data[:min(len(data), 4096)], '\n'); i >= 0 {
+			data = data[i+1:]
+		}
+	}
+	return append([]byte(nil), data...)
 }
 
 func NewManager(cleanupTick, sessionTTL, idleTimeout time.Duration, maxPerUser int) *Manager {
@@ -186,12 +260,17 @@ func (m *Manager) CreateSession(opts CreateSessionOptions) (*models.TerminalSess
 		return nil, fmt.Errorf("container management IP is required for SSH")
 	}
 
-	cols, rows := sanitizeTerminalSize(opts.Cols, opts.Rows)
 	command, err := resolveLaunchCommand(protocol, opts)
 	if err != nil {
 		return nil, err
 	}
+	opts.Protocol = protocol
+	return m.startSession(opts, command)
+}
 
+// startSession runs command in a new terminal for the validated options.
+func (m *Manager) startSession(opts CreateSessionOptions, command []string) (*models.TerminalSessionInfo, error) {
+	cols, rows := sanitizeTerminalSize(opts.Cols, opts.Rows)
 	username := strings.TrimSpace(opts.Username)
 	if err := m.reserveUserSessionCapacity(username); err != nil {
 		return nil, err
@@ -204,11 +283,15 @@ func (m *Manager) CreateSession(opts CreateSessionOptions) (*models.TerminalSess
 		username:     username,
 		labName:      strings.TrimSpace(opts.LabName),
 		nodeName:     strings.TrimSpace(opts.NodeName),
-		protocol:     protocol,
+		protocol:     opts.Protocol,
+		resumable:    opts.Resumable,
 		createdAt:    now,
 		expiresAt:    now.Add(m.sessionTTL),
 		lastActivity: now,
+		detachedAt:   now,
 		state:        "ready",
+		scrollback:   scrollback{limit: DefaultScrollbackBytes},
+		pumpDone:     make(chan struct{}),
 		doneCh:       make(chan struct{}),
 	}
 
@@ -233,15 +316,17 @@ func (m *Manager) CreateSession(opts CreateSessionOptions) (*models.TerminalSess
 	m.sessions[session.id] = session
 	m.mu.Unlock()
 
+	go session.pump(ptmx)
 	go session.waitForProcess()
 
 	log.Infof(
-		"terminal session created: user=%s lab=%s node=%s protocol=%s session=%s",
+		"terminal session created: user=%s lab=%s node=%s protocol=%s session=%s resumable=%t",
 		session.username,
 		session.labName,
 		session.nodeName,
 		session.protocol,
 		session.id,
+		session.resumable,
 	)
 
 	info := session.Snapshot()
@@ -290,15 +375,18 @@ func (m *Manager) TerminateSession(sessionID, username string, allowAll bool) er
 	return nil
 }
 
-func (m *Manager) BeginStream(sessionID, username string, allowAll bool) (*Session, error) {
+// Attach connects a client to a session. A client that is still attached is
+// detached, so a reloaded page or a reconnecting client takes the session over.
+func (m *Manager) Attach(sessionID, username string, allowAll bool) (*Session, *Attachment, error) {
 	session, err := m.lookupSession(sessionID, username, allowAll)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if err := session.beginStream(); err != nil {
-		return nil, err
+	attachment, err := session.attach()
+	if err != nil {
+		return nil, nil, err
 	}
-	return session, nil
+	return session, attachment, nil
 }
 
 func (m *Manager) lookupSession(sessionID, username string, allowAll bool) (*Session, error) {
@@ -362,16 +450,17 @@ func (m *Manager) cleanupExpiredSessions() {
 	for _, session := range sessions {
 		session.mu.RLock()
 		state := session.state
-		attached := session.attached
+		attached := session.attachment != nil
 		expiresAt := session.expiresAt
 		lastActivity := session.lastActivity
+		detachedAt := session.detachedAt
 		session.mu.RUnlock()
 
 		if now.After(expiresAt) {
 			session.Terminate("session TTL expired")
 			continue
 		}
-		if !attached && state == "ready" && now.Sub(lastActivity) > m.idleTimeout {
+		if !attached && state == "ready" && now.Sub(detachedAt) > m.idleTimeout {
 			session.Terminate("session idle timeout")
 			continue
 		}
@@ -385,41 +474,82 @@ func (m *Manager) cleanupExpiredSessions() {
 	}
 }
 
-func (s *Session) beginStream() error {
+func (s *Session) attach() (*Attachment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.state == "closed" {
-		return ErrSessionExited
+	if s.state != "ready" {
+		return nil, ErrSessionExited
 	}
-	if s.attached {
-		return ErrSessionAttached
-	}
+	s.endAttachmentLocked(s.attachment, DetachReasonTakenOver)
 
-	s.attached = true
+	attachment := &Attachment{
+		Replay: s.scrollback.bytes(),
+		output: make(chan []byte, attachmentBufferChunks),
+	}
+	s.attachment = attachment
 	s.lastActivity = time.Now().UTC()
-	return nil
+	return attachment, nil
 }
 
-func (s *Session) EndStream() {
+// Detach ends an attachment. A resumable session keeps running for the next
+// client; any other session ends with its client.
+func (s *Session) Detach(attachment *Attachment) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.attached = false
-	s.lastActivity = time.Now().UTC()
+	orphaned := s.endAttachmentLocked(attachment, DetachReasonClientLeft)
+	s.mu.Unlock()
+	if orphaned {
+		s.Terminate("client disconnected")
+	}
 }
 
-func (s *Session) Read(p []byte) (int, error) {
-	s.mu.RLock()
-	file := s.ptyFile
-	s.mu.RUnlock()
-	if file == nil {
-		return 0, io.EOF
+// endAttachmentLocked reports whether the session lost its client and must
+// end because it is not resumable.
+func (s *Session) endAttachmentLocked(attachment *Attachment, reason string) bool {
+	if attachment == nil || attachment.ended {
+		return false
 	}
-	n, err := file.Read(p)
-	if n > 0 {
-		s.markActivity()
+	attachment.ended = true
+	attachment.reason = reason
+	close(attachment.output)
+	if s.attachment != attachment {
+		return false
 	}
-	return n, err
+	s.attachment = nil
+	s.detachedAt = time.Now().UTC()
+	return !s.resumable && (reason == DetachReasonClientLeft || reason == DetachReasonSlowClient)
+}
+
+// pump reads the terminal for the whole session, also while no client is
+// attached, so the process never blocks on a full terminal.
+func (s *Session) pump(file *os.File) {
+	defer close(s.pumpDone)
+	buffer := make([]byte, 32*1024)
+	for {
+		n, err := file.Read(buffer)
+		if n > 0 {
+			chunk := append([]byte(nil), buffer[:n]...)
+			orphaned := false
+			s.mu.Lock()
+			s.scrollback.write(chunk)
+			s.lastActivity = time.Now().UTC()
+			if attachment := s.attachment; attachment != nil {
+				select {
+				case attachment.output <- chunk:
+				default:
+					// A resumable session's client reconnects and gets the output from the scrollback.
+					orphaned = s.endAttachmentLocked(attachment, DetachReasonSlowClient)
+				}
+			}
+			s.mu.Unlock()
+			if orphaned {
+				s.Terminate("client too slow")
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 func (s *Session) WriteInput(input string) error {
@@ -464,10 +594,12 @@ func (s *Session) Snapshot() models.TerminalSessionInfo {
 		LabName:      s.labName,
 		NodeName:     s.nodeName,
 		Protocol:     s.protocol,
+		Resumable:    s.resumable,
 		State:        s.state,
 		CreatedAt:    s.createdAt,
 		ExpiresAt:    s.expiresAt,
 		LastActivity: s.lastActivity,
+		Attached:     s.attachment != nil,
 		ExitCode:     s.exitCode,
 		Error:        s.lastError,
 	}
@@ -489,6 +621,13 @@ func (s *Session) waitForProcess() {
 		exitCode = s.cmd.ProcessState.ExitCode()
 	}
 
+	// Let the pump read the last output. A child that still holds the terminal
+	// keeps it open, so stop waiting after a moment.
+	select {
+	case <-s.pumpDone:
+	case <-time.After(exitDrainTimeout):
+	}
+
 	s.mu.Lock()
 	if s.exitCode == nil {
 		s.exitCode = &exitCode
@@ -497,8 +636,8 @@ func (s *Session) waitForProcess() {
 		s.lastError = err.Error()
 	}
 	s.state = "closed"
-	s.attached = false
 	s.lastActivity = time.Now().UTC()
+	s.endAttachmentLocked(s.attachment, DetachReasonExited)
 	file := s.ptyFile
 	s.ptyFile = nil
 	s.mu.Unlock()
@@ -529,7 +668,8 @@ func (s *Session) WaitForExit(timeout time.Duration) error {
 
 func (s *Session) Terminate(reason string) {
 	s.mu.Lock()
-	if s.state == "closed" {
+	// A closing session is already on its way out.
+	if s.state != "ready" {
 		s.mu.Unlock()
 		return
 	}

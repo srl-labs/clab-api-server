@@ -2811,7 +2811,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns logs for a lab node.\n\n**Notes**\n- When `follow=true`, the response streams as NDJSON (one JSON object per line) until the client disconnects or the 30-minute timeout.",
+                "description": "Returns logs for a lab node.\n\n**Notes**\n- When `follow=true`, the response streams as NDJSON (one JSON object per line) until the client disconnects or after 12 hours.\n- Streamed lines carry `stream` (`stdout` or `stderr`). A blank line is sent every 25 seconds while the node is quiet, so clients can tell a quiet node from a lost connection.",
                 "produces": [
                     "application/json",
                     "application/x-ndjson"
@@ -3238,7 +3238,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Creates a constrained interactive terminal session for an owned lab node using one of the supported protocols: `ssh`, `shell`, or `telnet`.\n\n**Protocol behavior**\n- `ssh`: launches the server-side `ssh` client in a PTY directly to the node management IP and streams that terminal over WebSocket.\n- `shell`: launches a PTY-backed `docker|podman exec -it \u003ccontainer\u003e \u003cserver-selected-command\u003e` session.\n- `telnet`: launches a PTY-backed `docker|podman exec -it \u003ccontainer\u003e telnet 127.0.0.1 \u003cport\u003e` session.\n\n**Security notes**\n- The backend chooses the launch command for every protocol. Clients choose only the protocol and terminal size.\n- Access is limited to owned nodes unless the caller is a configured superuser.\n\n**Relationship to `/api/v1/labs/{labName}/nodes/{nodeName}/ssh`**\n- This endpoint creates the interactive browser terminal session.\n- The separate `/ssh` endpoint returns temporary SSH access details for an external SSH client and is not required for browser terminals.",
+                "description": "Creates a constrained interactive terminal session for an owned lab node using one of the supported protocols: `ssh`, `shell`, or `telnet`.\n\n**Protocol behavior**\n- `ssh`: launches the server-side `ssh` client in a PTY directly to the node management IP and streams that terminal over WebSocket.\n- `shell`: launches a PTY-backed `docker|podman exec -it \u003ccontainer\u003e \u003cserver-selected-command\u003e` session.\n- `telnet`: launches a PTY-backed `docker|podman exec -it \u003ccontainer\u003e telnet 127.0.0.1 \u003cport\u003e` session.\n\n**Security notes**\n- The backend chooses the launch command for every protocol. Clients choose only the protocol and terminal size.\n- Access is limited to owned nodes unless the caller is a configured superuser.\n\n**Resuming**\n- Set `resumable` to keep the session running when its stream disconnects, so the client can attach again and see the output it missed. The server must list `terminal-resume` in the `features` of `/health`.\n- Without `resumable`, the session ends as soon as its stream disconnects.\n\n**Relationship to `/api/v1/labs/{labName}/nodes/{nodeName}/ssh`**\n- This endpoint creates the interactive browser terminal session.\n- The separate `/ssh` endpoint returns temporary SSH access details for an external SSH client and is not required for browser terminals.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3745,6 +3745,71 @@
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/labs/{labName}/stats": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Streams the CPU, memory and process count of every running node of a lab as NDJSON, one `stats` object per interval.\n\n**Notes**\n- `cpuPercent` is the usage since the previous sample, where 100 is one busy CPU; the first sample of a node has none.\n- Memory usage leaves out page cache that can be reclaimed, like `docker stats`.\n- Nodes that start or stop while streaming appear or disappear within 10 seconds.\n- The stream ends when the client disconnects or after 12 hours.",
+                "produces": [
+                    "application/x-ndjson"
+                ],
+                "tags": [
+                    "Labs"
+                ],
+                "summary": "Stream lab node resource usage",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Name of the lab",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "default": "2s",
+                        "description": "Time between samples, from 1s to 20s.",
+                        "name": "interval",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "NDJSON stream of samples",
+                        "schema": {
+                            "$ref": "#/definitions/models.LabStatsSample"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid lab name or interval",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Lab not found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -4975,7 +5040,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Upgrades the request to a WebSocket connection for terminal input, output, resize, and close events.\n\n**Protocol notes**\n- Connect with a WebSocket client to this endpoint after creating a terminal session.\n- Client messages are JSON objects with `type` set to `input`, `resize`, or `close`.\n- Server messages are JSON objects with `type` set to `ready`, `output`, or `exit`.",
+                "description": "Upgrades the request to a WebSocket connection for terminal input, output, resize, and close events.\n\n**Protocol notes**\n- Connect with a WebSocket client to this endpoint after creating a terminal session.\n- Client messages are JSON objects with `type` set to `input`, `resize`, or `close`.\n- Server messages are JSON objects with `type` set to `ready`, `output`, or `exit`.\n\n**Reconnecting**\n- A session created with `resumable` keeps running when the connection drops (`ready.resumable` is true). Connect again to continue: the first `output` message replays the session's recent output (`ready.replay` is true then).\n- Any other session ends when its connection closes.\n- Only one client is attached at a time. A new connection takes the session over, and the previous one is closed with code 4001.\n- Send `close` to end the session. A resumable session without a client ends after the server's terminal idle timeout (default 30 minutes).",
                 "produces": [
                     "application/json"
                 ],
@@ -5007,12 +5072,6 @@
                     },
                     "404": {
                         "description": "Session not found",
-                        "schema": {
-                            "$ref": "#/definitions/models.ErrorResponse"
-                        }
-                    },
-                    "409": {
-                        "description": "Session already attached",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -7786,6 +7845,30 @@
                 }
             }
         },
+        "models.LabStatsSample": {
+            "type": "object",
+            "properties": {
+                "intervalSeconds": {
+                    "description": "IntervalSeconds is the time between samples.",
+                    "type": "number",
+                    "example": 2
+                },
+                "nodes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.NodeStats"
+                    }
+                },
+                "time": {
+                    "type": "string"
+                },
+                "type": {
+                    "description": "Type is always \"stats\".",
+                    "type": "string",
+                    "example": "stats"
+                }
+            }
+        },
         "models.LinkEndpoint": {
             "type": "object",
             "properties": {
@@ -8124,6 +8207,43 @@
                 "name": {
                     "description": "Name of the container node",
                     "type": "string"
+                }
+            }
+        },
+        "models.NodeStats": {
+            "type": "object",
+            "properties": {
+                "cpuCount": {
+                    "description": "CPUCount is the number of CPUs the node can use, when known.",
+                    "type": "integer",
+                    "example": 8
+                },
+                "cpuPercent": {
+                    "description": "CPUPercent is the CPU usage since the previous sample, where 100 is one busy CPU.\nIt is missing in the first sample of a node.",
+                    "type": "number",
+                    "example": 12.5
+                },
+                "memoryBytes": {
+                    "type": "integer",
+                    "example": 536870912
+                },
+                "memoryLimitBytes": {
+                    "type": "integer",
+                    "example": 8589934592
+                },
+                "name": {
+                    "description": "Name is the container name.",
+                    "type": "string",
+                    "example": "clab-my-lab-srl1"
+                },
+                "nodeName": {
+                    "description": "NodeName is the node name in the topology.",
+                    "type": "string",
+                    "example": "srl1"
+                },
+                "pids": {
+                    "type": "integer",
+                    "example": 42
                 }
             }
         },
@@ -8591,6 +8711,10 @@
         "models.TerminalSessionInfo": {
             "type": "object",
             "properties": {
+                "attached": {
+                    "description": "Attached reports whether a client is connected to the session's stream.",
+                    "type": "boolean"
+                },
                 "createdAt": {
                     "type": "string"
                 },
@@ -8614,6 +8738,10 @@
                 },
                 "protocol": {
                     "$ref": "#/definitions/models.TerminalProtocol"
+                },
+                "resumable": {
+                    "description": "Resumable reports whether the session outlives a disconnected stream.",
+                    "type": "boolean"
                 },
                 "sessionId": {
                     "type": "string"
@@ -8643,6 +8771,10 @@
                             "$ref": "#/definitions/models.TerminalProtocol"
                         }
                     ]
+                },
+                "resumable": {
+                    "description": "Resumable keeps the session running when its stream disconnects, so the\nclient can attach again. Without it the session ends with its stream.",
+                    "type": "boolean"
                 },
                 "rows": {
                     "description": "Rows is the requested terminal height in characters.",

@@ -38,7 +38,7 @@ func InitTerminalManager() {
 	terminalManager = termsvc.NewManager(
 		termsvc.DefaultCleanupTick,
 		termsvc.DefaultSessionTTL,
-		termsvc.DefaultIdleTimeout,
+		config.AppConfig.TerminalIdleTimeout,
 		config.AppConfig.TerminalMaxSessionsPerUser,
 	)
 }
@@ -61,6 +61,10 @@ func ShutdownTerminalManager() {
 // @Description **Security notes**
 // @Description - The backend chooses the launch command for every protocol. Clients choose only the protocol and terminal size.
 // @Description - Access is limited to owned nodes unless the caller is a configured superuser.
+// @Description
+// @Description **Resuming**
+// @Description - Set `resumable` to keep the session running when its stream disconnects, so the client can attach again and see the output it missed. The server must list `terminal-resume` in the `features` of `/health`.
+// @Description - Without `resumable`, the session ends as soon as its stream disconnects.
 // @Description
 // @Description **Relationship to `/api/v1/labs/{labName}/nodes/{nodeName}/ssh`**
 // @Description - This endpoint creates the interactive browser terminal session.
@@ -154,6 +158,7 @@ func RequestTerminalSessionHandler(c *gin.Context) {
 		Rows:          req.Rows,
 		SSHUsername:   req.SSHUsername,
 		TelnetPort:    req.TelnetPort,
+		Resumable:     req.Resumable,
 	})
 	if err != nil {
 		writeTerminalManagerError(c, username, "create terminal session", err)
@@ -225,6 +230,12 @@ func TerminateTerminalSessionHandler(c *gin.Context) {
 // @Description - Connect with a WebSocket client to this endpoint after creating a terminal session.
 // @Description - Client messages are JSON objects with `type` set to `input`, `resize`, or `close`.
 // @Description - Server messages are JSON objects with `type` set to `ready`, `output`, or `exit`.
+// @Description
+// @Description **Reconnecting**
+// @Description - A session created with `resumable` keeps running when the connection drops (`ready.resumable` is true). Connect again to continue: the first `output` message replays the session's recent output (`ready.replay` is true then).
+// @Description - Any other session ends when its connection closes.
+// @Description - Only one client is attached at a time. A new connection takes the session over, and the previous one is closed with code 4001.
+// @Description - Send `close` to end the session. A resumable session without a client ends after the server's terminal idle timeout (default 30 minutes).
 // @Tags Terminal Sessions
 // @Security BearerAuth
 // @Produce json
@@ -232,14 +243,13 @@ func TerminateTerminalSessionHandler(c *gin.Context) {
 // @Success 101 {string} string "Switching Protocols to WebSocket"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
 // @Failure 404 {object} models.ErrorResponse "Session not found"
-// @Failure 409 {object} models.ErrorResponse "Session already attached"
 // @Failure 410 {object} models.ErrorResponse "Session already exited"
 // @Failure 500 {object} models.ErrorResponse "Internal server error"
 // @Router /api/v1/terminal-sessions/{sessionId}/stream [get]
 func StreamTerminalSessionHandler(c *gin.Context) {
 	username := c.GetString("username")
 	sessionID := strings.TrimSpace(c.Param("sessionId"))
-	session, err := terminalManager.BeginStream(sessionID, username, isSuperuser(username))
+	session, attachment, err := terminalManager.Attach(sessionID, username, isSuperuser(username))
 	if err != nil {
 		writeTerminalManagerError(c, username, "stream terminal session", err)
 		return
@@ -247,23 +257,37 @@ func StreamTerminalSessionHandler(c *gin.Context) {
 
 	conn, err := terminalUpgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		session.EndStream()
+		session.Detach(attachment)
 		log.Warnf("terminal websocket upgrade failed for user '%s' session '%s': %v", username, sessionID, err)
 		return
 	}
 	defer conn.Close()
-	defer session.EndStream()
+	// A dropped connection leaves a resumable session running for the next client.
+	defer session.Detach(attachment)
+
+	write := func(message any) error {
+		_ = conn.SetWriteDeadline(time.Now().Add(terminalWriteTimeout))
+		return conn.WriteJSON(message)
+	}
 
 	ready := session.Snapshot()
-	if err := conn.WriteJSON(gin.H{
+	if err := write(gin.H{
 		"type":      "ready",
 		"sessionId": ready.SessionID,
 		"protocol":  ready.Protocol,
 		"createdAt": ready.CreatedAt,
 		"expiresAt": ready.ExpiresAt,
+		"resumable": ready.Resumable,
+		"replay":    len(attachment.Replay) > 0,
 	}); err != nil {
-		session.Terminate("client disconnected before terminal became ready")
 		return
+	}
+	for replay := attachment.Replay; len(replay) > 0; {
+		chunk := replay[:min(len(replay), terminalReplayChunkBytes)]
+		replay = replay[len(chunk):]
+		if err := write(terminalOutputMessage(chunk)); err != nil {
+			return
+		}
 	}
 
 	readErrCh := make(chan error, 1)
@@ -303,46 +327,69 @@ func StreamTerminalSessionHandler(c *gin.Context) {
 		}
 	}()
 
-	buffer := make([]byte, 4096)
+	ping := time.NewTicker(terminalPingInterval)
+	defer ping.Stop()
+
 	for {
-		n, readErr := session.Read(buffer)
-		if n > 0 {
-			if err := conn.WriteJSON(gin.H{
-				"type":     "output",
-				"data":     base64.StdEncoding.EncodeToString(buffer[:n]),
-				"encoding": "base64",
-			}); err != nil {
-				session.Terminate("client disconnected during terminal output")
+		select {
+		case chunk, open := <-attachment.Output():
+			if !open {
+				finishTerminalStream(conn, session, attachment.Reason(), write)
 				return
 			}
-		}
-
-		select {
+			if err := write(terminalOutputMessage(chunk)); err != nil {
+				return
+			}
+		case <-ping.C:
+			deadline := time.Now().Add(terminalWriteTimeout)
+			if err := conn.WriteControl(websocket.PingMessage, nil, deadline); err != nil {
+				return
+			}
 		case clientErr := <-readErrCh:
 			if clientErr != nil && !websocket.IsCloseError(clientErr, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				log.Debugf("terminal websocket client loop ended for session '%s': %v", sessionID, clientErr)
 			}
-			session.Terminate("client disconnected")
 			return
-		default:
-		}
-
-		if readErr != nil {
-			if !errors.Is(readErr, io.EOF) {
-				log.Debugf("terminal PTY read ended for session '%s': %v", sessionID, readErr)
-			}
-			break
 		}
 	}
+}
 
-	_ = session.WaitForExit(2 * time.Second)
-	snapshot := session.Snapshot()
-	_ = conn.WriteJSON(gin.H{
-		"type":     "exit",
-		"exitCode": snapshot.ExitCode,
-		"error":    snapshot.Error,
-		"state":    snapshot.State,
-	})
+const (
+	terminalWriteTimeout     = 10 * time.Second
+	terminalPingInterval     = 30 * time.Second
+	terminalReplayChunkBytes = 32 * 1024
+	// terminalCloseTakenOver closes a connection whose session another client attached to.
+	terminalCloseTakenOver = 4001
+)
+
+func terminalOutputMessage(data []byte) gin.H {
+	return gin.H{
+		"type":     "output",
+		"data":     base64.StdEncoding.EncodeToString(data),
+		"encoding": "base64",
+	}
+}
+
+// finishTerminalStream tells the client why its attachment ended.
+func finishTerminalStream(conn *websocket.Conn, session *termsvc.Session, reason string, write func(any) error) {
+	deadline := time.Now().Add(terminalWriteTimeout)
+	switch reason {
+	case termsvc.DetachReasonExited:
+		_ = session.WaitForExit(2 * time.Second)
+		snapshot := session.Snapshot()
+		_ = write(gin.H{
+			"type":     "exit",
+			"exitCode": snapshot.ExitCode,
+			"error":    snapshot.Error,
+			"state":    snapshot.State,
+		})
+	case termsvc.DetachReasonTakenOver:
+		_ = conn.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(terminalCloseTakenOver, "terminal attached elsewhere"), deadline)
+	default:
+		_ = conn.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseTryAgainLater, reason), deadline)
+	}
 }
 
 func writeTerminalManagerError(c *gin.Context, username, action string, err error) {
@@ -352,8 +399,6 @@ func writeTerminalManagerError(c *gin.Context, username, action string, err erro
 		status = http.StatusNotFound
 	case errors.Is(err, termsvc.ErrSessionForbidden):
 		status = http.StatusNotFound
-	case errors.Is(err, termsvc.ErrSessionAttached):
-		status = http.StatusConflict
 	case errors.Is(err, termsvc.ErrSessionExited):
 		status = http.StatusGone
 	case errors.Is(err, termsvc.ErrTooManySessions):

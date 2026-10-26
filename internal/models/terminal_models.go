@@ -21,6 +21,9 @@ type TerminalSessionRequest struct {
 	SSHUsername string `json:"sshUsername,omitempty"`
 	// TelnetPort optionally overrides the telnet destination port for protocol=telnet.
 	TelnetPort int `json:"telnetPort,omitempty"`
+	// Resumable keeps the session running when its stream disconnects, so the
+	// client can attach again. Without it the session ends with its stream.
+	Resumable bool `json:"resumable,omitempty"`
 }
 
 type TerminalSessionInfo struct {
@@ -33,6 +36,10 @@ type TerminalSessionInfo struct {
 	CreatedAt    time.Time        `json:"createdAt"`
 	ExpiresAt    time.Time        `json:"expiresAt"`
 	LastActivity time.Time        `json:"lastActivity"`
-	ExitCode     *int             `json:"exitCode,omitempty"`
-	Error        string           `json:"error,omitempty"`
+	// Resumable reports whether the session outlives a disconnected stream.
+	Resumable bool `json:"resumable"`
+	// Attached reports whether a client is connected to the session's stream.
+	Attached bool   `json:"attached"`
+	ExitCode *int   `json:"exitCode,omitempty"`
+	Error    string `json:"error,omitempty"`
 }

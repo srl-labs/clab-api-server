@@ -116,6 +116,9 @@ func SetupRoutes(router *gin.Engine) {
 				labSpecific.GET("/interfaces", InspectInterfacesHandler) // GET /api/v1/labs/{labName}/interfaces
 				labSpecific.GET("/links", ListLabLinksHandler)           // GET /api/v1/labs/{labName}/links
 
+				// Stream CPU and memory usage of the lab's nodes
+				labSpecific.GET("/stats", StreamLabStatsHandler) // GET /api/v1/labs/{labName}/stats
+
 				// Save lab config
 				labSpecific.POST("/save", SaveLabConfigHandler) // POST /api/v1/labs/{labName}/save
 
