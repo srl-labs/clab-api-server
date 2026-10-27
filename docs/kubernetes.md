@@ -165,7 +165,8 @@ If any of them fails, it exits with a message that names what is missing.
   "namespaceMode": "per-lab",
   "features": ["validate", "graph-mermaid", "graph-dot", "exec-filters", "lab-lifecycle-node-filter",
                "save-copy", "inspect-details", "node-stats", "log-stream", "terminal-resume",
-               "node-logs-runtime", "interface-state", "c9s-runtime", "lab-host-info"]
+               "node-logs-runtime", "interface-state", "c9s-runtime", "lab-host-info",
+               "capture-stream", "wireshark-vnc"]
 }
 ```
 
@@ -176,6 +177,8 @@ If any of them fails, it exits with a message that names what is missing.
 | `interface-state` | The events stream reports interface `up`/`down` events. |
 | `node-stats` | Left out on c9s while `metrics.k8s.io` is not served. |
 | `lab-host-info` | `GET /api/v1/lab-host` describes the lab runtime (all runtimes). |
+| `capture-stream` | Packet capture through clabwire: `capture/interfaces`, `capture/stream` and capture tickets (see [Packet capture](#packet-capture)). Only with `CLAB_RUNTIME=c9s`. |
+| `wireshark-vnc` | Wireshark VNC capture sessions. On c9s only while Docker answers on the server host (checked once a minute). |
 
 `namespaceMode` is always `per-lab`: every lab has its own namespace.
 
@@ -223,17 +226,70 @@ the node name is `<lab>-<node>`.
 | SSH access (`/nodes/{node}/ssh`) | The server's port range as before; every connection is a port-forward to the node's port 22. |
 | Browser ports | The node's exposed ports, each with a `proxyPath`: `ANY /api/v1/labs/{lab}/nodes/{node}/ports/{port}/proxy/*` proxies HTTP and WebSockets through a port-forward. The `Authorization` header is not forwarded. |
 | Stats | `metrics.k8s.io` (CPU over the metrics window, memory working set of the device containers). Without the API the stats stream answers 501. |
+| Packet capture | containerlab's c9s capture: clabwire in the node's pod, one merged pcapng stream. See [Packet capture](#packet-capture). |
 | Graphs | Rendered from the topology file, without the cluster. |
 
 Lab names must be lowercase DNS labels (letters, digits and dashes, starting with a letter).
 Other names are refused with the name to use instead.
+
+## Packet capture
+
+On c9s the server captures through containerlab's c9s capture: `clabwire`, the sidecar in
+every lab pod, captures the requested lab link interfaces, and containerlab merges them into one
+pcapng section. Every call runs as the signed-in user, so Kubernetes decides whether the user may
+capture (`pods/exec` on the lab's pods, which `clabernetes-lab-editor` grants). Edgeshark is not
+used: clabwire only allows the interfaces of the lab's links, so the management interface and
+`c9s0` cannot be captured.
+
+The stream has one interface per target, named `<node>:<interface>`, before any packet, and
+packets in timestamp order. Captures longer than clabwire's one-hour limit are chained by
+containerlab without gaps or duplicates. When the client goes away the capture stops in the pod
+(clabwire ends on stdin close).
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/v1/labs/{lab}/capture/interfaces` | The capturable interfaces of the running nodes: `[{"node","interface","alias"?,"peerNode","peerInterface"}]`. |
+| `GET /api/v1/labs/{lab}/capture/stream?target=<node>:<iface>[&target=…][&duration=30s][&packetLimit=N][&snapLength=N][&download=1]` | The capture as `application/x-pcapng`, chunked and flushed as it is produced, until the duration or packet limit is reached or the client disconnects. `download=1` adds `Content-Disposition: attachment; filename="<lab>-<timestamp>.pcapng"`. Errors before the first byte are JSON: 400 for a target the lab cannot capture, 403 when Kubernetes refuses, 404 for a lab the user does not have, 409 for a node that is not running, 501 without c9s. |
+| `POST /api/v1/labs/{lab}/capture/tickets` | Body `{"targets":[{"node","interface"}],"duration"?:"30s"}`; answers `201 {"ticket","packetflixUri","expiresAt"}`. |
+| `GET /api/v1/capture/packetflix/{ticket}` | A websocket without a bearer token: the ticket is the credential. |
+
+A target names the node as the topology does (or its sanitized name) and the interface by name
+or alias, e.g. `srl1:ethernet-1/1`. The node ends at the first colon.
+
+**Tickets and Packetflix.** Clients that cannot send a bearer token use a ticket: 256 random
+bits, single use, valid for 60 seconds, bound to the user, the lab and the targets. Redeeming it
+starts the capture as that user and sends the pcapng stream in binary websocket messages, like
+Edgeshark's Packetflix service, so Edgeshark's `packetflix:` URL handler
+([cshargextcap](https://github.com/siemens/cshargextcap)) works unchanged: open `packetflixUri`
+and Wireshark starts capturing. The URI carries the `container` query parameter cshargextcap
+requires; the server ignores it (and `nif`) and captures what the ticket grants. cshargextcap
+asks `{ticket}/discover/mobyshark` first and dials `{ticket}/capture`; the server answers both.
+The capture ends with a close frame (1000) after the ticket's duration, or when the client
+closes.
+
+The scheme and host of `packetflixUri` come from the request. Behind a reverse proxy, list the
+proxy in `TRUSTED_PROXIES`; only then does the server use its `X-Forwarded-Proto` and
+`X-Forwarded-Host`.
+
+**Wireshark VNC.** `POST /api/v1/labs/{lab}/capture/wireshark-vnc-sessions` takes the node's
+inspect name (`<lab>-<node>`) as `containerName` and an interface (or alias) as
+`interfaceName`, and starts one Wireshark VNC container per node on the server host. Its
+`PACKETFLIX_LINK` is a ticket URL of this server, reached through the Docker host gateway; it
+is not attached to an Edgeshark network. With TLS, the container reaches the server under the
+first DNS name of its certificate other than `localhost` (mapped to the host gateway), or its
+first non-loopback IP address, and trusts the certificate (mounted, `SSL_CERT_FILE`). The
+certificate therefore needs such a name; the auto-generated one has the host name. This needs
+Docker on the server host; without it the routes answer 501 and `/health` leaves out
+`wireshark-vnc`. Closing the session stops the capture.
 
 ## Not supported on c9s
 
 These answer `501` with `<operation> is not supported by lab runtime c9s`:
 
 - image management (`/images`)
-- Edgeshark, Packetflix capture and Wireshark VNC sessions
+- Edgeshark (`/tools/edgeshark/*`) and Edgeshark's Packetflix URIs (`/capture/packetflix`); use
+  [packet capture](#packet-capture) instead
+- Wireshark VNC sessions when the server host has no Docker
 - netem, veth, VxLAN and TX offload tools
 - VM snapshots (`/snapshots`) and deploys that restore them
 - SSHX and GoTTY sharing, fcli, Tailscale status
