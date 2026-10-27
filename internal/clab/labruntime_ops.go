@@ -163,10 +163,8 @@ func (s *Service) listLabRuntimeContainers(ctx context.Context, opts ListOptions
 		}
 		containers = append(containers, found...)
 	}
-	if verifier, ok := s.labScoper().(LabRecordVerifier); ok && len(containers) > 0 {
-		if err := verifier.VerifyLabRecords(ctx, containers); err != nil {
-			return nil, err
-		}
+	if err := s.VerifyLabRecords(ctx, containers); err != nil {
+		return nil, err
 	}
 	return containers, nil
 }

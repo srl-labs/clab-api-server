@@ -99,6 +99,16 @@ type LabRecordVerifier interface {
 	VerifyLabRecords(ctx context.Context, containers []clabruntime.GenericContainer) error
 }
 
+// VerifyLabRecords lets the scoper correct what lab records say about their labs (see
+// LabRecordVerifier). Scopers that do not verify leave the records as they are.
+func (s *Service) VerifyLabRecords(ctx context.Context, containers []clabruntime.GenericContainer) error {
+	verifier, ok := s.labScoper().(LabRecordVerifier)
+	if !ok || len(containers) == 0 {
+		return nil
+	}
+	return verifier.VerifyLabRecords(ctx, containers)
+}
+
 // serverScoper runs every lab runtime call with the server's own credentials and lets
 // containerlab choose the namespaces.
 type serverScoper struct{}

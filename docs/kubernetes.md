@@ -82,8 +82,9 @@ take either from the Topology: a lab's owner is the one of its namespace, and it
 (`labPath`/`absLabPath` in inspect) is kept only when it lies in the owner's workspace, or for a
 shared lab in the shared workspace under a directory of the lab's group. Otherwise inspect
 reports `k8s://<namespace>/topologies/<lab>`, as for a lab without a recorded file, and file
-operations that need the topology answer `404`. The events stream passes containerlab's events
-on unchanged, so their `clab-owner` and `clab-topo-file` attributes are what the Topology says.
+operations that need the topology answer `404`. The events stream corrects the `clab-owner` and
+`clab-topo-file` attributes of container events the same way, so they always match inspect; an
+event whose records the server cannot check (the cluster does not answer) is left out.
 
 ## RBAC
 
