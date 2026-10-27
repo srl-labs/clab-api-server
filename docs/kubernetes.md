@@ -275,7 +275,10 @@ starts the capture as that user and sends the pcapng stream in binary websocket 
 Edgeshark's Packetflix service, so Edgeshark's `packetflix:` URL handler
 ([cshargextcap](https://github.com/siemens/cshargextcap)) works unchanged: open `packetflixUri`
 and Wireshark starts capturing. The URI carries the `container` query parameter cshargextcap
-requires; the server ignores it (and `nif`) and captures what the ticket grants. cshargextcap
+requires. The interfaces a client names (the `network-interfaces` of `container`, and `nif`,
+also as `Clustershark-*` headers) must be targets of the ticket, otherwise the server answers
+`403` (a single-use ticket is used up); the capture covers the `nif` targets, or all of the
+ticket's. Unknown, used, revoked and expired tickets get `404`. cshargextcap
 asks `{ticket}/discover/mobyshark` first and dials `{ticket}/capture`; the server answers both.
 The capture ends with a close frame (1000) after the ticket's duration, or when the client
 closes.
@@ -293,7 +296,13 @@ first DNS name of its certificate other than `localhost` (mapped to the host gat
 first non-loopback IP address, and trusts the certificate (mounted, `SSL_CERT_FILE`). The
 certificate therefore needs such a name; the auto-generated one has the host name. This needs
 Docker on the server host; without it the routes answer 501 and `/health` leaves out
-`wireshark-vnc`. Closing the session stops the capture.
+`wireshark-vnc`.
+
+A session's link carries a **session ticket**, so restarting the capture inside its Wireshark
+works: it is bound to the user, the lab and the session's targets like any ticket, but redeems
+any number of times while the session exists. Closing the session, or its expiry
+(`CAPTURE_WIRESHARK_SESSION_TTL`), revokes it: it is refused from then on, and captures that
+still run on it end (close `1008` "capture ticket revoked"), as does the container.
 
 ## Not supported on c9s
 

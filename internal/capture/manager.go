@@ -131,6 +131,18 @@ type wiresharkSession struct {
 	createdAt      time.Time
 	expiresAt      time.Time
 	lastAccess     time.Time
+	// release ends what the session's Packetflix link grants (a session capture ticket).
+	release     func()
+	releaseOnce sync.Once
+}
+
+// end releases the session's Packetflix link once the session is gone: closed, expired,
+// shut down or failed to start.
+func (s *wiresharkSession) end() {
+	if s == nil || s.release == nil {
+		return
+	}
+	s.releaseOnce.Do(s.release)
 }
 
 type Manager struct {
@@ -194,6 +206,7 @@ func (m *Manager) Shutdown(ctx context.Context) {
 	m.mu.Unlock()
 
 	for _, session := range pending {
+		session.end()
 		if err := m.stopWiresharkContainer(ctx, session.containerID); err != nil {
 			log.Warnf("capture shutdown: failed stopping session '%s': %v", session.id, err)
 		}
@@ -424,8 +437,9 @@ func (m *Manager) CreateWiresharkSessions(
 			interfaceNames: spec.InterfaceNames,
 			labDir:         spec.LabDirectory,
 			edgesharkNet:   edgesharkNetwork,
-			packetflixLink: func() (string, error) {
-				return buildPacketflixURIForSpec(packetflixHost, m.cfg.PacketflixPort, spec)
+			packetflixLink: func(time.Time) (string, func(), error) {
+				uri, err := buildPacketflixURIForSpec(packetflixHost, m.cfg.PacketflixPort, spec)
+				return uri, nil, err
 			},
 		})
 	}
@@ -439,8 +453,10 @@ type WiresharkLinkSpec struct {
 	ContainerName  string
 	InterfaceNames []string
 	// PacketflixLink returns the link the session's Wireshark opens. It is called right
-	// before the session's container starts, so a short-lived ticket in it is still fresh.
-	PacketflixLink func() (string, error)
+	// before the session's container starts, with the time the session expires. release, when
+	// not nil, is called once the session ends (closed, expired, shut down, or failed to
+	// start), for example to revoke a capture ticket the link carries for the whole session.
+	PacketflixLink func(expiresAt time.Time) (link string, release func(), err error)
 	// RunArgs are extra container run arguments, for example to reach the link's host.
 	RunArgs []string
 }
@@ -488,7 +504,7 @@ type sessionLaunch struct {
 	interfaceNames []string
 	labDir         string
 	edgesharkNet   string
-	packetflixLink func() (string, error)
+	packetflixLink func(expiresAt time.Time) (string, func(), error)
 	runArgs        []string
 }
 
@@ -508,7 +524,9 @@ func (m *Manager) startSessions(
 			return nil, err
 		}
 
-		packetflix, err := launch.packetflixLink()
+		now := time.Now().UTC()
+		expiresAt := now.Add(m.cfg.WiresharkSessionTTL)
+		packetflix, release, err := launch.packetflixLink(expiresAt)
 		if err != nil {
 			m.cleanupCreatedSessions(ctx, created)
 			return nil, err
@@ -532,11 +550,13 @@ func (m *Manager) startSessions(
 			extraArgs:      launch.runArgs,
 		})
 		if err != nil {
+			if release != nil {
+				release()
+			}
 			m.cleanupCreatedSessions(ctx, created)
 			return nil, err
 		}
 
-		now := time.Now().UTC()
 		session := &wiresharkSession{
 			id:             sessionID,
 			username:       username,
@@ -547,8 +567,9 @@ func (m *Manager) startSessions(
 			port:           port,
 			showVolumeTip:  strings.TrimSpace(launch.labDir) != "",
 			createdAt:      now,
-			expiresAt:      now.Add(m.cfg.WiresharkSessionTTL),
+			expiresAt:      expiresAt,
 			lastAccess:     now,
+			release:        release,
 		}
 
 		m.mu.Lock()
@@ -584,6 +605,7 @@ func (m *Manager) CloseSession(
 	delete(m.sessions, sessionID)
 	m.mu.Unlock()
 
+	session.end()
 	return m.stopWiresharkContainer(ctx, session.containerID)
 }
 
@@ -613,6 +635,7 @@ func (m *Manager) CloseAllSessions(
 
 	errs := make([]string, 0)
 	for _, session := range pending {
+		session.end()
 		if err := m.stopWiresharkContainer(ctx, session.containerID); err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", session.id, err))
 		}
@@ -689,6 +712,7 @@ func (m *Manager) cleanupCreatedSessions(ctx context.Context, sessions []*wiresh
 		m.mu.Lock()
 		delete(m.sessions, session.id)
 		m.mu.Unlock()
+		session.end()
 		if err := m.stopWiresharkContainer(ctx, session.containerID); err != nil {
 			log.Warnf("capture cleanup: failed stopping session '%s': %v", session.id, err)
 		}
@@ -1100,6 +1124,7 @@ func (m *Manager) sweepExpiredSessions() {
 	defer cancel()
 
 	for _, session := range expired {
+		session.end()
 		if err := m.stopWiresharkContainer(ctx, session.containerID); err != nil {
 			log.Warnf("capture sweeper: failed stopping expired session '%s': %v", session.id, err)
 		}

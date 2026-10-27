@@ -24,7 +24,7 @@ const docTemplate = `{
     "paths": {
         "/api/v1/capture/packetflix/{ticket}": {
             "get": {
-                "description": "Redeems a single-use capture ticket (no bearer token; the ticket is the credential) and streams the capture as the ticket's user: the pcapng stream in binary websocket messages, starting with the section header, compatible with Edgeshark's Packetflix as cshargextcap consumes it. The capture ends after the ticket's duration, with a normal close frame, or when the client closes or disconnects, which stops the capture in the lab. The query parameters cshargextcap sends (container, nif, ...) are ignored. cshargextcap dials {ticket}/capture, which serves the same websocket. Requires a websocket upgrade; unknown, used and expired tickets get 404 before the upgrade.",
+                "description": "Redeems a capture ticket (no bearer token; the ticket is the credential) and streams the capture as the ticket's user: the pcapng stream in binary websocket messages, starting with the section header, compatible with Edgeshark's Packetflix as cshargextcap consumes it. A ticket from POST /labs/{labName}/capture/tickets redeems once and expires 60 s after it was minted; the ticket of a Wireshark VNC session redeems until the session is closed or expires, which also ends its running captures (close 1008 \"capture ticket revoked\"). The capture ends after the ticket's duration, with a normal close frame, or when the client closes or disconnects, which stops the capture in the lab. The interfaces cshargextcap names (the network-interfaces of the container parameter, and nif, also as Clustershark-* headers) must be targets of the ticket; the capture covers the nif targets, or all of the ticket's. cshargextcap dials {ticket}/capture, which serves the same websocket. Requires a websocket upgrade; unknown, used, revoked and expired tickets get 404 before the upgrade, other targets 403 (a single-use ticket is used up either way).",
                 "tags": [
                     "Capture"
                 ],
@@ -51,8 +51,14 @@ const docTemplate = `{
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
                     },
+                    "403": {
+                        "description": "The client names targets the ticket does not grant",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
                     "404": {
-                        "description": "Ticket unknown, used or expired, or the lab is gone",
+                        "description": "Ticket unknown, used, revoked or expired, or the lab is gone",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -89,8 +95,14 @@ const docTemplate = `{
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
                     },
+                    "403": {
+                        "description": "The client names targets the ticket does not grant",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
                     "404": {
-                        "description": "Ticket unknown, used or expired, or the lab is gone",
+                        "description": "Ticket unknown, used, revoked or expired, or the lab is gone",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -2245,7 +2257,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Mints a single-use ticket for a lab runtime (c9s) capture of the given targets, bound to the signed-in user and the lab. It expires 60 s after creation. Redeeming it at /api/v1/capture/packetflix/{ticket} opens a Packetflix-compatible websocket without a bearer token, for Edgeshark's packetflix: URL handler (cshargextcap) and the Wireshark VNC container. packetflixUri carries the container query parameter cshargextcap requires; the server ignores it.",
+                "description": "Mints a single-use ticket for a lab runtime (c9s) capture of the given targets, bound to the signed-in user and the lab. It expires 60 s after creation. Redeeming it at /api/v1/capture/packetflix/{ticket} opens a Packetflix-compatible websocket without a bearer token, for Edgeshark's packetflix: URL handler (cshargextcap) and the Wireshark VNC container. packetflixUri carries the container query parameter cshargextcap requires; a redemption may only name the ticket's targets in it. Wireshark VNC sessions on c9s get a session ticket instead, which redeems until the session is closed or expires.",
                 "consumes": [
                     "application/json"
                 ],

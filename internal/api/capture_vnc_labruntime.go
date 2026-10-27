@@ -245,14 +245,18 @@ func createLabRuntimeWiresharkSessions(
 			ContainerName:  group.containerName,
 			InterfaceNames: interfaceNames,
 			RunArgs:        endpoint.runArgs,
-			PacketflixLink: func() (string, error) {
-				ticket, err := captureTicketStore().Mint(capture.TicketGrant{
+			// The session's Wireshark may restart its capture, so its ticket redeems for as
+			// long as the session exists; closing or expiring the session revokes it.
+			PacketflixLink: func(expiresAt time.Time) (string, func(), error) {
+				store := captureTicketStore()
+				ticket, err := store.MintSession(capture.TicketGrant{
 					Username: username, LabName: labName, Targets: targets,
-				})
+				}, expiresAt)
 				if err != nil {
-					return "", err
+					return "", nil, err
 				}
-				return packetflixTicketURI(endpoint.scheme, endpoint.host, ticket.ID, labName, targets), nil
+				release := func() { store.Revoke(ticket.ID) }
+				return packetflixTicketURI(endpoint.scheme, endpoint.host, ticket.ID, labName, targets), release, nil
 			},
 		})
 	}

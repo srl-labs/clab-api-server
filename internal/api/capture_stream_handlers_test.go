@@ -337,12 +337,13 @@ func TestCaptureTicketIsBoundToTheUserLabAndTargets(t *testing.T) {
 	require.True(t, strings.HasPrefix(response.PacketflixURI, "packetflix:ws://example.com/api/v1/capture/packetflix/"+response.Ticket+"?container="),
 		response.PacketflixURI)
 
-	grant, err := captureTicketStore().Redeem(response.Ticket)
+	redemption, err := captureTicketStore().Redeem(response.Ticket, nil)
 	require.NoError(t, err)
+	require.Nil(t, redemption.Revoked, "a single-use ticket")
 	require.Equal(t, capture.TicketGrant{
 		Username: api.username, LabName: "lab1", Duration: 30 * time.Second,
 		Targets: []capture.Target{{Node: "n1", Interface: "eth1"}, {Node: "srl1", Interface: "e1-1"}},
-	}, grant)
+	}, redemption.TicketGrant)
 
 	for body, want := range map[string]string{
 		`{}`: "Invalid request body",
@@ -442,11 +443,23 @@ func dialPacketflix(serverURL, packetflixURI string) (*websocket.Conn, *http.Res
 	parsed.Host = base.Host
 	parsed.Path = path.Join(strings.TrimSuffix(parsed.Path, "/capture"), "capture")
 	query := parsed.Query()
-	query.Set("nif", "srl1:e1-1")
+	// Without nifs of its own, csharg captures the target's network-interfaces and sends them
+	// "/"-joined as nif (capture.go).
+	var target struct {
+		NetworkInterfaces []string `json:"network-interfaces"`
+	}
+	if err := json.Unmarshal([]byte(query.Get("container")), &target); err != nil {
+		return nil, nil, err
+	}
+	nif := strings.Join(target.NetworkInterfaces, "/")
+	if nif == "" {
+		nif = "all"
+	}
+	query.Set("nif", nif)
 	parsed.RawQuery = query.Encode()
 	header := http.Header{
 		"Clustershark-Container": {query.Get("container")},
-		"Clustershark-Nif":       {"srl1:e1-1"},
+		"Clustershark-Nif":       {nif},
 	}
 	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
 	return dialer.Dial(parsed.String(), header)
@@ -599,7 +612,7 @@ func TestPacketflixTicketChecksItsUserAndLab(t *testing.T) {
 		_, response, err := dialPacketflix(server.URL, uri)
 		require.ErrorIs(t, err, websocket.ErrBadHandshake, grant.Username)
 		require.Equal(t, http.StatusNotFound, response.StatusCode, grant.Username)
-		_, err = store.Redeem(ticket.ID)
+		_, err = store.Redeem(ticket.ID, nil)
 		require.ErrorIs(t, err, capture.ErrTicketInvalid)
 	}
 	require.Zero(t, captured.Load())
@@ -658,3 +671,75 @@ func (s staticScoper) ListScopes(_ context.Context, user string) ([]clab.LabScop
 }
 
 func (staticScoper) AfterDestroy(context.Context, clab.LabScope, bool) error { return nil }
+
+func TestPacketflixTargetSelector(t *testing.T) {
+	grant := capture.TicketGrant{Username: "alice", LabName: "lab1", Targets: []capture.Target{
+		{Node: "sros", Interface: "1/1/3"}, {Node: "srl1", Interface: "e1-1"}, {Node: "n1", Interface: "eth1"},
+	}}
+	container := func(names ...string) string {
+		data, err := json.Marshal(map[string]any{"name": "lab1", "type": packetflixTargetType, "network-interfaces": names})
+		require.NoError(t, err)
+		return string(data)
+	}
+	selectWith := func(query url.Values, header http.Header) ([]capture.Target, error) {
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/capture/packetflix/T/capture?"+query.Encode(), nil)
+		for key, values := range header {
+			request.Header[key] = values
+		}
+		return packetflixTargetSelector(request)(grant)
+	}
+	all := grant.Targets
+
+	for name, tc := range map[string]struct {
+		query  url.Values
+		header http.Header
+		want   []capture.Target
+	}{
+		"nothing named":           {want: all},
+		"csharg without own nifs": {query: url.Values{"container": {container("sros:1/1/3", "srl1:e1-1", "n1:eth1")}, "nif": {"sros:1/1/3/srl1:e1-1/n1:eth1"}}, want: all},
+		"nif all":                 {query: url.Values{"container": {container("n1:eth1")}, "nif": {"all"}}, want: all},
+		"a part, slashes in names": {query: url.Values{"nif": {"n1:eth1/sros:1/1/3"}},
+			want: []capture.Target{{Node: "sros", Interface: "1/1/3"}, {Node: "n1", Interface: "eth1"}}},
+		"headers only": {header: http.Header{"Clustershark-Container": {container("srl1:e1-1")}, "Clustershark-Nif": {"srl1:e1-1"}},
+			want: []capture.Target{{Node: "srl1", Interface: "e1-1"}}},
+	} {
+		got, err := selectWith(tc.query, tc.header)
+		require.NoError(t, err, name)
+		require.Equal(t, tc.want, got, name)
+	}
+
+	for name, tc := range map[string]struct {
+		query  url.Values
+		header http.Header
+	}{
+		"container names another target": {query: url.Values{"container": {container("n1:eth1", "n2:eth1")}}},
+		"nif names another target":       {query: url.Values{"nif": {"n2:eth1"}}},
+		"nif names a prefix of a target": {query: url.Values{"nif": {"sros:1/1"}}},
+		"nif with a trailing separator":  {query: url.Values{"nif": {"n1:eth1/"}}},
+		"nif header names another one":   {header: http.Header{"Clustershark-Nif": {"n1:eth2"}}},
+		"container is not a target":      {query: url.Values{"container": {"{"}}},
+	} {
+		_, err := selectWith(tc.query, tc.header)
+		require.ErrorIs(t, err, capture.ErrTicketTargets, name)
+	}
+}
+
+func TestPacketflixSingleUseTicketRefusesOtherTargets(t *testing.T) {
+	api := newC9sAPI(t)
+	api.captureLab()
+	var captured atomic.Int32
+	api.fake.CaptureFunc = func(context.Context, clablabruntime.CaptureRequest, io.Writer) error {
+		captured.Add(1)
+		return nil
+	}
+	server := api.server()
+	ticket := mintTicket(t, api, `{"targets":[{"node":"n1","interface":"eth1"}]}`)
+	other := packetflixTicketURI("ws", "unused", ticket.Ticket, "lab1", []capture.Target{{Node: "srl1", Interface: "e1-1"}})
+	_, response, err := dialPacketflix(server.URL, other)
+	require.ErrorIs(t, err, websocket.ErrBadHandshake)
+	require.Equal(t, http.StatusForbidden, response.StatusCode)
+	_, response, err = dialPacketflix(server.URL, ticket.PacketflixURI)
+	require.ErrorIs(t, err, websocket.ErrBadHandshake)
+	require.Equal(t, http.StatusNotFound, response.StatusCode, "the refused redemption used the ticket up")
+	require.Zero(t, captured.Load())
+}

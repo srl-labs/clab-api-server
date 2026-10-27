@@ -471,7 +471,7 @@ func StreamCaptureHandler(c *gin.Context) {
 
 // CreateCaptureTicketHandler mints a single-use capture ticket.
 // @Summary Create a capture ticket
-// @Description Mints a single-use ticket for a lab runtime (c9s) capture of the given targets, bound to the signed-in user and the lab. It expires 60 s after creation. Redeeming it at /api/v1/capture/packetflix/{ticket} opens a Packetflix-compatible websocket without a bearer token, for Edgeshark's packetflix: URL handler (cshargextcap) and the Wireshark VNC container. packetflixUri carries the container query parameter cshargextcap requires; the server ignores it.
+// @Description Mints a single-use ticket for a lab runtime (c9s) capture of the given targets, bound to the signed-in user and the lab. It expires 60 s after creation. Redeeming it at /api/v1/capture/packetflix/{ticket} opens a Packetflix-compatible websocket without a bearer token, for Edgeshark's packetflix: URL handler (cshargextcap) and the Wireshark VNC container. packetflixUri carries the container query parameter cshargextcap requires; a redemption may only name the ticket's targets in it. Wireshark VNC sessions on c9s get a session ticket instead, which redeems until the session is closed or expires.
 // @Tags Capture
 // @Security BearerAuth
 // @Accept json
@@ -551,8 +551,8 @@ func CreateCaptureTicketHandler(c *gin.Context) {
 
 // packetflixTicketURI is the packetflix: URL of a ticket. cshargextcap refuses a URL without
 // the container query parameter (a JSON capture target) and fills in the interfaces to
-// capture from its network-interfaces when no nif parameter is given; the server ignores both
-// and captures what the ticket grants. cshargextcap dials <path>/capture, which the server
+// capture from its network-interfaces when no nif parameter is given; the server checks both
+// against the ticket's targets. cshargextcap dials <path>/capture, which the server
 // serves as well.
 func packetflixTicketURI(scheme, host, ticket, labName string, targets []capture.Target) string {
 	container, _ := json.Marshal(map[string]any{
@@ -639,23 +639,29 @@ var packetflixUpgrader = websocket.Upgrader{
 // PacketflixCaptureHandler redeems a capture ticket and streams the capture over a
 // Packetflix-compatible websocket.
 // @Summary Packetflix capture websocket
-// @Description Redeems a single-use capture ticket (no bearer token; the ticket is the credential) and streams the capture as the ticket's user: the pcapng stream in binary websocket messages, starting with the section header, compatible with Edgeshark's Packetflix as cshargextcap consumes it. The capture ends after the ticket's duration, with a normal close frame, or when the client closes or disconnects, which stops the capture in the lab. The query parameters cshargextcap sends (container, nif, ...) are ignored. cshargextcap dials {ticket}/capture, which serves the same websocket. Requires a websocket upgrade; unknown, used and expired tickets get 404 before the upgrade.
+// @Description Redeems a capture ticket (no bearer token; the ticket is the credential) and streams the capture as the ticket's user: the pcapng stream in binary websocket messages, starting with the section header, compatible with Edgeshark's Packetflix as cshargextcap consumes it. A ticket from POST /labs/{labName}/capture/tickets redeems once and expires 60 s after it was minted; the ticket of a Wireshark VNC session redeems until the session is closed or expires, which also ends its running captures (close 1008 "capture ticket revoked"). The capture ends after the ticket's duration, with a normal close frame, or when the client closes or disconnects, which stops the capture in the lab. The interfaces cshargextcap names (the network-interfaces of the container parameter, and nif, also as Clustershark-* headers) must be targets of the ticket; the capture covers the nif targets, or all of the ticket's. cshargextcap dials {ticket}/capture, which serves the same websocket. Requires a websocket upgrade; unknown, used, revoked and expired tickets get 404 before the upgrade, other targets 403 (a single-use ticket is used up either way).
 // @Tags Capture
 // @Param ticket path string true "Capture ticket"
 // @Success 101 {string} string "Switching protocols; binary pcapng messages follow"
 // @Failure 400 {object} models.ErrorResponse "Not a websocket upgrade"
-// @Failure 404 {object} models.ErrorResponse "Ticket unknown, used or expired, or the lab is gone"
+// @Failure 403 {object} models.ErrorResponse "The client names targets the ticket does not grant"
+// @Failure 404 {object} models.ErrorResponse "Ticket unknown, used, revoked or expired, or the lab is gone"
 // @Router /api/v1/capture/packetflix/{ticket} [get]
 func PacketflixCaptureHandler(c *gin.Context) {
 	if !websocket.IsWebSocketUpgrade(c.Request) {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Packetflix capture needs a websocket upgrade"})
 		return
 	}
-	grant, err := captureTicketStore().Redeem(c.Param("ticket"))
-	if err != nil {
+	redemption, err := captureTicketStore().Redeem(c.Param("ticket"), packetflixTargetSelector(c.Request))
+	switch {
+	case errors.Is(err, capture.ErrTicketTargets):
+		c.JSON(http.StatusForbidden, models.ErrorResponse{Error: err.Error()})
+		return
+	case err != nil:
 		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
 		return
 	}
+	grant := redemption.TicketGrant
 	// The lab must still be the ticket user's.
 	if _, err := verifyLabOwnership(c, grant.Username, grant.LabName); err != nil {
 		return
@@ -674,7 +680,19 @@ func PacketflixCaptureHandler(c *gin.Context) {
 	log.Infof("Packetflix capture of lab '%s' by user '%s' started: %s", grant.LabName, grant.Username,
 		strings.Join(captureInterfaceNames(grant.Targets), ", "))
 	started := time.Now()
-	err = servePacketflix(c.Request.Context(), conn, func(ctx context.Context, w io.Writer) error {
+	ctx, cancel := context.WithCancelCause(c.Request.Context())
+	defer cancel(nil)
+	if redemption.Revoked != nil {
+		// A session ticket's capture ends with its session.
+		go func() {
+			select {
+			case <-redemption.Revoked:
+				cancel(errCaptureTicketRevoked)
+			case <-ctx.Done():
+			}
+		}()
+	}
+	err = servePacketflix(ctx, conn, func(ctx context.Context, w io.Writer) error {
 		return svc.CaptureLab(ctx, clab.LabCaptureOptions{
 			Username: grant.Username,
 			LabName:  grant.LabName,
@@ -699,7 +717,8 @@ func PacketflixCaptureHandler(c *gin.Context) {
 // @Param ticket path string true "Capture ticket"
 // @Success 101 {string} string "Switching protocols; binary pcapng messages follow"
 // @Failure 400 {object} models.ErrorResponse "Not a websocket upgrade"
-// @Failure 404 {object} models.ErrorResponse "Ticket unknown, used or expired, or the lab is gone"
+// @Failure 403 {object} models.ErrorResponse "The client names targets the ticket does not grant"
+// @Failure 404 {object} models.ErrorResponse "Ticket unknown, used, revoked or expired, or the lab is gone"
 // @Router /api/v1/capture/packetflix/{ticket}/capture [get]
 func PacketflixCshargextcapHandler(c *gin.Context) {
 	PacketflixCaptureHandler(c)
@@ -769,7 +788,11 @@ func servePacketflix(ctx context.Context, conn *websocket.Conn, run func(context
 	default:
 	}
 	code, reason := websocket.CloseNormalClosure, "capture ended"
-	if err != nil {
+	switch {
+	case errors.Is(context.Cause(ctx), errCaptureTicketRevoked):
+		code, reason = websocket.ClosePolicyViolation, errCaptureTicketRevoked.Error()
+		err = nil
+	case err != nil:
 		code, reason = websocket.CloseInternalServerErr, closeReason(err.Error())
 	}
 	_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, reason),
@@ -779,6 +802,83 @@ func servePacketflix(ctx context.Context, conn *websocket.Conn, run func(context
 	case <-time.After(packetflixCloseWait):
 	}
 	return err
+}
+
+// errCaptureTicketRevoked ends the captures of a session ticket whose session ended.
+var errCaptureTicketRevoked = errors.New("capture ticket revoked")
+
+// packetflixTargetSelector checks the targets a Packetflix client names against the ticket:
+// cshargextcap sends the capture target as the container query parameter (JSON whose
+// network-interfaces are the interfaces it may capture) and the interfaces to capture as nif
+// ("/"-separated, "all" for every one), both also as Clustershark-Container and
+// Clustershark-Nif headers. Every interface either names has to be one the ticket grants;
+// the capture covers those nif names, or every granted target without nif. A client that
+// names none captures what the ticket grants.
+func packetflixTargetSelector(r *http.Request) capture.TargetSelector {
+	container := r.URL.Query().Get("container")
+	if container == "" {
+		container = r.Header.Get("Clustershark-Container")
+	}
+	nif := r.URL.Query().Get("nif")
+	if nif == "" {
+		nif = r.Header.Get("Clustershark-Nif")
+	}
+	return func(grant capture.TicketGrant) ([]capture.Target, error) {
+		if strings.TrimSpace(container) != "" {
+			var target struct {
+				NetworkInterfaces []string `json:"network-interfaces"`
+			}
+			if err := json.Unmarshal([]byte(container), &target); err != nil {
+				return nil, fmt.Errorf("%w: the container parameter is not a capture target", capture.ErrTicketTargets)
+			}
+			if _, err := capture.SelectTargets(grant, target.NetworkInterfaces); err != nil {
+				return nil, err
+			}
+		}
+		if nif == "" || nif == "all" {
+			return capture.SelectTargets(grant, nil)
+		}
+		names, ok := splitGrantedNames(nif, grant.Targets)
+		if !ok {
+			return nil, fmt.Errorf("%w: %s", capture.ErrTicketTargets, nif)
+		}
+		return capture.SelectTargets(grant, names)
+	}
+}
+
+// splitGrantedNames splits a "/"-joined list of target names into names the targets have.
+// Interface names may contain "/" themselves (sros:1/1/3), so the split follows the names.
+func splitGrantedNames(joined string, targets []capture.Target) ([]string, bool) {
+	granted := make(map[string]bool, len(targets))
+	for _, target := range targets {
+		granted[target.Name()] = true
+	}
+	// failed marks the starts from which the rest cannot be split.
+	failed := map[int]bool{}
+	var split func(start int) ([]string, bool)
+	split = func(start int) ([]string, bool) {
+		if failed[start] {
+			return nil, false
+		}
+		for end := start + 1; end <= len(joined); end++ {
+			if end < len(joined) && joined[end] != '/' {
+				continue
+			}
+			name := joined[start:end]
+			if !granted[name] {
+				continue
+			}
+			if end == len(joined) {
+				return []string{name}, true
+			}
+			if rest, ok := split(end + 1); ok {
+				return append([]string{name}, rest...), true
+			}
+		}
+		failed[start] = true
+		return nil, false
+	}
+	return split(0)
 }
 
 // closeReason fits a reason into a close frame (123 bytes).
