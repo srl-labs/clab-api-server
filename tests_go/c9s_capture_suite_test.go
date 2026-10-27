@@ -330,11 +330,103 @@ func (s *C9sSuite) TestC9sCapture() {
 			running, ok := s.clabwireCaptures(namespace, "n1")
 			return !ok || running != ""
 		}, time.Minute, time.Second, "the session's Wireshark redeemed its ticket and the capture runs in the pod")
+
+		// Restarting the capture in the session's Wireshark connects again with the same
+		// link: a cshargextcap-like client does so twice, next to the running capture.
+		link := s.wiresharkSessionLink(lab + "-n1")
+		wait := s.pingInBackground(lab, 12)
+		for attempt := 1; attempt <= 2; attempt++ {
+			conn, response, err := dialPacketflix(link)
+			s.Require().NoError(err, "connect %d with the session's link (%v)", attempt, response)
+			stream := s.readPacketflixFor(conn, 4*time.Second)
+			summary, err := readPCAPNG(stream)
+			s.Require().NoError(err)
+			s.Require().Equal([]string{"n1:eth1"}, summary.interfaces, "the session's target only")
+		}
+		wait()
+		other := strings.Replace(link, url.QueryEscape(`"n1:eth1"`), url.QueryEscape(`"n2:eth1"`), 1)
+		_, response, err := dialPacketflix(other)
+		s.Require().ErrorIs(err, websocket.ErrBadHandshake, "the session's ticket is never accepted for other targets")
+		s.Require().Equal(http.StatusForbidden, response.StatusCode)
+
 		data, status = s.request(http.MethodDelete, s.url("/api/v1/capture/wireshark-vnc-sessions/%s", sessionID), s.userHeaders, nil, time.Minute)
 		s.Require().Equal(http.StatusOK, status, string(data))
 		s.Require().Eventually(func() bool {
 			running, _ := s.clabwireCaptures(namespace, "n1")
 			return running == ""
 		}, 15*time.Second, 500*time.Millisecond, "closing the session stops the capture")
+		_, response, err = dialPacketflix(link)
+		s.Require().ErrorIs(err, websocket.ErrBadHandshake, "a closed session's ticket is refused")
+		s.Require().Equal(http.StatusNotFound, response.StatusCode)
 	})
+}
+
+// wiresharkSessionLink returns the PACKETFLIX_LINK of the Wireshark VNC container of a node,
+// pointed at the API URL (the container reaches the server through the Docker host gateway).
+func (s *C9sSuite) wiresharkSessionLink(containerName string) string {
+	s.T().Helper()
+	prefix := "clab_ws_vnc_" + s.cfg.APIUserUser + "_" + containerName + "_"
+	ids, err := exec.Command("docker", "ps", "-q", "--filter", "name=^"+prefix).Output()
+	s.Require().NoError(err)
+	fields := strings.Fields(string(ids))
+	s.Require().Len(fields, 1, "one Wireshark VNC container named %s*", prefix)
+	env, err := exec.Command("docker", "inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", fields[0]).Output()
+	s.Require().NoError(err)
+	var link string
+	for _, line := range strings.Split(string(env), "\n") {
+		if value, ok := strings.CutPrefix(line, "PACKETFLIX_LINK="); ok {
+			link = value
+		}
+	}
+	s.Require().NotEmpty(link, "the container has a PACKETFLIX_LINK")
+	parsed, err := url.Parse(strings.TrimPrefix(link, "packetflix:"))
+	s.Require().NoError(err)
+	api, err := url.Parse(s.cfg.APIURL)
+	s.Require().NoError(err)
+	parsed.Host = api.Host
+	parsed.Scheme = strings.Replace(api.Scheme, "http", "ws", 1)
+	return "packetflix:" + parsed.String()
+}
+
+// readPacketflixFor reads a capture for a while and stops it like cshargextcap does: a close
+// "ciao", then the server's answer.
+func (s *C9sSuite) readPacketflixFor(conn *websocket.Conn, duration time.Duration) []byte {
+	s.T().Helper()
+	defer func() { _ = conn.Close() }()
+	type result struct {
+		stream []byte
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		var stream []byte
+		for {
+			messageType, data, err := conn.ReadMessage()
+			if err != nil {
+				done <- result{stream, err}
+				return
+			}
+			if messageType != websocket.BinaryMessage {
+				done <- result{stream, fmt.Errorf("a %d message", messageType)}
+				return
+			}
+			stream = append(stream, data...)
+		}
+	}()
+	select {
+	case ended := <-done:
+		s.Require().Failf("the capture ended before the client stopped it", "%v", ended.err)
+	case <-time.After(duration):
+	}
+	s.Require().NoError(conn.WriteControl(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "ciao"), time.Now().Add(5*time.Second)))
+	select {
+	case ended := <-done:
+		var closeErr *websocket.CloseError
+		s.Require().ErrorAs(ended.err, &closeErr, "the server answers the close")
+		return ended.stream
+	case <-time.After(10 * time.Second):
+		s.Require().Fail("the server did not answer the close")
+		return nil
+	}
 }
