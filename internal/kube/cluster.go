@@ -48,6 +48,24 @@ func RestConfig(settings ConnectionSettings) (*rest.Config, error) {
 	return config, nil
 }
 
+// DefaultNamespace is the namespace of the server's own connection: the kubeconfig
+// context's namespace, the ServiceAccount's namespace in a Pod, or "default".
+func DefaultNamespace(settings ConnectionSettings) string {
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if settings.Kubeconfig != "" {
+		rules.ExplicitPath = settings.Kubeconfig
+	}
+	overrides := &clientcmd.ConfigOverrides{}
+	if settings.Context != "" {
+		overrides.CurrentContext = settings.Context
+	}
+	namespace, _, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides).Namespace()
+	if err != nil || namespace == "" {
+		return "default"
+	}
+	return namespace
+}
+
 // Clients are the server's own Kubernetes clients.
 type Clients struct {
 	Kube      kubernetes.Interface
@@ -194,25 +212,6 @@ func metricsServed(d discovery.DiscoveryInterface) bool {
 
 // ErrStartup wraps every reason the server refuses to start with CLAB_RUNTIME=c9s.
 var ErrStartup = errors.New("c9s startup check failed")
-
-// ServerIdentityPermissions are the permissions the server needs when it runs every lab
-// call with its own identity. namespace is CLAB_KUBE_NAMESPACE (fixed namespace mode) or
-// empty when every lab gets its own namespace, which containerlab then creates.
-func ServerIdentityPermissions(namespace string) []Permission {
-	permissions := []Permission{
-		{Verb: "create", Group: "c9s.run", Resource: "topologies", Namespace: namespace, Why: "deploy labs"},
-		{Verb: "patch", Group: "c9s.run", Resource: "nodes", Namespace: namespace, Why: "start and stop nodes"},
-		{Verb: "create", Resource: "pods", Subresource: "exec", Namespace: namespace, Why: "exec and terminals"},
-		{Verb: "create", Resource: "pods", Subresource: "portforward", Namespace: namespace, Why: "SSH and browser ports"},
-		{Verb: "get", Resource: "pods", Subresource: "log", Namespace: namespace, Why: "node logs"},
-	}
-	if namespace == "" {
-		permissions = append(permissions,
-			Permission{Verb: "create", Resource: "namespaces", Why: "one namespace per lab"},
-			Permission{Verb: "delete", Resource: "namespaces", Why: "destroy --cleanup"})
-	}
-	return permissions
-}
 
 // CheckStartup runs the startup checks: every permission, then clabernetes support.
 func CheckStartup(ctx context.Context, clients *Clients, permissions []Permission, support SupportCheck) error {

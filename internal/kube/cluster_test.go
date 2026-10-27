@@ -33,24 +33,31 @@ func allowOnly(allow func(*authorizationv1.ResourceAttributes) bool) *fake.Clien
 
 func TestCheckPermissionsListsEveryDenial(t *testing.T) {
 	ctx := context.Background()
-	permissions := ServerIdentityPermissions("")
+	permissions := ProvisionerPermissions("clab:", nil)
 	require.NoError(t, CheckPermissions(ctx, allowOnly(func(*authorizationv1.ResourceAttributes) bool { return true }), permissions))
 
 	err := CheckPermissions(ctx, allowOnly(func(attrs *authorizationv1.ResourceAttributes) bool {
-		return attrs.Subresource != "exec" && attrs.Resource != "namespaces"
+		return attrs.Resource != "namespaces"
 	}), permissions)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "create pods/exec cluster-wide (exec and terminals)")
-	require.Contains(t, err.Error(), "create namespaces cluster-wide")
+	require.Contains(t, err.Error(), "create namespaces cluster-wide (create lab namespaces)")
 	require.Contains(t, err.Error(), "delete namespaces cluster-wide")
-	require.NotContains(t, err.Error(), "portforward")
+	require.Contains(t, err.Error(), "list namespaces cluster-wide")
+	require.NotContains(t, err.Error(), "rolebindings")
 }
 
-func TestServerIdentityPermissionsInFixedNamespace(t *testing.T) {
-	for _, permission := range ServerIdentityPermissions("labs") {
-		require.NotEqual(t, "namespaces", permission.Resource, "a fixed namespace needs no namespace rights")
-		require.Equal(t, "labs", permission.Namespace, permission.String())
+func TestProvisionerPermissionsCoverThePullSecret(t *testing.T) {
+	without := ProvisionerPermissions("clab:", nil)
+	with := ProvisionerPermissions("clab:", &SecretRef{Namespace: "clab-api-server", Name: "regcred"})
+	require.Len(t, with, len(without)+2)
+	require.Contains(t, with, Permission{Verb: "get", Resource: "secrets", Name: "regcred", Namespace: "clab-api-server", Why: "read the image pull secret"})
+	for _, permission := range without {
+		require.NotEqual(t, "secrets", permission.Resource)
+		if permission.Verb == "bind" {
+			require.Contains(t, []string{EditorRole, AccessRole}, permission.Name, "binding is limited to the lab roles")
+		}
 	}
+	require.Contains(t, without, Permission{Verb: "impersonate", Resource: "groups", Name: "clab:admins", Why: "act as a superuser"})
 }
 
 func TestCheckStartup(t *testing.T) {
@@ -60,15 +67,15 @@ func TestCheckStartup(t *testing.T) {
 	tooOld := func(context.Context) error {
 		return fmt.Errorf("%w: nodes.c9s.run has no spec.runState", clablabruntime.ErrUnsupportedRuntimeVersion)
 	}
-	require.NoError(t, CheckStartup(ctx, &Clients{Kube: allowAll}, ServerIdentityPermissions(""), supported))
+	require.NoError(t, CheckStartup(ctx, &Clients{Kube: allowAll}, ProvisionerPermissions("clab:", nil), supported))
 
-	err := CheckStartup(ctx, &Clients{Kube: allowAll}, ServerIdentityPermissions(""), tooOld)
+	err := CheckStartup(ctx, &Clients{Kube: allowAll}, ProvisionerPermissions("clab:", nil), tooOld)
 	require.ErrorIs(t, err, ErrStartup)
 	require.ErrorIs(t, err, clablabruntime.ErrUnsupportedRuntimeVersion)
 
 	denyAll := allowOnly(func(*authorizationv1.ResourceAttributes) bool { return false })
 	checked := false
-	err = CheckStartup(ctx, &Clients{Kube: denyAll}, ServerIdentityPermissions(""), func(context.Context) error {
+	err = CheckStartup(ctx, &Clients{Kube: denyAll}, ProvisionerPermissions("clab:", nil), func(context.Context) error {
 		checked = true
 		return nil
 	})
