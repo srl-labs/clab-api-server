@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/srl-labs/clab-api-server/internal/auth"
+	"github.com/srl-labs/clab-api-server/internal/capture"
 	"github.com/srl-labs/clab-api-server/internal/clab"
 	"github.com/srl-labs/clab-api-server/internal/config"
 	"github.com/srl-labs/clab-api-server/internal/models"
@@ -45,6 +46,8 @@ func newC9sAPI(t *testing.T) *c9sAPI {
 	previousService := GetClabService()
 	previousTerminals, previousSSH := terminalManager, sshManager
 	previousStats := nodeStatsAvailable
+	previousVnc := wiresharkVncProbe
+	previousTickets := captureTicketStore()
 	t.Cleanup(func() {
 		config.AppConfig = previous
 		SetClabService(previousService)
@@ -52,7 +55,12 @@ func newC9sAPI(t *testing.T) *c9sAPI {
 		ShutdownSSHManager()
 		terminalManager, sshManager = previousTerminals, previousSSH
 		nodeStatsAvailable = previousStats
+		wiresharkVncProbe = previousVnc
+		setCaptureTicketStore(previousTickets)
 	})
+	// No Docker for Wireshark VNC unless a test provides it.
+	wiresharkVncProbe = func() bool { return false }
+	setCaptureTicketStore(capture.NewTicketStore(capture.DefaultTicketTTL))
 	config.AppConfig.ClabRuntime = config.RuntimeC9s
 	config.AppConfig.JWTSecret = "test-secret"
 	config.AppConfig.SuperuserGroup = ""
@@ -123,6 +131,10 @@ func TestHealthReportsTheRuntimeAndItsFeatures(t *testing.T) {
 		nodeStatsAvailable = previousStats
 	})
 
+	previousVnc := wiresharkVncProbe
+	t.Cleanup(func() { wiresharkVncProbe = previousVnc })
+	wiresharkVncProbe = func() bool { return false }
+
 	config.AppConfig.ClabRuntime = "docker"
 	nodeStatsAvailable = nil
 	docker := healthResponse(t)
@@ -131,6 +143,8 @@ func TestHealthReportsTheRuntimeAndItsFeatures(t *testing.T) {
 	require.Subset(t, docker.Features, []string{"snapshot-save", "deploy-restore", "sshx-readers", "gotty-options",
 		"node-stats", "node-logs-runtime", "interface-state", "terminal-resume"})
 	require.NotContains(t, docker.Features, "c9s-runtime")
+	require.NotContains(t, docker.Features, "capture-stream", "Docker captures go through Edgeshark")
+	require.Contains(t, docker.Features, "wireshark-vnc")
 
 	config.AppConfig.ClabRuntime = "c9s"
 	config.AppConfig.ClabKubeNamespace = ""
@@ -143,6 +157,10 @@ func TestHealthReportsTheRuntimeAndItsFeatures(t *testing.T) {
 	for _, feature := range []string{"snapshot-save", "deploy-restore", "sshx-readers", "gotty-options"} {
 		require.NotContains(t, c9s.Features, feature)
 	}
+	require.Contains(t, c9s.Features, "capture-stream")
+	require.NotContains(t, c9s.Features, "wireshark-vnc", "no Docker on the server host")
+	wiresharkVncProbe = func() bool { return true }
+	require.Contains(t, healthResponse(t).Features, "wireshark-vnc", "Docker on the server host")
 
 	SetNodeStatsAvailability(func() bool { return false })
 	withoutMetrics := healthResponse(t)

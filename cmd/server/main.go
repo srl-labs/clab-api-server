@@ -248,6 +248,8 @@ func main() {
 		if _, err := os.Stat(tlsKeyFile); os.IsNotExist(err) {
 			log.Fatalf("TLS key file not found: %s", tlsKeyFile)
 		}
+		// Wireshark VNC containers of lab runtime captures trust this certificate.
+		api.SetServerCertificateFile(tlsCertFile)
 	}
 
 	srv := &http.Server{

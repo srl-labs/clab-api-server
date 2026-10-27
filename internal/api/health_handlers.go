@@ -54,6 +54,12 @@ var serverFeatures = []string{
 	// lab-host-info: GET /api/v1/lab-host describes the lab runtime (on c9s the cluster
 	// and deploy defaults).
 	"lab-host-info",
+	// capture-stream: lab runtime packet capture: capture/interfaces, capture/stream and
+	// capture tickets for the Packetflix websocket (only with CLAB_RUNTIME=c9s).
+	"capture-stream",
+	// wireshark-vnc: Wireshark VNC capture sessions. With a lab runtime only when the server
+	// host runs Docker.
+	"wireshark-vnc",
 }
 
 // containerRuntimeOnlyFeatures need Docker or Podman on the server host.
@@ -66,7 +72,8 @@ var containerRuntimeOnlyFeatures = map[string]bool{
 
 // labRuntimeOnlyFeatures need a lab runtime (c9s).
 var labRuntimeOnlyFeatures = map[string]bool{
-	"c9s-runtime": true,
+	"c9s-runtime":    true,
+	"capture-stream": true,
 }
 
 // nodeStatsAvailable reports whether the runtime can sample node CPU and memory. On c9s
@@ -87,6 +94,8 @@ func healthFeatures() []string {
 		case labRuntime && containerRuntimeOnlyFeatures[feature]:
 			continue
 		case !labRuntime && labRuntimeOnlyFeatures[feature]:
+			continue
+		case feature == "wireshark-vnc" && labRuntime && !wiresharkVncProbe():
 			continue
 		case feature == "node-stats" && nodeStatsAvailable != nil && !nodeStatsAvailable():
 			continue

@@ -487,7 +487,7 @@ func BuildPacketflixCaptureHandler(c *gin.Context) {
 
 // CreateWiresharkVncSessionsHandler launches wireshark noVNC sessions for capture targets.
 // @Summary Create Wireshark VNC capture session(s)
-// @Description Creates one or more Wireshark noVNC capture sessions for the specified lab interface targets.
+// @Description Creates one or more Wireshark noVNC capture sessions for the specified lab interface targets, one per container. With Docker and Podman the sessions capture through Edgeshark. With lab runtime c9s, containerName is the node's inspect name (<lab>-<node>) and interfaceName a capturable interface (or its alias); each session's Wireshark captures from a capture ticket of the signed-in user on this server, without Edgeshark. That needs Docker on the server host (otherwise 501, and /health leaves out wireshark-vnc).
 // @Tags Capture
 // @Security BearerAuth
 // @Accept json
@@ -499,7 +499,9 @@ func BuildPacketflixCaptureHandler(c *gin.Context) {
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
 // @Failure 403 {object} models.ErrorResponse "Forbidden"
 // @Failure 404 {object} models.ErrorResponse "Lab or container not found"
+// @Failure 409 {object} models.ErrorResponse "A target node is not running (c9s)"
 // @Failure 500 {object} models.ErrorResponse "Internal server error"
+// @Failure 501 {object} models.ErrorResponse "No Docker on the server host (c9s)"
 // @Failure 503 {object} models.ErrorResponse "EdgeShark not running"
 // @Router /api/v1/labs/{labName}/capture/wireshark-vnc-sessions [post]
 func CreateWiresharkVncSessionsHandler(c *gin.Context) {
@@ -525,6 +527,11 @@ func CreateWiresharkVncSessionsHandler(c *gin.Context) {
 		return
 	}
 
+	if clab.IsLabRuntime() {
+		createLabRuntimeWiresharkSessions(c, manager, username, labName, req)
+		return
+	}
+
 	specs, ok := buildCaptureSpecs(c, username, labName, req.Targets)
 	if !ok {
 		return
@@ -544,23 +551,7 @@ func CreateWiresharkVncSessionsHandler(c *gin.Context) {
 		return
 	}
 
-	response := models.CaptureWiresharkVncCreateResponse{
-		Sessions: make([]models.CaptureWiresharkVncSession, 0, len(sessions)),
-	}
-	for _, session := range sessions {
-		response.Sessions = append(response.Sessions, models.CaptureWiresharkVncSession{
-			SessionID:      session.SessionID,
-			LabName:        session.LabName,
-			ContainerName:  session.ContainerName,
-			InterfaceNames: session.InterfaceNames,
-			VncPath:        session.VncPath,
-			ShowVolumeTip:  session.ShowVolumeTip,
-			CreatedAt:      session.CreatedAt,
-			ExpiresAt:      session.ExpiresAt,
-		})
-	}
-
-	c.JSON(http.StatusOK, response)
+	respondWiresharkSessions(c, sessions)
 }
 
 // GetWiresharkVncSessionReadyHandler checks if a wireshark VNC session is reachable.

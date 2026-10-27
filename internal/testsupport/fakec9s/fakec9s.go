@@ -61,6 +61,11 @@ type Runtime struct {
 	PortHandler func(port int, conn net.Conn)
 	// DeployErr fails every deploy; the lab state stays as it was.
 	DeployErr error
+	// CaptureIfaces are the capturable interfaces CaptureInterfaces reports per node; a node
+	// without an entry has none.
+	CaptureIfaces map[string][]clablabruntime.CaptureInterface
+	// CaptureFunc serves Capture after the lab was found; nil writes nothing and returns.
+	CaptureFunc func(ctx context.Context, req clablabruntime.CaptureRequest, w io.Writer) error
 }
 
 // Install registers the fake as the c9s lab runtime until the test ends.
@@ -521,3 +526,56 @@ func (r *instance) SampleStats(_ context.Context, req clablabruntime.InspectRequ
 // ErrMetricsUnavailable is the error SampleStats returns without a metrics API.
 var ErrMetricsUnavailable = fmt.Errorf("%w: the server could not find the requested resource",
 	clablabruntime.ErrMetricsUnavailable)
+
+func (r *instance) CaptureInterfaces(_ context.Context, req clablabruntime.NodeRequest) ([]clablabruntime.CaptureInterface, error) {
+	namespace := r.namespace(req.Namespace, req.Name)
+	if err := r.record(Call{Op: "capture-interfaces", Lab: req.Name, Namespace: namespace, Identity: r.identity(req.Identity), Nodes: req.Nodes}); err != nil {
+		return nil, err
+	}
+	state, err := r.lab(namespace, req.Name)
+	if err != nil {
+		return nil, err
+	}
+	known := map[string]bool{}
+	for _, node := range state.Nodes {
+		known[node.Name] = true
+	}
+	nodes := req.Nodes
+	if len(nodes) == 0 {
+		for _, node := range state.Nodes {
+			nodes = append(nodes, node.Name)
+		}
+	}
+	r.fake.mu.Lock()
+	defer r.fake.mu.Unlock()
+	var result []clablabruntime.CaptureInterface
+	for _, node := range nodes {
+		if !known[node] {
+			// the library's message for a node the lab does not have
+			return nil, fmt.Errorf("node %q was not found in c9s lab %s/%s", node, namespace, req.Name)
+		}
+		result = append(result, r.fake.CaptureIfaces[node]...)
+	}
+	return result, nil
+}
+
+func (r *instance) Capture(ctx context.Context, req clablabruntime.CaptureRequest, w io.Writer) error {
+	namespace := r.namespace(req.Namespace, req.Name)
+	targets := make([]string, 0, len(req.Targets))
+	for _, target := range req.Targets {
+		targets = append(targets, target.Node+":"+target.Interface)
+	}
+	if err := r.record(Call{Op: "capture", Lab: req.Name, Namespace: namespace, Identity: r.identity(req.Identity), Nodes: targets}); err != nil {
+		return err
+	}
+	if _, err := r.lab(namespace, req.Name); err != nil {
+		return err
+	}
+	r.fake.mu.Lock()
+	capture := r.fake.CaptureFunc
+	r.fake.mu.Unlock()
+	if capture == nil {
+		return nil
+	}
+	return capture(ctx, req, w)
+}

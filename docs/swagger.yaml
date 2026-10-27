@@ -161,6 +161,32 @@ definitions:
       message:
         type: string
     type: object
+  models.CaptureInterfaceInfo:
+    properties:
+      alias:
+        description: Alias is the topology's name for the interface when the node
+          kind maps it.
+        example: ethernet-1/1
+        type: string
+      interface:
+        description: Interface is the interface name in the node; capture output names
+          it <node>:<interface>.
+        example: e1-1
+        type: string
+      node:
+        description: Node is the node name as the topology spells it.
+        example: srl1
+        type: string
+      peerInterface:
+        description: PeerInterface is the peer's interface as the topology wrote it.
+        example: e1-1
+        type: string
+      peerNode:
+        description: PeerNode is the node at the other end of the link, "host" for
+          a host endpoint.
+        example: srl2
+        type: string
+    type: object
   models.CapturePacketflixRequest:
     properties:
       remoteHostname:
@@ -207,6 +233,49 @@ definitions:
     required:
     - containerName
     - interfaceName
+    type: object
+  models.CaptureTicketRequest:
+    properties:
+      duration:
+        description: |-
+          Duration ends the capture (Go duration, e.g. 30s); empty captures until the client
+          disconnects.
+        example: 5m
+        type: string
+      targets:
+        items:
+          $ref: '#/definitions/models.CaptureTicketTarget'
+        minItems: 1
+        type: array
+    required:
+    - targets
+    type: object
+  models.CaptureTicketResponse:
+    properties:
+      expiresAt:
+        type: string
+      packetflixUri:
+        description: |-
+          PacketflixURI opens the capture in Wireshark through Edgeshark's packetflix: URL handler
+          (cshargextcap).
+        example: packetflix:wss://clab.example.com:8080/api/v1/capture/packetflix/Q2hh...?container=%7B...%7D
+        type: string
+      ticket:
+        description: Ticket is the credential; it redeems once, within 60 s.
+        example: Q2hhbmdlIG1lIGlmIHlvdSBjYW4gcmVhZCB0aGlzIQ
+        type: string
+    type: object
+  models.CaptureTicketTarget:
+    properties:
+      interface:
+        example: e1-1
+        type: string
+      node:
+        example: srl1
+        type: string
+    required:
+    - interface
+    - node
     type: object
   models.CaptureWiresharkVncCreateResponse:
     properties:
@@ -1938,6 +2007,90 @@ info:
   title: Containerlab API Server
   version: "1.0"
 paths:
+  /api/v1/capture/packetflix/{ticket}:
+    get:
+      description: 'Redeems a single-use capture ticket (no bearer token; the ticket
+        is the credential) and streams the capture as the ticket''s user: the pcapng
+        stream in binary websocket messages, starting with the section header, compatible
+        with Edgeshark''s Packetflix as cshargextcap consumes it. The capture ends
+        after the ticket''s duration, with a normal close frame, or when the client
+        closes or disconnects, which stops the capture in the lab. The query parameters
+        cshargextcap sends (container, nif, ...) are ignored. cshargextcap dials {ticket}/capture,
+        which serves the same websocket. Requires a websocket upgrade; unknown, used
+        and expired tickets get 404 before the upgrade.'
+      parameters:
+      - description: Capture ticket
+        in: path
+        name: ticket
+        required: true
+        type: string
+      responses:
+        "101":
+          description: Switching protocols; binary pcapng messages follow
+          schema:
+            type: string
+        "400":
+          description: Not a websocket upgrade
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Ticket unknown, used or expired, or the lab is gone
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Packetflix capture websocket
+      tags:
+      - Capture
+  /api/v1/capture/packetflix/{ticket}/capture:
+    get:
+      description: 'The same websocket as /api/v1/capture/packetflix/{ticket}, at
+        the path cshargextcap dials for a packetflix: URL (the URL path with /capture
+        appended).'
+      parameters:
+      - description: Capture ticket
+        in: path
+        name: ticket
+        required: true
+        type: string
+      responses:
+        "101":
+          description: Switching protocols; binary pcapng messages follow
+          schema:
+            type: string
+        "400":
+          description: Not a websocket upgrade
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Ticket unknown, used or expired, or the lab is gone
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Packetflix capture websocket (cshargextcap path)
+      tags:
+      - Capture
+  /api/v1/capture/packetflix/{ticket}/discover/mobyshark:
+    get:
+      description: Answers cshargextcap's target discovery with an empty list (Ghostwire's
+        shape); the ticket names the targets. Does not consume the ticket.
+      parameters:
+      - description: Capture ticket
+        in: path
+        name: ticket
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: '{\"containers\":[]}'
+          schema:
+            additionalProperties:
+              items:
+                type: string
+              type: array
+            type: object
+      summary: Packetflix target discovery
+      tags:
+      - Capture
   /api/v1/capture/wireshark-vnc-sessions:
     delete:
       description: Terminates all capture VNC sessions owned by the authenticated
@@ -2788,6 +2941,55 @@ paths:
       summary: Apply on-disk topology for lab
       tags:
       - Labs
+  /api/v1/labs/{labName}/capture/interfaces:
+    get:
+      description: Lists the lab link interfaces of the lab's running nodes that packet
+        capture accepts, with the far end of each link. Lab runtime c9s only; the
+        management interface is not capturable. Runs as the signed-in user.
+      parameters:
+      - description: Lab name
+        in: path
+        name: labName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Capturable interfaces, ordered by node and interface
+          schema:
+            items:
+              $ref: '#/definitions/models.CaptureInterfaceInfo'
+            type: array
+        "400":
+          description: Invalid lab name
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Forbidden by Kubernetes RBAC
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Lab not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "501":
+          description: The server's runtime is not c9s
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: List capturable interfaces
+      tags:
+      - Capture
   /api/v1/labs/{labName}/capture/packetflix:
     post:
       consumes:
@@ -2842,12 +3044,164 @@ paths:
       summary: Build packetflix capture URI
       tags:
       - Capture
+  /api/v1/labs/{labName}/capture/stream:
+    get:
+      description: 'Captures lab link interfaces of a lab runtime (c9s) lab, as the
+        signed-in user, and streams one pcapng section as it is produced: chunked,
+        flushed per block. The section has one interface per target, named <node>:<interface>,
+        before any packet; packets are in timestamp order. The stream ends when the
+        duration passed, the packet limit was reached, or the client disconnects,
+        which stops the capture in the lab. Errors before the first byte are JSON;
+        later ones end the stream. Captures longer than clabwire''s 1 h limit are
+        chained by containerlab without duplicates.'
+      parameters:
+      - description: Lab name
+        in: path
+        name: labName
+        required: true
+        type: string
+      - collectionFormat: multi
+        description: Interface to capture, <node>:<interface> (the interface name
+          or its alias); repeat for several
+        in: query
+        items:
+          type: string
+        name: target
+        required: true
+        type: array
+      - description: 'Capture duration (Go duration, e.g. 30s); default: until the
+          client disconnects'
+        in: query
+        name: duration
+        type: string
+      - description: Stop after this many packets across all targets
+        in: query
+        name: packetLimit
+        type: integer
+      - description: Bytes kept per packet, 64 to 1048576 (default 262144)
+        in: query
+        name: snapLength
+        type: integer
+      - description: '1: send Content-Disposition: attachment; filename=<lab>-<timestamp>.pcapng'
+        enum:
+        - "1"
+        in: query
+        name: download
+        type: string
+      produces:
+      - application/x-pcapng
+      - application/json
+      responses:
+        "200":
+          description: pcapng stream
+          schema:
+            type: file
+        "400":
+          description: Invalid target, duration or limit
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Forbidden by Kubernetes RBAC
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Lab not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "409":
+          description: A target node is not running
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "501":
+          description: The server's runtime is not c9s
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Stream a packet capture
+      tags:
+      - Capture
+  /api/v1/labs/{labName}/capture/tickets:
+    post:
+      consumes:
+      - application/json
+      description: 'Mints a single-use ticket for a lab runtime (c9s) capture of the
+        given targets, bound to the signed-in user and the lab. It expires 60 s after
+        creation. Redeeming it at /api/v1/capture/packetflix/{ticket} opens a Packetflix-compatible
+        websocket without a bearer token, for Edgeshark''s packetflix: URL handler
+        (cshargextcap) and the Wireshark VNC container. packetflixUri carries the
+        container query parameter cshargextcap requires; the server ignores it.'
+      parameters:
+      - description: Lab name
+        in: path
+        name: labName
+        required: true
+        type: string
+      - description: Targets and optional duration
+        in: body
+        name: ticket_request
+        required: true
+        schema:
+          $ref: '#/definitions/models.CaptureTicketRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Ticket
+          schema:
+            $ref: '#/definitions/models.CaptureTicketResponse'
+        "400":
+          description: Invalid target or duration
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Forbidden by Kubernetes RBAC
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Lab not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "409":
+          description: A target node is not running
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "501":
+          description: The server's runtime is not c9s
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Create a capture ticket
+      tags:
+      - Capture
   /api/v1/labs/{labName}/capture/wireshark-vnc-sessions:
     post:
       consumes:
       - application/json
       description: Creates one or more Wireshark noVNC capture sessions for the specified
-        lab interface targets.
+        lab interface targets, one per container. With Docker and Podman the sessions
+        capture through Edgeshark. With lab runtime c9s, containerName is the node's
+        inspect name (<lab>-<node>) and interfaceName a capturable interface (or its
+        alias); each session's Wireshark captures from a capture ticket of the signed-in
+        user on this server, without Edgeshark. That needs Docker on the server host
+        (otherwise 501, and /health leaves out wireshark-vnc).
       parameters:
       - description: Lab name
         in: path
@@ -2883,8 +3237,16 @@ paths:
           description: Lab or container not found
           schema:
             $ref: '#/definitions/models.ErrorResponse'
+        "409":
+          description: A target node is not running (c9s)
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
         "500":
           description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "501":
+          description: No Docker on the server host (c9s)
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "503":
