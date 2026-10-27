@@ -12,7 +12,10 @@ import (
 // passthroughEnvKeys are configuration keys that containerlab also reads from
 // the process environment. Their values are not sensitive, so they stay set.
 var passthroughEnvKeys = map[string]bool{
-	"CLAB_RUNTIME": true,
+	"CLAB_RUNTIME":        true,
+	"CLAB_KUBECONFIG":     true,
+	"CLAB_KUBE_CONTEXT":   true,
+	"CLAB_KUBE_NAMESPACE": true,
 }
 
 // EnvKeys returns the environment variable names the server reads its
