@@ -211,6 +211,12 @@ After startup, verify the service:
 sudo systemctl status clab-api-server
 ```
 
+## Kubernetes (clabernetes)
+
+Set `CLAB_RUNTIME=c9s` to run labs on a Kubernetes cluster with clabernetes instead of Docker or
+Podman. See [Running on Kubernetes (clabernetes)](docs/kubernetes.md) for the requirements,
+settings and what is not supported there.
+
 ## Configuration Reference
 
 | Variable | Default | Description |
