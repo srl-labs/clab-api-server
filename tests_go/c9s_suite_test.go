@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -410,6 +411,7 @@ func (s *C9sSuite) terminalStream(sessionID string) *websocket.Conn {
 	streamURL := strings.Replace(s.url("/api/v1/terminal-sessions/%s/stream", sessionID), "http", "ws", 1)
 	dialer := *websocket.DefaultDialer
 	dialer.HandshakeTimeout = s.cfg.RequestTimeout
+	dialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // Test client accepts local self-signed certificates.
 	conn, response, err := dialer.Dial(streamURL, s.userHeaders)
 	if response != nil && response.Body != nil {
 		_ = response.Body.Close()
