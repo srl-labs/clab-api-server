@@ -54,7 +54,7 @@ func TestProvisionerPermissionsCoverThePullSecret(t *testing.T) {
 	for _, permission := range without {
 		require.NotEqual(t, "secrets", permission.Resource)
 		if permission.Verb == "bind" {
-			require.Contains(t, []string{EditorRole, AccessRole}, permission.Name, "binding is limited to the lab roles")
+			require.Equal(t, EditorRole, permission.Name, "binding is limited to the lab editor role")
 		}
 	}
 	require.Contains(t, without, Permission{Verb: "impersonate", Resource: "groups", Name: "clab:admins", Why: "act as a superuser"})

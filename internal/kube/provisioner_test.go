@@ -151,10 +151,9 @@ func TestEnsureLabNamespaceProvisionsEverything(t *testing.T) {
 	require.Equal(t, rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "clabernetes-lab-editor"}, editor.RoleRef)
 	require.Equal(t, []rbacv1.Subject{{Kind: "User", APIGroup: "rbac.authorization.k8s.io", Name: "clab:alice"}}, editor.Subjects)
 
-	access, err := client.RbacV1().RoleBindings("c9s-alice-lab1").Get(ctx, "clab-lab-access", metav1.GetOptions{})
+	bindings, err := client.RbacV1().RoleBindings("c9s-alice-lab1").List(ctx, metav1.ListOptions{})
 	require.NoError(t, err)
-	require.Equal(t, rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "clab-lab-access"}, access.RoleRef)
-	require.Equal(t, editor.Subjects, access.Subjects)
+	require.Len(t, bindings.Items, 1, "the editor role is the only binding")
 
 	_, err = client.CoreV1().ResourceQuotas("c9s-alice-lab1").Get(ctx, "lab-quota", metav1.GetOptions{})
 	require.NoError(t, err)
@@ -296,9 +295,6 @@ func TestCheckRoles(t *testing.T) {
 	client := fake.NewClientset()
 	require.ErrorContains(t, CheckRoles(ctx, client), "clabernetes-lab-editor")
 	_, err := client.RbacV1().ClusterRoles().Create(ctx, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: EditorRole}}, metav1.CreateOptions{})
-	require.NoError(t, err)
-	require.ErrorContains(t, CheckRoles(ctx, client), "provisioner-rbac.yaml")
-	_, err = client.RbacV1().ClusterRoles().Create(ctx, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: AccessRole}}, metav1.CreateOptions{})
 	require.NoError(t, err)
 	require.NoError(t, CheckRoles(ctx, client))
 }

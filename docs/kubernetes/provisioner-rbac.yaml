@@ -31,12 +31,12 @@ rules:
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["rolebindings"]
     verbs: ["create", "get"]
-  # Binding is limited to the two lab roles, so the server cannot hand out others. get lets
-  # the startup check verify that both exist.
+  # Binding is limited to the clabernetes lab editor role, so the server cannot hand out
+  # others. get lets the startup check verify that it exists.
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["clusterroles"]
     verbs: ["bind", "get"]
-    resourceNames: ["clabernetes-lab-editor", "clab-lab-access"]
+    resourceNames: ["clabernetes-lab-editor"]
   # Acting as the signed-in user. resourceNames cannot match a prefix, so the groups are
   # listed and users are not limited. Add "clab:shared-<group>" for every Linux group that
   # owns labs in CLAB_SHARED_LABS_ROOT. To limit the users too, replace the users rule with
@@ -57,18 +57,6 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create"]
----
-# What lab users need besides clabernetes-lab-editor: containerlab reads the lab's namespace
-# object before it deploys into it. The server binds this role with a RoleBinding in each lab
-# namespace, where it grants get on that namespace only.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: clab-lab-access
-rules:
-  - apiGroups: [""]
-    resources: ["namespaces"]
-    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

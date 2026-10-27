@@ -35,16 +35,13 @@ const (
 	AnnotationLab         = "containerlab.dev/lab"
 	AnnotationSharedGroup = "containerlab.dev/shared-group"
 
-	// EditorRole is the clabernetes ClusterRole lab users are bound to in their namespace.
+	// EditorRole is the clabernetes ClusterRole lab users are bound to in their namespace. It
+	// covers everything containerlab does in a lab namespace, including reading the namespace
+	// object before it deploys into it (bound with a RoleBinding, that is the lab's namespace
+	// only).
 	EditorRole = "clabernetes-lab-editor"
-	// AccessRole is the ClusterRole, shipped with the server's RBAC manifest, that adds what
-	// containerlab reads besides EditorRole: the lab's namespace object, which it reads
-	// before it deploys into the namespace. Bound in a namespace, it grants get on that
-	// namespace only.
-	AccessRole = "clab-lab-access"
-	// editorBinding and accessBinding bind the roles in a lab namespace.
+	// editorBinding binds EditorRole in a lab namespace.
 	editorBinding = "clab-lab-editor"
-	accessBinding = "clab-lab-access"
 	// DefaultQuotaName names the ResourceQuota from CLAB_KUBE_LAB_QUOTA without a name.
 	DefaultQuotaName = "clab-lab-quota"
 )
@@ -310,23 +307,13 @@ func (p *Provisioner) EnsureLabNamespace(ctx context.Context, target LabNamespac
 }
 
 func (p *Provisioner) ensureAccess(ctx context.Context, target LabNamespace) error {
-	rbac := p.client.RbacV1()
-	subjects := p.subjects(target)
-	for _, binding := range []*rbacv1.RoleBinding{
-		{
-			ObjectMeta: metav1.ObjectMeta{Name: editorBinding, Namespace: target.Name},
-			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: EditorRole},
-			Subjects:   subjects,
-		},
-		{
-			ObjectMeta: metav1.ObjectMeta{Name: accessBinding, Namespace: target.Name},
-			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: AccessRole},
-			Subjects:   subjects,
-		},
-	} {
-		if _, err := rbac.RoleBindings(target.Name).Create(ctx, binding, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("binding %s in %s: %w", binding.RoleRef.Name, target.Name, err)
-		}
+	binding := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: editorBinding, Namespace: target.Name},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: EditorRole},
+		Subjects:   p.subjects(target),
+	}
+	if _, err := p.client.RbacV1().RoleBindings(target.Name).Create(ctx, binding, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("binding %s in %s: %w", binding.RoleRef.Name, target.Name, err)
 	}
 	return nil
 }
@@ -414,9 +401,7 @@ func ProvisionerPermissions(prefix string, pullSecret *SecretRef) []Permission {
 		{Verb: "delete", Resource: "namespaces", Why: "delete lab namespaces"},
 		{Verb: "create", Group: "rbac.authorization.k8s.io", Resource: "rolebindings", Why: "bind lab users in their namespace"},
 		{Verb: "bind", Group: "rbac.authorization.k8s.io", Resource: "clusterroles", Name: EditorRole, Why: "bind " + EditorRole},
-		{Verb: "bind", Group: "rbac.authorization.k8s.io", Resource: "clusterroles", Name: AccessRole, Why: "bind " + AccessRole},
 		{Verb: "get", Group: "rbac.authorization.k8s.io", Resource: "clusterroles", Name: EditorRole, Why: "check that " + EditorRole + " exists"},
-		{Verb: "get", Group: "rbac.authorization.k8s.io", Resource: "clusterroles", Name: AccessRole, Why: "check that " + AccessRole + " exists"},
 		{Verb: "impersonate", Resource: "users", Name: UserName(prefix, "probe"), Why: "act as the signed-in user"},
 		{Verb: "impersonate", Resource: "groups", Name: UsersGroup(prefix), Why: "act as the signed-in user"},
 		{Verb: "impersonate", Resource: "groups", Name: AdminsGroup(prefix), Why: "act as a superuser"},
@@ -430,21 +415,15 @@ func ProvisionerPermissions(prefix string, pullSecret *SecretRef) []Permission {
 	return permissions
 }
 
-// CheckRoles verifies that the ClusterRoles lab namespaces bind exist; a RoleBinding to a
+// CheckRoles verifies that the ClusterRole lab namespaces bind exists; a RoleBinding to a
 // missing role would leave every lab user without access.
 func CheckRoles(ctx context.Context, client kubernetes.Interface) error {
-	for _, role := range []string{EditorRole, AccessRole} {
-		_, err := client.RbacV1().ClusterRoles().Get(ctx, role, metav1.GetOptions{})
-		if apierrors.IsNotFound(err) {
-			hint := "install clabernetes with its lab roles (labRoles.enabled)"
-			if role == AccessRole {
-				hint = "apply the server's RBAC manifest (docs/kubernetes/provisioner-rbac.yaml)"
-			}
-			return fmt.Errorf("ClusterRole %s not found: %s", role, hint)
-		}
-		if err != nil {
-			return fmt.Errorf("reading ClusterRole %s: %w", role, err)
-		}
+	_, err := client.RbacV1().ClusterRoles().Get(ctx, EditorRole, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return fmt.Errorf("ClusterRole %s not found: install clabernetes with its lab roles (labRoles.enabled)", EditorRole)
+	}
+	if err != nil {
+		return fmt.Errorf("reading ClusterRole %s: %w", EditorRole, err)
 	}
 	return nil
 }

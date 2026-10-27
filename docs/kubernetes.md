@@ -50,9 +50,8 @@ the labels `containerlab.dev/runtime=clabernetes`, `clab-owner=<user>`, `clab-la
 `pod-security.kubernetes.io/enforce=privileged`, and in it:
 
 - a RoleBinding of `clabernetes-lab-editor` to `clab:<user>` (or the group
-  `clab:shared-<group>`),
-- a RoleBinding of `clab-lab-access` to the same subject (get on the namespace object, which
-  containerlab reads before it deploys into it),
+  `clab:shared-<group>`); the role also grants get on the namespace object, which containerlab
+  reads before it deploys into it, and bound in the namespace that is the lab's namespace only,
 - the ResourceQuota from `CLAB_KUBE_LAB_QUOTA`, and a copy of the image pull secret, if set.
 
 **Lab calls (the user's identity).** Deploy, apply, destroy, inspect, exec, save,
@@ -81,11 +80,13 @@ fails closed if either the server or Kubernetes refuses it.
 Apply both manifests once (adjust `clab:` if you change `CLAB_KUBE_USER_PREFIX`):
 
 - [`kubernetes/provisioner-rbac.yaml`](kubernetes/provisioner-rbac.yaml): the server's
-  ServiceAccount `clab-api-server` and the ClusterRole `clab-api-server-provisioner`, plus the
-  ClusterRole `clab-lab-access` the server binds in lab namespaces.
-- [`kubernetes/admins-rbac.yaml`](kubernetes/admins-rbac.yaml): ClusterRoleBindings of
-  `clabernetes-lab-editor` and `clab-lab-access` to the group `clab:admins`, so superusers see
-  and manage every lab. The server never creates cluster-wide bindings itself.
+  ServiceAccount `clab-api-server` and the ClusterRole `clab-api-server-provisioner`.
+- [`kubernetes/admins-rbac.yaml`](kubernetes/admins-rbac.yaml): a ClusterRoleBinding of
+  `clabernetes-lab-editor` to the group `clab:admins`, so superusers see and manage every lab.
+  The server never creates cluster-wide bindings itself.
+
+Lab users need nothing besides `clabernetes-lab-editor`, which clabernetes ships
+(`labRoles.enabled`).
 
 `clab-api-server-provisioner` allows:
 
@@ -93,7 +94,7 @@ Apply both manifests once (adjust `clab:` if you change `CLAB_KUBE_USER_PREFIX`)
 |---|---|---|
 | `namespaces` | create, delete, get, list | lab namespaces |
 | `rolebindings` | create, get | bind the lab's users |
-| `clusterroles` `clabernetes-lab-editor`, `clab-lab-access` | bind, get | only these roles can be handed out; get for the startup check |
+| `clusterroles` `clabernetes-lab-editor` | bind, get | only this role can be handed out; get for the startup check |
 | `users` | impersonate | act as the user; `resourceNames` cannot match a prefix, so users are not limited (list every `clab:<user>` to limit them) |
 | `groups` `clab:users`, `clab:admins` | impersonate | add `clab:shared-<group>` for every group that owns shared labs |
 | `resourcequotas` | create | `CLAB_KUBE_LAB_QUOTA` |
@@ -138,7 +139,7 @@ Before it serves requests the server:
    lists every one that is denied,
 2. runs containerlab's clabernetes release check: the published OpenAPI schema of
    `nodes.c9s.run` must have `spec.runState` (any authenticated identity may read it), and
-3. checks that the ClusterRoles `clabernetes-lab-editor` and `clab-lab-access` exist.
+3. checks that the ClusterRole `clabernetes-lab-editor` exists.
 
 If any of them fails, it exits with a message that names what is missing.
 

@@ -17,17 +17,3 @@ subjects:
   - kind: Group
     apiGroup: rbac.authorization.k8s.io
     name: clab:admins
----
-# The access role (from provisioner-rbac.yaml) cluster-wide: get on every lab namespace.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: clab-admins-lab-access
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: clab-lab-access
-subjects:
-  - kind: Group
-    apiGroup: rbac.authorization.k8s.io
-    name: clab:admins
