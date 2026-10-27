@@ -141,6 +141,10 @@ type Manager struct {
 	mu       sync.RWMutex
 	sessions map[string]*wiresharkSession
 
+	runtimeProbeMu  sync.Mutex
+	runtimeProbedAt time.Time
+	runtimeUsable   bool
+
 	stopCh chan struct{}
 	doneCh chan struct{}
 }
@@ -198,6 +202,28 @@ func (m *Manager) Shutdown(ctx context.Context) {
 
 func (m *Manager) Runtime() string {
 	return m.runtimeBinary()
+}
+
+// runtimeProbeTTL is how long ContainerRuntimeAvailable trusts its last probe.
+const runtimeProbeTTL = time.Minute
+
+// ContainerRuntimeAvailable reports whether the container runtime that runs Wireshark VNC
+// sessions answers on this host. The answer is cached for a minute.
+func (m *Manager) ContainerRuntimeAvailable(ctx context.Context) bool {
+	m.runtimeProbeMu.Lock()
+	defer m.runtimeProbeMu.Unlock()
+	if !m.runtimeProbedAt.IsZero() && time.Since(m.runtimeProbedAt) < runtimeProbeTTL {
+		return m.runtimeUsable
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, err := m.runner.Run(probeCtx, m.runtimeBinary(), []string{"version", "--format", "{{.Server.Version}}"}, nil)
+	m.runtimeUsable = err == nil
+	m.runtimeProbedAt = time.Now()
+	if err != nil {
+		log.Debugf("capture: container runtime %s is not usable: %v", m.runtimeBinary(), err)
+	}
+	return m.runtimeUsable
 }
 
 func (m *Manager) PacketflixPort() int {
@@ -387,26 +413,102 @@ func (m *Manager) CreateWiresharkSessions(
 		return nil, err
 	}
 
-	created := make([]*wiresharkSession, 0, len(options.Specs))
-	infos := make([]WiresharkSessionInfo, 0, len(options.Specs))
 	packetflixHost := wiresharkPacketflixHost(m.runtimeBinary(), edgesharkNetwork != "")
-
+	launches := make([]sessionLaunch, 0, len(options.Specs))
 	for _, spec := range options.Specs {
 		if len(spec.InterfaceNames) == 0 {
 			continue
 		}
+		launches = append(launches, sessionLaunch{
+			containerName:  spec.ContainerName,
+			interfaceNames: spec.InterfaceNames,
+			labDir:         spec.LabDirectory,
+			edgesharkNet:   edgesharkNetwork,
+			packetflixLink: func() (string, error) {
+				return buildPacketflixURIForSpec(packetflixHost, m.cfg.PacketflixPort, spec)
+			},
+		})
+	}
+	return m.startSessions(ctx, options.Username, options.LabName, options.Theme, launches)
+}
 
+// WiresharkLinkSpec is a Wireshark VNC session that opens a Packetflix link the caller
+// provides, such as a capture ticket URL of this server, instead of one of Edgeshark.
+type WiresharkLinkSpec struct {
+	// ContainerName and InterfaceNames describe what the session captures.
+	ContainerName  string
+	InterfaceNames []string
+	// PacketflixLink returns the link the session's Wireshark opens. It is called right
+	// before the session's container starts, so a short-lived ticket in it is still fresh.
+	PacketflixLink func() (string, error)
+	// RunArgs are extra container run arguments, for example to reach the link's host.
+	RunArgs []string
+}
+
+// CreateLinkedWiresharkSessionsOptions selects Wireshark VNC sessions with caller-provided
+// Packetflix links.
+type CreateLinkedWiresharkSessionsOptions struct {
+	Username string
+	LabName  string
+	Theme    string
+	Specs    []WiresharkLinkSpec
+}
+
+// CreateLinkedWiresharkSessions starts one Wireshark VNC container per spec that captures from
+// the spec's Packetflix link. It needs neither Edgeshark nor its network, only the container
+// runtime on this host.
+func (m *Manager) CreateLinkedWiresharkSessions(
+	ctx context.Context,
+	options CreateLinkedWiresharkSessionsOptions,
+) ([]WiresharkSessionInfo, error) {
+	if len(options.Specs) == 0 {
+		return nil, errors.New("at least one capture target is required")
+	}
+	if err := m.ensureImageAvailable(ctx); err != nil {
+		return nil, err
+	}
+	launches := make([]sessionLaunch, 0, len(options.Specs))
+	for _, spec := range options.Specs {
+		if spec.PacketflixLink == nil {
+			return nil, errors.New("a linked Wireshark session needs a Packetflix link")
+		}
+		launches = append(launches, sessionLaunch{
+			containerName:  spec.ContainerName,
+			interfaceNames: spec.InterfaceNames,
+			packetflixLink: spec.PacketflixLink,
+			runArgs:        spec.RunArgs,
+		})
+	}
+	return m.startSessions(ctx, options.Username, options.LabName, options.Theme, launches)
+}
+
+// sessionLaunch is one Wireshark VNC container to start.
+type sessionLaunch struct {
+	containerName  string
+	interfaceNames []string
+	labDir         string
+	edgesharkNet   string
+	packetflixLink func() (string, error)
+	runArgs        []string
+}
+
+// startSessions starts a Wireshark VNC container per launch and registers its session. On
+// failure it stops the containers it started.
+func (m *Manager) startSessions(
+	ctx context.Context,
+	username, labName, theme string,
+	launches []sessionLaunch,
+) ([]WiresharkSessionInfo, error) {
+	created := make([]*wiresharkSession, 0, len(launches))
+	infos := make([]WiresharkSessionInfo, 0, len(launches))
+	for _, launch := range launches {
 		port, err := reserveLocalPort()
 		if err != nil {
 			m.cleanupCreatedSessions(ctx, created)
 			return nil, err
 		}
 
-		packetflix, err := buildPacketflixURIForSpec(
-			packetflixHost,
-			m.cfg.PacketflixPort,
-			spec,
-		)
+		packetflix, err := launch.packetflixLink()
 		if err != nil {
 			m.cleanupCreatedSessions(ctx, created)
 			return nil, err
@@ -414,19 +516,20 @@ func (m *Manager) CreateWiresharkSessions(
 
 		sessionID := randomSessionID()
 		containerName := buildWiresharkContainerName(
-			options.Username,
-			spec.ContainerName,
-			spec.InterfaceNames,
+			username,
+			launch.containerName,
+			launch.interfaceNames,
 		)
 
 		containerID, err := m.startWiresharkContainer(ctx, startWiresharkOptions{
 			containerName:  containerName,
 			packetflixURI:  packetflix,
-			darkMode:       strings.EqualFold(strings.TrimSpace(options.Theme), "dark"),
+			darkMode:       strings.EqualFold(strings.TrimSpace(theme), "dark"),
 			localPort:      port,
-			labDir:         strings.TrimSpace(spec.LabDirectory),
-			edgesharkNet:   edgesharkNetwork,
+			labDir:         strings.TrimSpace(launch.labDir),
+			edgesharkNet:   launch.edgesharkNet,
 			wiresharkImage: m.cfg.WiresharkDockerImage,
+			extraArgs:      launch.runArgs,
 		})
 		if err != nil {
 			m.cleanupCreatedSessions(ctx, created)
@@ -436,13 +539,13 @@ func (m *Manager) CreateWiresharkSessions(
 		now := time.Now().UTC()
 		session := &wiresharkSession{
 			id:             sessionID,
-			username:       options.Username,
-			labName:        options.LabName,
-			containerName:  spec.ContainerName,
-			interfaceNames: append([]string(nil), spec.InterfaceNames...),
+			username:       username,
+			labName:        labName,
+			containerName:  launch.containerName,
+			interfaceNames: append([]string(nil), launch.interfaceNames...),
 			containerID:    containerID,
 			port:           port,
-			showVolumeTip:  strings.TrimSpace(spec.LabDirectory) != "",
+			showVolumeTip:  strings.TrimSpace(launch.labDir) != "",
 			createdAt:      now,
 			expiresAt:      now.Add(m.cfg.WiresharkSessionTTL),
 			lastAccess:     now,
@@ -632,6 +735,7 @@ type startWiresharkOptions struct {
 	labDir         string
 	edgesharkNet   string
 	wiresharkImage string
+	extraArgs      []string
 }
 
 func (m *Manager) startWiresharkContainer(
@@ -652,6 +756,7 @@ func (m *Manager) startWiresharkContainer(
 	if strings.TrimSpace(options.labDir) != "" {
 		args = append(args, "-v", fmt.Sprintf("%s:/pcaps", options.labDir))
 	}
+	args = append(args, options.extraArgs...)
 	args = append(args, "-e", fmt.Sprintf("PACKETFLIX_LINK=%s", options.packetflixURI))
 	if options.darkMode {
 		args = append(args, "-e", "DARK_MODE=1")
