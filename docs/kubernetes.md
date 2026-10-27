@@ -75,6 +75,16 @@ namespaces it created.
 The server's own checks (`clab-owner`, superuser, shared workspace) stay in place, so a request
 fails closed if either the server or Kubernetes refuses it.
 
+**What users can edit.** The lab editor role lets users update their Topology, which carries
+the lab's `clab-owner` label and the topology file containerlab deployed from (annotation
+`containerlab.dev/topo-file`). The server reads, applies and purges that file, so it does not
+take either from the Topology: a lab's owner is the one of its namespace, and its topology file
+(`labPath`/`absLabPath` in inspect) is kept only when it lies in the owner's workspace, or for a
+shared lab in the shared workspace under a directory of the lab's group. Otherwise inspect
+reports `k8s://<namespace>/topologies/<lab>`, as for a lab without a recorded file, and file
+operations that need the topology answer `404`. The events stream passes containerlab's events
+on unchanged, so their `clab-owner` and `clab-topo-file` attributes are what the Topology says.
+
 ## RBAC
 
 Apply both manifests once (adjust `clab:` if you change `CLAB_KUBE_USER_PREFIX`):

@@ -84,3 +84,25 @@ func (kubeUsers) SharedGroup(topoPath string) (string, bool) {
 	}
 	return group.Name, true
 }
+
+// InWorkspace reports whether a topology file is in the user's workspace, after resolving
+// symbolic links, as a deploy of the user reads it.
+func (kubeUsers) InWorkspace(username, topoPath string) bool {
+	topoPath = strings.TrimSpace(topoPath)
+	if topoPath == "" || !filepath.IsAbs(topoPath) {
+		return false
+	}
+	root, _, _, err := getUserWorkspaceDirectory(username)
+	if err != nil {
+		return false
+	}
+	realRoot, err := resolveExistingPrefix(filepath.Clean(root))
+	if err != nil {
+		return false
+	}
+	realPath, err := resolveExistingPrefix(filepath.Clean(topoPath))
+	if err != nil {
+		return false
+	}
+	return realPath != realRoot && pathIsInsideRoot(realRoot, realPath)
+}

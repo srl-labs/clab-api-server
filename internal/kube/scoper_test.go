@@ -6,8 +6,12 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	clabconst "github.com/srl-labs/containerlab/constants"
+	clabruntime "github.com/srl-labs/containerlab/runtime"
+	clabtypes "github.com/srl-labs/containerlab/types"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,6 +27,7 @@ type fakeUsers struct {
 	superusers map[string]bool
 	groups     map[string][]string // group -> members
 	shared     map[string]string   // topology path -> owning group
+	workspaces map[string]string   // user -> workspace directory
 }
 
 func (u fakeUsers) IsSuperuser(name string) bool { return u.superusers[name] }
@@ -39,6 +44,11 @@ func (u fakeUsers) InGroup(name, group string) bool {
 func (u fakeUsers) SharedGroup(topoPath string) (string, bool) {
 	group, ok := u.shared[topoPath]
 	return group, ok
+}
+
+func (u fakeUsers) InWorkspace(name, topoPath string) bool {
+	root, ok := u.workspaces[name]
+	return ok && strings.HasPrefix(topoPath, root+"/")
 }
 
 func testScoper(t *testing.T, users fakeUsers) (*Scoper, *fake.Clientset) {
@@ -235,4 +245,118 @@ func TestFailedFirstDeployReleasesItsNamespace(t *testing.T) {
 	require.Error(t, err)
 	_, err = client.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
 	require.NoError(t, err, "the running lab keeps its namespace")
+}
+
+// labNode is a listed lab node as containerlab reports it from a lab runtime.
+func labNode(namespace, lab, owner, topoFile string) clabruntime.GenericContainer {
+	return clabruntime.GenericContainer{
+		Labels: map[string]string{
+			clabconst.Containerlab: lab,
+			clabconst.Owner:        owner,
+			clabconst.TopoFile:     topoFile,
+		},
+		Workload: &clabtypes.LabRuntimeWorkload{Namespace: namespace},
+	}
+}
+
+func TestScoperVerifiesWhatUsersCanEditOnTheirTopology(t *testing.T) {
+	ctx := context.Background()
+	users := fakeUsers{
+		groups:     map[string][]string{"netops": {"carol"}, "other": {"bob"}},
+		shared:     map[string]string{"/shared/team/team.clab.yml": "netops", "/shared/x/x.clab.yml": "other"},
+		workspaces: map[string]string{"alice": "/home/alice/.clab", "bob": "/home/bob/.clab", "carol": "/home/carol/.clab"},
+	}
+	scoper, _ := testScoper(t, users)
+	for _, deploy := range [][3]string{
+		{"alice", "lab1", "/home/alice/.clab/lab1/lab1.clab.yml"},
+		{"bob", "lab1", "/home/bob/.clab/lab1/lab1.clab.yml"},
+		{"carol", "team", "/shared/team/team.clab.yml"},
+	} {
+		_, err := scoper.PrepareDeploy(ctx, deploy[0], deploy[1], deploy[2])
+		require.NoError(t, err)
+	}
+
+	containers := []clabruntime.GenericContainer{
+		// 0: as deployed.
+		labNode("c9s-alice-lab1", "lab1", "alice", "/home/alice/.clab/lab1/lab1.clab.yml"),
+		// 1: bob claims alice's lab directory and her ownership on his own Topology.
+		labNode("c9s-bob-lab1", "lab1", "alice", "/home/alice/.clab/lab1/lab1.clab.yml"),
+		// 2: bob points his own lab at a shared lab's directory.
+		labNode("c9s-bob-lab1", "lab1", "bob", "/shared/team/team.clab.yml"),
+		// 3: the shared lab as deployed, listed as one of its members.
+		labNode("c9s-shared-team", "team", "carol", "/shared/team/team.clab.yml"),
+		// 4: the shared lab pointed at another group's shared directory.
+		labNode("c9s-shared-team", "team", "carol", "/shared/x/x.clab.yml"),
+		// 5: a namespace the server did not provision.
+		labNode("rogue", "lab9", "alice", "/home/alice/.clab/lab1/lab1.clab.yml"),
+		// 6: a relative path, and 7: a lab without a recorded file.
+		labNode("c9s-bob-lab1", "lab1", "bob", "lab1.clab.yml"),
+		labNode("c9s-bob-lab1", "lab1", "bob", "k8s://c9s-bob-lab1/topologies/lab1"),
+		// 8: a record without a workload is left alone.
+		{Labels: map[string]string{clabconst.Owner: "x", clabconst.TopoFile: "/etc/passwd"}},
+	}
+	require.NoError(t, scoper.VerifyLabRecords(ctx, containers))
+
+	type record struct{ owner, file string }
+	got := make([]record, 0, len(containers))
+	for _, container := range containers {
+		got = append(got, record{container.Labels[clabconst.Owner], container.Labels[clabconst.TopoFile]})
+	}
+	require.Equal(t, []record{
+		{"alice", "/home/alice/.clab/lab1/lab1.clab.yml"},
+		{"bob", "k8s://c9s-bob-lab1/topologies/lab1"},
+		{"bob", "k8s://c9s-bob-lab1/topologies/lab1"},
+		{"carol", "/shared/team/team.clab.yml"},
+		{"carol", "k8s://c9s-shared-team/topologies/team"},
+		{"alice", "k8s://rogue/topologies/lab9"},
+		{"bob", "k8s://c9s-bob-lab1/topologies/lab1"},
+		{"bob", "k8s://c9s-bob-lab1/topologies/lab1"},
+		{"x", "/etc/passwd"},
+	}, got)
+}
+
+// TestServiceListsVerifiedLabRecords checks that the service lets the scoper correct what a
+// user wrote on the Topology before any handler sees it.
+func TestServiceListsVerifiedLabRecords(t *testing.T) {
+	previous := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = previous })
+	config.AppConfig.ClabRuntime = config.RuntimeC9s
+	runtime := fakec9s.Install(t)
+	current, err := user.Current()
+	require.NoError(t, err)
+	me := current.Username
+	workspace := t.TempDir()
+	scoper, _ := testScoper(t, fakeUsers{
+		superusers: map[string]bool{"root": true},
+		workspaces: map[string]string{me: workspace},
+	})
+	svc := clab.NewService()
+	svc.SetLabScoper(scoper)
+	ctx := context.Background()
+
+	topology := filepath.Join(workspace, "demo", "demo.clab.yml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(topology), 0o755))
+	require.NoError(t, os.WriteFile(topology, []byte("name: demo\ntopology:\n  nodes:\n    n1: {kind: linux, image: alpine}\n"), 0o644))
+	_, err = svc.Deploy(ctx, clab.DeployOptions{TopoPath: topology, LabName: "demo", Username: me})
+	require.NoError(t, err)
+	namespace := NamespaceName(DefaultNamespaceTemplate, me, "demo")
+
+	containers, err := svc.ListContainers(ctx, clab.ListOptions{Username: me, LabName: "demo"})
+	require.NoError(t, err)
+	require.Len(t, containers, 1)
+	require.Equal(t, topology, containers[0].Labels[clabconst.TopoFile], "the file the lab was deployed from")
+	require.Equal(t, me, containers[0].Labels[clabconst.Owner])
+
+	// The user edits the Topology's owner label and topology file annotation.
+	state := runtime.Lab(namespace, "demo")
+	require.NotNil(t, state)
+	state.Owner = "mallory"
+	state.TopologyPath = "/etc/shadow"
+	for _, opts := range []clab.ListOptions{{Username: me, LabName: "demo"}, {Username: me}, {Username: "root"}} {
+		containers, err = svc.ListContainers(ctx, opts)
+		require.NoError(t, err)
+		require.Len(t, containers, 1)
+		require.Equal(t, "k8s://"+namespace+"/topologies/demo", containers[0].Labels[clabconst.TopoFile], "listed as %+v", opts)
+		require.Equal(t, me, containers[0].Labels[clabconst.Owner], "listed as %+v", opts)
+	}
 }

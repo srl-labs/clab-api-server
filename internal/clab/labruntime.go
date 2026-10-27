@@ -88,6 +88,17 @@ type LabScoper interface {
 	AfterDestroy(ctx context.Context, scope LabScope, cleanup bool) error
 }
 
+// LabRecordVerifier is a LabScoper whose labs carry records their users can edit: on c9s
+// the lab's owner label and its topology file annotation live on the Topology, which the
+// lab's user may update. The service lets it check every listed lab node, so the server
+// only acts on an owner and a topology file it can vouch for.
+type LabRecordVerifier interface {
+	// VerifyLabRecords corrects the labels of listed lab nodes in place: the owner the
+	// server recorded for the lab, and the topology file only when it is one the lab's
+	// owner could deploy from on this host.
+	VerifyLabRecords(ctx context.Context, containers []clabruntime.GenericContainer) error
+}
+
 // serverScoper runs every lab runtime call with the server's own credentials and lets
 // containerlab choose the namespaces.
 type serverScoper struct{}

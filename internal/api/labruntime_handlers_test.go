@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/user"
 	"path/filepath"
 	"strings"
@@ -511,4 +512,25 @@ func TestEventsOnC9s(t *testing.T) {
 		labs = append(labs, event.Attributes["lab"])
 	}
 	require.Equal(t, []string{"lab1"}, labs, "events of other users' labs are filtered")
+}
+
+func TestKubeUsersInWorkspace(t *testing.T) {
+	labsRoot := t.TempDir()
+	setTestClabLabsRoot(t, labsRoot)
+	current, err := user.Current()
+	require.NoError(t, err)
+	workspace := filepath.Join(labsRoot, current.Username)
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "demo"), 0o755))
+	outside := t.TempDir()
+	require.NoError(t, os.Symlink(outside, filepath.Join(workspace, "escape")))
+
+	users := KubeUsers()
+	require.True(t, users.InWorkspace(current.Username, filepath.Join(workspace, "demo", "demo.clab.yml")))
+	require.True(t, users.InWorkspace(current.Username, filepath.Join(workspace, "new", "new.clab.yml")), "a file that is gone by now")
+	require.False(t, users.InWorkspace(current.Username, workspace), "the workspace itself")
+	require.False(t, users.InWorkspace(current.Username, filepath.Join(workspace, "..", "other", "x.clab.yml")))
+	require.False(t, users.InWorkspace(current.Username, filepath.Join(workspace, "escape", "x.clab.yml")), "a symbolic link out of the workspace")
+	require.False(t, users.InWorkspace(current.Username, "demo/demo.clab.yml"), "a relative path")
+	require.False(t, users.InWorkspace(current.Username, "/etc/passwd"))
+	require.False(t, users.InWorkspace("no-such-user-c9s", filepath.Join(workspace, "demo", "demo.clab.yml")))
 }
