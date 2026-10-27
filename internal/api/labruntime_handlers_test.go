@@ -20,11 +20,13 @@ import (
 	"github.com/gin-gonic/gin"
 	clablabruntime "github.com/srl-labs/containerlab/labruntime"
 	"github.com/stretchr/testify/require"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/srl-labs/clab-api-server/internal/auth"
 	"github.com/srl-labs/clab-api-server/internal/capture"
 	"github.com/srl-labs/clab-api-server/internal/clab"
 	"github.com/srl-labs/clab-api-server/internal/config"
+	"github.com/srl-labs/clab-api-server/internal/kube"
 	"github.com/srl-labs/clab-api-server/internal/models"
 	"github.com/srl-labs/clab-api-server/internal/testsupport/fakec9s"
 )
@@ -577,4 +579,73 @@ func TestKubeUsersInWorkspace(t *testing.T) {
 	require.False(t, users.InWorkspace(current.Username, "demo/demo.clab.yml"), "a relative path")
 	require.False(t, users.InWorkspace(current.Username, "/etc/passwd"))
 	require.False(t, users.InWorkspace("no-such-user-c9s", filepath.Join(workspace, "demo", "demo.clab.yml")))
+}
+
+// TestEventsAndInspectAgreeOnc9s runs the events stream and inspect with the c9s scoper after
+// the user edited the Topology's owner label and topology file annotation: both report the
+// server's records, never the edited values.
+func TestEventsAndInspectAgreeOnc9s(t *testing.T) {
+	api := newC9sAPI(t)
+	labsRoot := t.TempDir()
+	setTestClabLabsRoot(t, labsRoot)
+	topology := filepath.Join(labsRoot, api.username, "lab1", "lab1.clab.yml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(topology), 0o755))
+	require.NoError(t, os.WriteFile(topology, []byte("name: lab1\n"), 0o644))
+	provisioner := kube.NewProvisioner(k8sfake.NewClientset(), nil, kube.Settings{
+		UserPrefix: "clab:", NamespaceTemplate: kube.DefaultNamespaceTemplate,
+	})
+	scoper := kube.NewScoper(provisioner, KubeUsers())
+	scope, err := scoper.PrepareDeploy(context.Background(), api.username, "lab1", topology)
+	require.NoError(t, err)
+	api.svc.SetLabScoper(scoper)
+	api.fake.AddLab(scope.Namespace, "lab1", api.username, topology, "n1")
+
+	streamed := func() map[string]string {
+		t.Helper()
+		server := httptest.NewServer(api.router)
+		defer server.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		defer cancel()
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/api/v1/events", nil)
+		require.NoError(t, err)
+		request.Header.Set("Authorization", "Bearer "+api.token)
+		response, err := http.DefaultClient.Do(request)
+		require.NoError(t, err)
+		defer func() { _ = response.Body.Close() }()
+		body, _ := io.ReadAll(response.Body)
+		for _, line := range strings.Split(string(body), "\n") {
+			var event struct {
+				Type       string            `json:"type"`
+				Attributes map[string]string `json:"attributes"`
+			}
+			if json.Unmarshal([]byte(line), &event) == nil && event.Type == "container" {
+				return event.Attributes
+			}
+		}
+		t.Fatalf("no container event in %q", body)
+		return nil
+	}
+	inspected := func() models.ClabContainerInfo {
+		t.Helper()
+		recorder := api.do(http.MethodGet, "/api/v1/labs/lab1", nil)
+		require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+		var nodes []models.ClabContainerInfo
+		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &nodes))
+		require.Len(t, nodes, 1)
+		return nodes[0]
+	}
+
+	attributes, node := streamed(), inspected()
+	require.Equal(t, topology, attributes["clab-topo-file"])
+	require.Equal(t, api.username, attributes["clab-owner"])
+	require.Equal(t, node.AbsLabPath, attributes["clab-topo-file"])
+	require.Equal(t, node.Owner, attributes["clab-owner"])
+
+	state := api.fake.Lab(scope.Namespace, "lab1")
+	state.Owner, state.TopologyPath = "mallory", "/etc/shadow"
+	attributes, node = streamed(), inspected()
+	require.Equal(t, "k8s://"+scope.Namespace+"/topologies/lab1", attributes["clab-topo-file"])
+	require.Equal(t, api.username, attributes["clab-owner"])
+	require.Equal(t, node.AbsLabPath, attributes["clab-topo-file"], "events and inspect agree")
+	require.Equal(t, node.Owner, attributes["clab-owner"])
 }
