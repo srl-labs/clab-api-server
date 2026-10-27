@@ -6739,7 +6739,7 @@
         },
         "/health": {
             "get": {
-                "description": "Returns basic health status for the API server.\n\n**Notes**\n- `features` lists optional API capabilities (for example `exec-filters` or `snapshot-save`) so clients can detect what this server supports. Features the configured runtime cannot serve are left out.\n- `runtime` is the lab runtime the server runs labs with: `docker`, `podman` or `c9s` (Kubernetes through clabernetes).\n- `namespaceMode` is set for `c9s`: `per-lab` when every lab gets its own namespace, `fixed` when all labs share one.",
+                "description": "Returns basic health status for the API server.\n\n**Notes**\n- `features` lists optional API capabilities (for example `exec-filters` or `snapshot-save`) so clients can detect what this server supports. Features the configured runtime cannot serve are left out.\n- `runtime` is the lab runtime the server runs labs with: `docker`, `podman` or `c9s` (Kubernetes through clabernetes).\n- `namespaceMode` is set for `c9s`: `per-lab`, every lab of every user in its own namespace.",
                 "produces": [
                     "application/json"
                 ],
@@ -7834,7 +7834,7 @@
                     ]
                 },
                 "namespaceMode": {
-                    "description": "NamespaceMode is how c9s labs get namespaces: per-lab (one namespace per lab) or\nfixed (one namespace for every lab). It is only set for c9s.",
+                    "description": "NamespaceMode is how c9s labs get namespaces: per-lab (one namespace per lab of each\nuser). It is only set for c9s.",
                     "type": "string",
                     "enum": [
                         "per-lab",

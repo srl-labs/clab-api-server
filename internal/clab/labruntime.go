@@ -156,7 +156,7 @@ func labRuntimeDeployOptions(deployOpts *clabcore.DeployOptions) {
 	}
 	deployOpts.SetExposeType(config.AppConfig.ClabC9sExposeType).
 		SetNoPersistence(!config.AppConfig.ClabC9sPersistence).
-		SetImagePullSecret(config.AppConfig.ClabC9sImagePullSecret)
+		SetImagePullSecret(config.AppConfig.PullSecretName())
 }
 
 // labRuntimeLabOption selects a lab by name for a lab runtime: the topology file when it

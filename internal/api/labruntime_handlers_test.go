@@ -144,10 +144,9 @@ func TestHealthReportsTheRuntimeAndItsFeatures(t *testing.T) {
 	}
 
 	SetNodeStatsAvailability(func() bool { return false })
-	config.AppConfig.ClabKubeNamespace = "labs"
 	withoutMetrics := healthResponse(t)
 	require.NotContains(t, withoutMetrics.Features, "node-stats")
-	require.Equal(t, "fixed", withoutMetrics.NamespaceMode)
+	require.Equal(t, "per-lab", withoutMetrics.NamespaceMode)
 }
 
 func TestContainerRuntimeRoutesAnswer501OnC9s(t *testing.T) {

@@ -748,8 +748,8 @@ definitions:
         type: array
       namespaceMode:
         description: |-
-          NamespaceMode is how c9s labs get namespaces: per-lab (one namespace per lab) or
-          fixed (one namespace for every lab). It is only set for c9s.
+          NamespaceMode is how c9s labs get namespaces: per-lab (one namespace per lab of each
+          user). It is only set for c9s.
         enum:
         - per-lab
         - fixed
@@ -6517,7 +6517,7 @@ paths:
         **Notes**
         - `features` lists optional API capabilities (for example `exec-filters` or `snapshot-save`) so clients can detect what this server supports. Features the configured runtime cannot serve are left out.
         - `runtime` is the lab runtime the server runs labs with: `docker`, `podman` or `c9s` (Kubernetes through clabernetes).
-        - `namespaceMode` is set for `c9s`: `per-lab` when every lab gets its own namespace, `fixed` when all labs share one.
+        - `namespaceMode` is set for `c9s`: `per-lab`, every lab of every user in its own namespace.
       produces:
       - application/json
       responses:

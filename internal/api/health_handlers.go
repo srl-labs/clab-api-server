@@ -105,7 +105,7 @@ func InitHealth(version string) {
 // @Description **Notes**
 // @Description - `features` lists optional API capabilities (for example `exec-filters` or `snapshot-save`) so clients can detect what this server supports. Features the configured runtime cannot serve are left out.
 // @Description - `runtime` is the lab runtime the server runs labs with: `docker`, `podman` or `c9s` (Kubernetes through clabernetes).
-// @Description - `namespaceMode` is set for `c9s`: `per-lab` when every lab gets its own namespace, `fixed` when all labs share one.
+// @Description - `namespaceMode` is set for `c9s`: `per-lab`, every lab of every user in its own namespace.
 // @Tags Health
 // @Produce json
 // @Success 200 {object} models.HealthResponse "Basic health information"
