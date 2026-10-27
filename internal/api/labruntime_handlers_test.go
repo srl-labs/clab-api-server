@@ -228,6 +228,8 @@ func TestInspectListAndLifecycleOnC9s(t *testing.T) {
 	require.Equal(t, "c9s-lab1", nodes[0].Namespace)
 	require.Equal(t, "c9s-lab1/lab1/n1", nodes[0].ContainerID)
 	require.Equal(t, "lab1-n1-pod", nodes[0].Pod)
+	require.Equal(t, "running", nodes[0].State, "Docker's state vocabulary")
+	require.Equal(t, "healthy", nodes[0].Status)
 
 	recorder = api.do(http.MethodGet, "/api/v1/labs", nil)
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
@@ -515,21 +517,45 @@ func TestEventsOnC9s(t *testing.T) {
 	require.Equal(t, http.StatusOK, response.StatusCode)
 	body, _ := io.ReadAll(response.Body) // ends at the deadline
 
-	var labs []string
+	type event struct {
+		Type       string            `json:"type"`
+		Action     string            `json:"action"`
+		ActorID    string            `json:"actor_id"`
+		Attributes map[string]string `json:"attributes"`
+	}
+	var events []event
 	for _, line := range strings.Split(string(body), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		var event struct {
-			Type       string            `json:"type"`
-			Action     string            `json:"action"`
-			Attributes map[string]string `json:"attributes"`
-		}
-		require.NoError(t, json.Unmarshal([]byte(line), &event), line)
-		require.Equal(t, "interface", event.Type)
-		labs = append(labs, event.Attributes["lab"])
+		var parsed event
+		require.NoError(t, json.Unmarshal([]byte(line), &parsed), line)
+		require.Equal(t, "c9s-lab1", parsed.Attributes["namespace"], "events of other users' labs are filtered: %s", line)
+		events = append(events, parsed)
 	}
-	require.Equal(t, []string{"lab1"}, labs, "events of other users' labs are filtered")
+	require.Len(t, events, 2)
+
+	// containerlab describes c9s nodes with the attributes of Docker events, so the server's
+	// own ownership check reads the same labels as for Docker.
+	container := events[0]
+	require.Equal(t, "container", container.Type)
+	require.Equal(t, "start", container.Action)
+	require.Equal(t, "c9s-lab1/lab1/n1", container.ActorID)
+	for key, value := range map[string]string{
+		"containerlab": "lab1", "clab-node-name": "n1", "clab-node-longname": "lab1-n1", "clab-node-kind": "linux",
+		"clab-owner": api.username, "clab-topo-file": "k8s://c9s-lab1/topologies/lab1", "image": "alpine",
+		"mgmt_ipv4": "10.0.0.1/32", "state": "running",
+	} {
+		require.Equal(t, value, container.Attributes[key], "attribute %s", key)
+	}
+	iface := events[1]
+	require.Equal(t, "interface", iface.Type)
+	require.Equal(t, "create", iface.Action)
+	for key, value := range map[string]string{
+		"lab": "lab1", "ifname": "eth1", "state": "up", "type": "veth", "mtu": "9500", "mac": "aa:c1:ab:00:00:01",
+	} {
+		require.Equal(t, value, iface.Attributes[key], "attribute %s", key)
+	}
 }
 
 func TestKubeUsersInWorkspace(t *testing.T) {

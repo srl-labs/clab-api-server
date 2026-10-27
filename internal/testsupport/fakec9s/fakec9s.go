@@ -141,6 +141,8 @@ func (f *Runtime) Lab(namespace, name string) *clablabruntime.LabState {
 func (f *Runtime) nodeStateLocked(namespace, lab, node string) clablabruntime.NodeState {
 	return clablabruntime.NodeState{
 		Name: node, Kind: "linux", Image: "alpine", State: "running", Ready: true,
+		ContainerState:  clablabruntime.ContainerStateRunning,
+		Health:          clablabruntime.ContainerHealthHealthy,
 		MgmtIPv4Address: "10.0.0.1/32",
 		Pod:             lab + "-" + node + "-pod",
 		Container:       "node-" + node,
@@ -351,7 +353,9 @@ func (r *instance) StreamEvents(ctx context.Context, req clablabruntime.EventStr
 	if err := r.record(Call{Op: "events", Lab: req.Name, Namespace: namespace, Identity: r.identity(req.Identity)}); err != nil {
 		return nil, nil, err
 	}
-	// One interface event per lab the stream covers, then nothing until the stream ends.
+	// For every node of the labs the stream covers a container start and the creation of its
+	// eth1, as the c9s runtime reports them (the events command describes the node from Lab
+	// and Node), then nothing until the stream ends.
 	r.fake.mu.Lock()
 	var events []clablabruntime.Event
 	keys := make([]string, 0, len(r.fake.labs))
@@ -364,11 +368,31 @@ func (r *instance) StreamEvents(ctx context.Context, req clablabruntime.EventStr
 		if (namespace != "" && state.Namespace != namespace) || (req.Name != "" && state.Name != req.Name) {
 			continue
 		}
-		events = append(events, clablabruntime.Event{
-			Timestamp: time.Now(), Type: "interface", Action: "up",
-			ActorID: state.Namespace + "/" + state.Name + "/n1", ActorName: state.Name + "-n1",
-			Attributes: map[string]string{"lab": state.Name, "ifname": "eth1", "namespace": state.Namespace, "origin": "clabernetes"},
-		})
+		lab := *state
+		lab.Nodes = slices.Clone(state.Nodes)
+		for idx := range lab.Nodes {
+			node := lab.Nodes[idx]
+			actorID := state.Namespace + "/" + state.Name + "/" + node.Name
+			own := map[string]string{"namespace": state.Namespace, "node": node.Name, "pod": node.Pod}
+			container := map[string]string{"state": node.ContainerState}
+			for key, value := range own {
+				container[key] = value
+			}
+			events = append(events,
+				clablabruntime.Event{
+					Timestamp: time.Now(), Type: clablabruntime.EventTypeContainer, Action: "start",
+					ActorID: actorID, ActorName: state.Name + "-" + node.Name, ActorFullID: actorID,
+					Attributes: container, Lab: &lab, Node: &node,
+				},
+				clablabruntime.Event{
+					Timestamp: time.Now(), Type: clablabruntime.EventTypeInterface, Action: "create",
+					ActorID: actorID, ActorName: state.Name + "-" + node.Name,
+					Attributes: own, Lab: &lab, Node: &node,
+					Interface: &clablabruntime.InterfaceEventData{
+						Name: "eth1", MTU: 9500, MAC: "aa:c1:ab:00:00:01", OperState: "up", Type: "veth",
+					},
+				})
+		}
 	}
 	r.fake.mu.Unlock()
 	eventCh := make(chan clablabruntime.Event, len(events))
