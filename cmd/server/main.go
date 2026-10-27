@@ -325,7 +325,7 @@ func initLabRuntime(_ *clab.Service) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), labRuntimeStartupTimeout)
 	defer cancel()
-	if err := kube.CheckStartup(ctx, clients, kube.ServerIdentityPermissions(config.AppConfig.ClabKubeNamespace)); err != nil {
+	if err := kube.CheckStartup(ctx, clients, kube.ServerIdentityPermissions(config.AppConfig.ClabKubeNamespace), kube.CheckLabRuntimeSupport); err != nil {
 		return err
 	}
 

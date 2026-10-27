@@ -1,5 +1,5 @@
 // Package kube holds the server's own Kubernetes calls for CLAB_RUNTIME=c9s: loading the
-// cluster connection, the startup checks and (later) namespace provisioning. Lab
+// cluster connection and the startup checks. Lab
 // operations themselves go through the containerlab library.
 package kube
 
@@ -11,21 +11,17 @@ import (
 	"sync"
 	"time"
 
+	clabcore "github.com/srl-labs/containerlab/core"
+	clablabruntime "github.com/srl-labs/containerlab/labruntime"
+	clabruntime "github.com/srl-labs/containerlab/runtime"
+
 	authorizationv1 "k8s.io/api/authorization/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
-	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
-
-// MinClabernetesFeature names what the server needs from clabernetes: the node run state
-// (Node.spec.runState) that node start and stop rely on.
-const MinClabernetesFeature = "clabernetes with node run state (Node.spec.runState, clabernetes 0.11 or later)"
 
 // ConnectionSettings select the cluster, like containerlab's CLAB_KUBECONFIG and
 // CLAB_KUBE_CONTEXT. Without a kubeconfig the default loading rules apply: KUBECONFIG,
@@ -55,7 +51,6 @@ func RestConfig(settings ConnectionSettings) (*rest.Config, error) {
 // Clients are the server's own Kubernetes clients.
 type Clients struct {
 	Kube      kubernetes.Interface
-	Dynamic   dynamic.Interface
 	Discovery discovery.DiscoveryInterface
 	// Config is the rest config the clients were built from; nil with injected clients.
 	Config *rest.Config
@@ -67,50 +62,22 @@ func NewClients(config *rest.Config) (*Clients, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
-	dyn, err := dynamic.NewForConfig(config)
+	return &Clients{Kube: kube, Discovery: kube.Discovery(), Config: config}, nil
+}
+
+// SupportCheck asks the lab runtime whether the cluster's clabernetes is recent enough.
+type SupportCheck func(ctx context.Context) error
+
+// CheckLabRuntimeSupport runs containerlab's clabernetes release check with the server's
+// own connection: the published OpenAPI schema of nodes.c9s.run must have spec.runState.
+// Every authenticated identity may read that document, so it needs no extra rights.
+func CheckLabRuntimeSupport(ctx context.Context) error {
+	lab, err := clabcore.NewContainerLab(clabcore.WithRuntime(clablabruntime.ClabernetesRuntimeName,
+		&clabruntime.RuntimeConfig{Timeout: time.Minute}))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create Kubernetes dynamic client: %w", err)
+		return fmt.Errorf("initializing the c9s lab runtime: %w", err)
 	}
-	return &Clients{Kube: kube, Dynamic: dyn, Discovery: kube.Discovery(), Config: config}, nil
-}
-
-var crdGVR = schema.GroupVersionResource{
-	Group:    "apiextensions.k8s.io",
-	Version:  "v1",
-	Resource: "customresourcedefinitions",
-}
-
-// NodeCRDName is the clabernetes Node CRD.
-const NodeCRDName = "nodes.c9s.run"
-
-// CheckClabernetes verifies that clabernetes is installed and supports node run state:
-// the nodes.c9s.run CRD has spec.runState in its v1alpha1 schema.
-func CheckClabernetes(ctx context.Context, dyn dynamic.Interface) error {
-	crd, err := dyn.Resource(crdGVR).Get(ctx, NodeCRDName, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return fmt.Errorf("clabernetes is not installed: CRD %s not found; install %s", NodeCRDName, MinClabernetesFeature)
-	}
-	if err != nil {
-		return fmt.Errorf("failed to read CRD %s: %w", NodeCRDName, err)
-	}
-	if !nodeCRDHasRunState(crd) {
-		return fmt.Errorf("clabernetes is too old: CRD %s has no spec.runState; install %s", NodeCRDName, MinClabernetesFeature)
-	}
-	return nil
-}
-
-func nodeCRDHasRunState(crd *unstructured.Unstructured) bool {
-	versions, _, _ := unstructured.NestedSlice(crd.Object, "spec", "versions")
-	for _, raw := range versions {
-		version, ok := raw.(map[string]any)
-		if !ok || version["name"] != "v1alpha1" {
-			continue
-		}
-		_, found, _ := unstructured.NestedMap(version,
-			"schema", "openAPIV3Schema", "properties", "spec", "properties", "runState")
-		return found
-	}
-	return false
+	return lab.CheckLabRuntimeSupport(ctx)
 }
 
 // Permission is one access the server needs, checked with a SelfSubjectAccessReview.
@@ -233,7 +200,6 @@ var ErrStartup = errors.New("c9s startup check failed")
 // empty when every lab gets its own namespace, which containerlab then creates.
 func ServerIdentityPermissions(namespace string) []Permission {
 	permissions := []Permission{
-		{Verb: "get", Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions", Name: NodeCRDName, Why: "clabernetes version check"},
 		{Verb: "create", Group: "c9s.run", Resource: "topologies", Namespace: namespace, Why: "deploy labs"},
 		{Verb: "patch", Group: "c9s.run", Resource: "nodes", Namespace: namespace, Why: "start and stop nodes"},
 		{Verb: "create", Resource: "pods", Subresource: "exec", Namespace: namespace, Why: "exec and terminals"},
@@ -249,11 +215,11 @@ func ServerIdentityPermissions(namespace string) []Permission {
 }
 
 // CheckStartup runs the startup checks: every permission, then clabernetes support.
-func CheckStartup(ctx context.Context, clients *Clients, permissions []Permission) error {
+func CheckStartup(ctx context.Context, clients *Clients, permissions []Permission, support SupportCheck) error {
 	if err := CheckPermissions(ctx, clients.Kube, permissions); err != nil {
 		return fmt.Errorf("%w: %w", ErrStartup, err)
 	}
-	if err := CheckClabernetes(ctx, clients.Dynamic); err != nil {
+	if err := support(ctx); err != nil {
 		return fmt.Errorf("%w: %w", ErrStartup, err)
 	}
 	return nil

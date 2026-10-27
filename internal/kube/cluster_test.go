@@ -2,61 +2,23 @@ package kube
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	clablabruntime "github.com/srl-labs/containerlab/labruntime"
+
 	"github.com/stretchr/testify/require"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	fakediscovery "k8s.io/client-go/discovery/fake"
-	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 )
-
-func nodeCRD(withRunState bool) *unstructured.Unstructured {
-	specProperties := map[string]any{"definition": map[string]any{"type": "object"}}
-	if withRunState {
-		specProperties["runState"] = map[string]any{"type": "string"}
-	}
-	return &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "apiextensions.k8s.io/v1",
-		"kind":       "CustomResourceDefinition",
-		"metadata":   map[string]any{"name": NodeCRDName},
-		"spec": map[string]any{
-			"versions": []any{map[string]any{
-				"name": "v1alpha1",
-				"schema": map[string]any{"openAPIV3Schema": map[string]any{
-					"properties": map[string]any{"spec": map[string]any{"properties": specProperties}},
-				}},
-			}},
-		},
-	}}
-}
-
-func dynamicClient(objects ...runtime.Object) *dynamicfake.FakeDynamicClient {
-	scheme := runtime.NewScheme()
-	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme,
-		map[schema.GroupVersionResource]string{crdGVR: "CustomResourceDefinitionList"}, objects...)
-}
-
-func TestCheckClabernetes(t *testing.T) {
-	ctx := context.Background()
-	require.NoError(t, CheckClabernetes(ctx, dynamicClient(nodeCRD(true))))
-
-	err := CheckClabernetes(ctx, dynamicClient(nodeCRD(false)))
-	require.ErrorContains(t, err, "too old")
-	require.ErrorContains(t, err, "runState")
-
-	err = CheckClabernetes(ctx, dynamicClient())
-	require.ErrorContains(t, err, "not installed")
-}
 
 // allowOnly answers SelfSubjectAccessReviews: allowed when allow returns true.
 func allowOnly(allow func(*authorizationv1.ResourceAttributes) bool) *fake.Clientset {
@@ -87,24 +49,32 @@ func TestCheckPermissionsListsEveryDenial(t *testing.T) {
 func TestServerIdentityPermissionsInFixedNamespace(t *testing.T) {
 	for _, permission := range ServerIdentityPermissions("labs") {
 		require.NotEqual(t, "namespaces", permission.Resource, "a fixed namespace needs no namespace rights")
-		if permission.Resource != "customresourcedefinitions" {
-			require.Equal(t, "labs", permission.Namespace, permission.String())
-		}
+		require.Equal(t, "labs", permission.Namespace, permission.String())
 	}
 }
 
 func TestCheckStartup(t *testing.T) {
 	ctx := context.Background()
 	allowAll := allowOnly(func(*authorizationv1.ResourceAttributes) bool { return true })
-	require.NoError(t, CheckStartup(ctx, &Clients{Kube: allowAll, Dynamic: dynamicClient(nodeCRD(true))}, ServerIdentityPermissions("")))
+	supported := func(context.Context) error { return nil }
+	tooOld := func(context.Context) error {
+		return fmt.Errorf("%w: nodes.c9s.run has no spec.runState", clablabruntime.ErrUnsupportedRuntimeVersion)
+	}
+	require.NoError(t, CheckStartup(ctx, &Clients{Kube: allowAll}, ServerIdentityPermissions(""), supported))
 
-	err := CheckStartup(ctx, &Clients{Kube: allowAll, Dynamic: dynamicClient(nodeCRD(false))}, ServerIdentityPermissions(""))
+	err := CheckStartup(ctx, &Clients{Kube: allowAll}, ServerIdentityPermissions(""), tooOld)
 	require.ErrorIs(t, err, ErrStartup)
+	require.ErrorIs(t, err, clablabruntime.ErrUnsupportedRuntimeVersion)
 
 	denyAll := allowOnly(func(*authorizationv1.ResourceAttributes) bool { return false })
-	err = CheckStartup(ctx, &Clients{Kube: denyAll, Dynamic: dynamicClient(nodeCRD(true))}, ServerIdentityPermissions(""))
+	checked := false
+	err = CheckStartup(ctx, &Clients{Kube: denyAll}, ServerIdentityPermissions(""), func(context.Context) error {
+		checked = true
+		return nil
+	})
 	require.ErrorIs(t, err, ErrStartup)
 	require.ErrorContains(t, err, "lacks permissions")
+	require.False(t, checked, "permissions are checked first")
 }
 
 func TestMetricsProbeCachesTheAnswer(t *testing.T) {

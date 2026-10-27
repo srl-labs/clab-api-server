@@ -8,7 +8,7 @@ behave as `containerlab deploy -r c9s` labs do.
 ## Requirements
 
 - Kubernetes 1.31 or later.
-- clabernetes with node run state (`Node.spec.runState`, clabernetes 0.11 or later). The
+- clabernetes with node run state and the clabwire capture contract (0.11 or later). The
   server refuses to start against an older clabernetes.
 - Lab namespaces run with the Pod Security level `privileged`: device containers and the
   clabwire sidecar are privileged.
@@ -34,7 +34,8 @@ Before it serves requests the server:
 
 1. runs a `SelfSubjectAccessReview` for every permission it needs and lists every one that
    is denied, and
-2. reads the `nodes.c9s.run` CRD and requires `spec.runState`.
+2. runs containerlab's clabernetes release check: the published OpenAPI schema of
+   `nodes.c9s.run` must have `spec.runState` (any authenticated identity may read it).
 
 If either fails, it exits with a message that names what is missing.
 
