@@ -2,8 +2,10 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,6 +14,7 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
 
+	"github.com/srl-labs/clab-api-server/internal/clab"
 	"github.com/srl-labs/clab-api-server/internal/config"
 	"github.com/srl-labs/clab-api-server/internal/models"
 	"github.com/srl-labs/clab-api-server/internal/ssh"
@@ -125,34 +128,55 @@ func RequestSSHAccessHandler(c *gin.Context) {
 	if strings.HasPrefix(containerName, prefix) {
 		nodeName = strings.TrimPrefix(containerName, prefix)
 	}
-
-	// Extract container IP for SSH access
-	containerIP := containerInfo.IPv4Address
-	if containerIP == "" {
-		log.Warnf("SSH Access failed for user '%s': Container '%s' has no IPv4 address", username, containerName)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Container has no IPv4 address for SSH access."})
+	if containerInfo.LabName != labName {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error: fmt.Sprintf("Container '%s' does not belong to lab '%s'", containerName, labName),
+		})
 		return
 	}
 
-	// Extract IP without CIDR notation if present
-	if strings.Contains(containerIP, "/") {
-		containerIP = strings.Split(containerIP, "/")[0]
+	var session *ssh.SSHSession
+	if clab.IsLabRuntime() {
+		// On a lab runtime every proxied connection is a port-forward to the node's
+		// port 22, opened as the user.
+		if containerInfo.NodeName != "" {
+			nodeName = containerInfo.NodeName
+		}
+		svc := GetClabService()
+		node := nodeName
+		session, err = sshManager.CreateSessionWithDialer(username, labName, nodeName, sshUsername,
+			func(ctx context.Context) (net.Conn, error) {
+				return svc.DialNodePort(ctx, username, labName, node, 22)
+			}, duration)
+	} else {
+		// Extract container IP for SSH access
+		containerIP := containerInfo.IPv4Address
+		if containerIP == "" {
+			log.Warnf("SSH Access failed for user '%s': Container '%s' has no IPv4 address", username, containerName)
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Container has no IPv4 address for SSH access."})
+			return
+		}
+
+		// Extract IP without CIDR notation if present
+		if strings.Contains(containerIP, "/") {
+			containerIP = strings.Split(containerIP, "/")[0]
+		}
+
+		// Standard SSH port is 22, but some containers might use different ports
+		// This could be made configurable per node type
+		containerPort := 22
+
+		// Create SSH session
+		session, err = sshManager.CreateSession(
+			username,
+			labName,
+			nodeName, // Using the extracted nodeName for session data
+			sshUsername,
+			containerIP,
+			containerPort,
+			duration,
+		)
 	}
-
-	// Standard SSH port is 22, but some containers might use different ports
-	// This could be made configurable per node type
-	containerPort := 22
-
-	// Create SSH session
-	session, err := sshManager.CreateSession(
-		username,
-		labName,
-		nodeName, // Using the extracted nodeName for session data
-		sshUsername,
-		containerIP,
-		containerPort,
-		duration,
-	)
 
 	if err != nil {
 		log.Errorf("SSH Access failed for user '%s': Failed to create SSH session: %v", username, err)

@@ -2958,6 +2958,88 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/v1/labs/{labName}/nodes/{nodeName}/ports/{port}/proxy/{proxyPath}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Proxies an HTTP request (including WebSocket upgrades) to a TCP port of a lab node, through a Kubernetes port-forward opened as the caller.\n\n**Notes**\n- Only available with a lab runtime (` + "`" + `runtime` + "`" + ` ` + "`" + `c9s` + "`" + ` on ` + "`" + `/health` + "`" + `); other runtimes answer 501 and publish host ports instead.\n- ` + "`" + `browser-ports` + "`" + ` lists the ports with their ` + "`" + `proxyPath` + "`" + `.\n- The request is sent to the node without the ` + "`" + `Authorization` + "`" + ` header.",
+                "tags": [
+                    "Labs - Nodes"
+                ],
+                "summary": "Proxy HTTP to a node port",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Lab name",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Node name",
+                        "name": "nodeName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Node TCP port",
+                        "name": "port",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Path on the node",
+                        "name": "proxyPath",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Response of the node",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "Not supported by the runtime",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "502": {
+                        "description": "Node port not reachable",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/labs/{labName}/nodes/{nodeName}/restart": {
             "post": {
                 "security": [
@@ -6661,7 +6743,7 @@ const docTemplate = `{
         },
         "/health": {
             "get": {
-                "description": "Returns basic health status for the API server.\n\n**Notes**\n- ` + "`" + `features` + "`" + ` lists optional API capabilities (for example ` + "`" + `exec-filters` + "`" + ` or ` + "`" + `snapshot-save` + "`" + `) so clients can detect what this server supports.",
+                "description": "Returns basic health status for the API server.\n\n**Notes**\n- ` + "`" + `features` + "`" + ` lists optional API capabilities (for example ` + "`" + `exec-filters` + "`" + ` or ` + "`" + `snapshot-save` + "`" + `) so clients can detect what this server supports. Features the configured runtime cannot serve are left out.\n- ` + "`" + `runtime` + "`" + ` is the lab runtime the server runs labs with: ` + "`" + `docker` + "`" + `, ` + "`" + `podman` + "`" + ` or ` + "`" + `c9s` + "`" + ` (Kubernetes through clabernetes).\n- ` + "`" + `namespaceMode` + "`" + ` is set for ` + "`" + `c9s` + "`" + `: ` + "`" + `per-lab` + "`" + ` when every lab gets its own namespace, ` + "`" + `fixed` + "`" + ` when all labs share one.",
                 "produces": [
                     "application/json"
                 ],
@@ -6786,6 +6868,14 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                },
+                "runtimePlan": {
+                    "description": "RuntimePlan is the remote resource plan of a dry run on a lab runtime (c9s).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.LabRuntimePlan"
+                        }
+                    ]
                 },
                 "startedNodes": {
                     "type": "array",
@@ -7096,9 +7186,21 @@ const docTemplate = `{
                     "description": "Absolute path to topology file",
                     "type": "string"
                 },
+                "container": {
+                    "description": "Container is the node's primary device container in the Pod.",
+                    "type": "string",
+                    "example": "node-srl1-6b1f"
+                },
                 "container_id": {
                     "description": "Docker container ID (short)",
                     "type": "string"
+                },
+                "exposed_ports": {
+                    "description": "ExposedPorts are the node ports published through the node's Service.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ClabExposedPort"
+                    }
                 },
                 "group": {
                     "description": "Group assigned in topology (Might not always be present)",
@@ -7128,6 +7230,11 @@ const docTemplate = `{
                     "description": "Name of the lab this node belongs to (redundant with map key but present)",
                     "type": "string"
                 },
+                "load_balancer_address": {
+                    "description": "LoadBalancerAddress is the address of the LoadBalancer Service that exposes the node.",
+                    "type": "string",
+                    "example": "203.0.113.10"
+                },
                 "mgmt_network": {
                     "description": "MgmtNetwork is the management network the node is attached to; with\nseveral management networks (mgmt list in the topology) it tells them apart.",
                     "type": "string",
@@ -7137,13 +7244,27 @@ const docTemplate = `{
                     "description": "Name of the container node (e.g., \"lab01-client1\")",
                     "type": "string"
                 },
+                "namespace": {
+                    "description": "Namespace is the Kubernetes namespace of the lab.",
+                    "type": "string",
+                    "example": "c9s-alice-lab01"
+                },
                 "nodeName": {
                     "description": "Topology node name from containerlab labels",
+                    "type": "string"
+                },
+                "node_uid": {
+                    "description": "NodeUID is the UID of the clabernetes Node resource.",
                     "type": "string"
                 },
                 "owner": {
                     "description": "OS user from clab inspect output (Used for authorization)",
                     "type": "string"
+                },
+                "pod": {
+                    "description": "Pod is the Pod that runs the node.",
+                    "type": "string",
+                    "example": "lab01-srl1-5c9d8f7b6-x2x7k"
                 },
                 "ports": {
                     "description": "Published ports, as in ` + "`" + `clab inspect --format json` + "`" + `",
@@ -7183,6 +7304,23 @@ const docTemplate = `{
                 "stdout": {
                     "description": "Standard output of the command",
                     "type": "string"
+                }
+            }
+        },
+        "models.ClabExposedPort": {
+            "type": "object",
+            "properties": {
+                "expose_port": {
+                    "type": "integer",
+                    "example": 22
+                },
+                "port": {
+                    "type": "integer",
+                    "example": 22
+                },
+                "protocol": {
+                    "type": "string",
+                    "example": "tcp"
                 }
             }
         },
@@ -7699,6 +7837,25 @@ const docTemplate = `{
                         "exec-filters"
                     ]
                 },
+                "namespaceMode": {
+                    "description": "NamespaceMode is how c9s labs get namespaces: per-lab (one namespace per lab) or\nfixed (one namespace for every lab). It is only set for c9s.",
+                    "type": "string",
+                    "enum": [
+                        "per-lab",
+                        "fixed"
+                    ],
+                    "example": "per-lab"
+                },
+                "runtime": {
+                    "description": "Runtime is the lab runtime the server runs labs with: docker, podman or c9s.",
+                    "type": "string",
+                    "enum": [
+                        "docker",
+                        "podman",
+                        "c9s"
+                    ],
+                    "example": "docker"
+                },
                 "startTime": {
                     "description": "When the server started",
                     "type": "string"
@@ -7846,6 +8003,41 @@ const docTemplate = `{
                     "description": "Link type: \"veth\" for veth pairs, \"macvlan\" for macvlan interfaces whose\nB endpoint is the parent interface.",
                     "type": "string",
                     "example": "veth"
+                }
+            }
+        },
+        "models.LabRuntimePlan": {
+            "type": "object",
+            "properties": {
+                "changes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.LabRuntimePlanChange"
+                    }
+                },
+                "namespace": {
+                    "type": "string",
+                    "example": "c9s-alice-lab01"
+                }
+            }
+        },
+        "models.LabRuntimePlanChange": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "example": "recreate"
+                },
+                "kind": {
+                    "type": "string",
+                    "example": "Node"
+                },
+                "name": {
+                    "type": "string",
+                    "example": "srl1"
+                },
+                "namespace": {
+                    "type": "string"
                 }
             }
         },
@@ -8179,6 +8371,11 @@ const docTemplate = `{
                 },
                 "protocol": {
                     "type": "string"
+                },
+                "proxyPath": {
+                    "description": "ProxyPath is set on a lab runtime (c9s), where nodes have no host ports: the\nserver proxies HTTP to the node's port under this path, with the caller's token.",
+                    "type": "string",
+                    "example": "/api/v1/labs/lab01/nodes/srl1/ports/80/proxy/"
                 }
             }
         },

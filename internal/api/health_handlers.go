@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"runtime"
-	"slices"
 	"time"
 
 	"github.com/charmbracelet/log"
@@ -16,6 +15,8 @@ import (
 	"github.com/shirou/gopsutil/v4/load"
 	"github.com/shirou/gopsutil/v4/mem"
 	"github.com/shirou/gopsutil/v4/process"
+	"github.com/srl-labs/clab-api-server/internal/clab"
+	"github.com/srl-labs/clab-api-server/internal/config"
 	"github.com/srl-labs/clab-api-server/internal/models"
 )
 
@@ -27,6 +28,7 @@ var apiServerVersion = "development"
 
 // serverFeatures lists optional API features advertised on /health so clients
 // can hide functionality that older servers do not provide. Append new entries.
+// healthFeatures leaves out what the configured runtime cannot serve.
 var serverFeatures = []string{
 	"validate",
 	"graph-mermaid",
@@ -42,6 +44,53 @@ var serverFeatures = []string{
 	"node-stats",
 	"log-stream",
 	"terminal-resume",
+	// node-logs-runtime: node logs come from the configured runtime (CLAB_RUNTIME),
+	// including the device container log on c9s.
+	"node-logs-runtime",
+	// interface-state: the events stream reports interface up/down events.
+	"interface-state",
+	// c9s-runtime: labs run on Kubernetes through clabernetes (only with CLAB_RUNTIME=c9s).
+	"c9s-runtime",
+}
+
+// containerRuntimeOnlyFeatures need Docker or Podman on the server host.
+var containerRuntimeOnlyFeatures = map[string]bool{
+	"sshx-readers":   true,
+	"gotty-options":  true,
+	"snapshot-save":  true,
+	"deploy-restore": true,
+}
+
+// labRuntimeOnlyFeatures need a lab runtime (c9s).
+var labRuntimeOnlyFeatures = map[string]bool{
+	"c9s-runtime": true,
+}
+
+// nodeStatsAvailable reports whether the runtime can sample node CPU and memory. On c9s
+// that needs the resource metrics API (metrics.k8s.io); nil means always available.
+var nodeStatsAvailable func() bool
+
+// SetNodeStatsAvailability sets how /health learns whether node stats can be served.
+func SetNodeStatsAvailability(available func() bool) {
+	nodeStatsAvailable = available
+}
+
+// healthFeatures returns the features the server can serve with its runtime.
+func healthFeatures() []string {
+	labRuntime := clab.IsLabRuntime()
+	features := make([]string, 0, len(serverFeatures))
+	for _, feature := range serverFeatures {
+		switch {
+		case labRuntime && containerRuntimeOnlyFeatures[feature]:
+			continue
+		case !labRuntime && labRuntimeOnlyFeatures[feature]:
+			continue
+		case feature == "node-stats" && nodeStatsAvailable != nil && !nodeStatsAvailable():
+			continue
+		}
+		features = append(features, feature)
+	}
+	return features
 }
 
 // InitHealth sets the server start time for uptime tracking and stores the version
@@ -54,7 +103,9 @@ func InitHealth(version string) {
 // @Description Returns basic health status for the API server.
 // @Description
 // @Description **Notes**
-// @Description - `features` lists optional API capabilities (for example `exec-filters` or `snapshot-save`) so clients can detect what this server supports.
+// @Description - `features` lists optional API capabilities (for example `exec-filters` or `snapshot-save`) so clients can detect what this server supports. Features the configured runtime cannot serve are left out.
+// @Description - `runtime` is the lab runtime the server runs labs with: `docker`, `podman` or `c9s` (Kubernetes through clabernetes).
+// @Description - `namespaceMode` is set for `c9s`: `per-lab` when every lab gets its own namespace, `fixed` when all labs share one.
 // @Tags Health
 // @Produce json
 // @Success 200 {object} models.HealthResponse "Basic health information"
@@ -70,7 +121,11 @@ func HealthCheckHandler(c *gin.Context) {
 		Uptime:    uptimeStr,
 		StartTime: serverStartTime,
 		Version:   apiServerVersion,
-		Features:  slices.Clone(serverFeatures),
+		Features:  healthFeatures(),
+		Runtime:   clab.RuntimeKind(),
+	}
+	if mode := config.AppConfig.NamespaceMode(); mode != "" {
+		response.NamespaceMode = mode
 	}
 
 	c.JSON(http.StatusOK, response)

@@ -630,9 +630,9 @@ func DestroyLabHandler(c *gin.Context) {
 
 	runDestroy := func() error {
 		if err := svc.Destroy(ctx, destroyOpts); err != nil {
-			return fmt.Errorf("Failed to destroy lab '%s': %s", labName, err.Error())
+			return fmt.Errorf("failed to destroy lab '%s': %w", labName, err)
 		}
-		if err := ensureLabDestroyed(ctx, svc, labName); err != nil {
+		if err := ensureLabDestroyed(ctx, svc, username, labName); err != nil {
 			return err
 		}
 		return nil
@@ -699,7 +699,7 @@ func DestroyLabHandler(c *gin.Context) {
 		lifecycleLogs = logs
 		if destroyErr != nil {
 			log.Errorf("DestroyLab failed for user '%s', lab '%s': %v", username, labName, destroyErr)
-			c.JSON(http.StatusInternalServerError, gin.H{
+			c.JSON(serviceErrorStatus(destroyErr, http.StatusInternalServerError), gin.H{
 				"error": destroyErr.Error(),
 				"logs":  lifecycleLogs,
 			})
@@ -708,7 +708,7 @@ func DestroyLabHandler(c *gin.Context) {
 	} else {
 		if destroyErr := runDestroy(); destroyErr != nil {
 			log.Errorf("DestroyLab failed for user '%s', lab '%s': %v", username, labName, destroyErr)
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: destroyErr.Error()})
+			c.JSON(serviceErrorStatus(destroyErr, http.StatusInternalServerError), models.ErrorResponse{Error: destroyErr.Error()})
 			return
 		}
 	}
@@ -866,7 +866,7 @@ func RedeployLabHandler(c *gin.Context) {
 		}
 		// containerlab can report success with cleanup enabled although
 		// containers were left behind; never deploy over a half-destroyed lab.
-		if err := ensureLabDestroyed(ctx, svc, labName); err != nil {
+		if err := ensureLabDestroyed(ctx, svc, username, labName); err != nil {
 			return nil, err
 		}
 
@@ -997,7 +997,7 @@ func InspectLabHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
 	defer cancel()
 
-	containers, err := svc.ListContainers(ctx, clab.ListOptions{LabName: labName})
+	containers, err := svc.ListContainers(ctx, clab.ListOptions{Username: username, LabName: labName})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to inspect lab '%s': %s", labName, err.Error())})
 		return
@@ -1061,7 +1061,7 @@ func InspectInterfacesHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
 	defer cancel()
 
-	containers, err := svc.ListContainers(ctx, clab.ListOptions{LabName: labName})
+	containers, err := svc.ListContainers(ctx, clab.ListOptions{Username: username, LabName: labName})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to list containers for lab '%s': %s", labName, err.Error())})
 		return
@@ -1142,7 +1142,7 @@ func ListLabLinksHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
 	defer cancel()
 
-	containers, err := svc.ListContainers(ctx, clab.ListOptions{LabName: labName})
+	containers, err := svc.ListContainers(ctx, clab.ListOptions{Username: username, LabName: labName})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to list containers for lab '%s': %s", labName, err.Error())})
 		return
@@ -1198,7 +1198,7 @@ func ListLabsHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
 	defer cancel()
 
-	containers, err := svc.ListContainers(ctx, clab.ListOptions{})
+	containers, err := svc.ListContainers(ctx, clab.ListOptions{Username: username})
 	if err != nil {
 		errMsg := strings.ToLower(err.Error())
 		if strings.Contains(errMsg, "no containers found") || strings.Contains(errMsg, "no containerlab labs found") {
@@ -1303,6 +1303,7 @@ func SaveLabConfigHandler(c *gin.Context) {
 	}
 
 	saveOpts := clab.SaveOptions{
+		LabName:    labName,
 		TopoPath:   originalTopoPath,
 		Username:   username,
 		NodeFilter: nodeFilterSlice,

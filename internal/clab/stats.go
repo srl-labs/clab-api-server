@@ -51,6 +51,9 @@ func (s *Service) ContainerStats(
 	ctx context.Context,
 	containers []clabruntime.GenericContainer,
 ) (map[string]ContainerStatsCounters, error) {
+	if err := RequireContainerRuntime("container stats"); err != nil {
+		return nil, err
+	}
 	rt, err := s.getContainerRuntime()
 	if err != nil {
 		return nil, err

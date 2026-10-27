@@ -56,7 +56,11 @@ var ErrNetemNodeNotFound = errors.New("netem node not found")
 var ErrMgmtOverrideUnsupported = errors.New("management network overrides cannot be used with multiple management networks")
 
 // Service provides an interface to containerlab operations using the library directly.
-type Service struct{}
+type Service struct {
+	// scoper places lab runtime calls in namespaces and identities; nil uses the
+	// server's own credentials.
+	scoper LabScoper
+}
 
 // NewService creates a new containerlab service.
 func NewService() *Service {
@@ -281,8 +285,11 @@ type DeployOptions struct {
 	TopoPath string
 	// LabName is the API-authorized lab name. It is required and overrides the
 	// name from the topology so deployment cannot switch to an unchecked lab.
-	LabName        string
-	Username       string
+	LabName  string
+	Username string
+	// Actor is the user who asked for the deploy, when it is not Username (the lab
+	// owner), e.g. a member redeploying a shared lab. Lab runtime calls act as the actor.
+	Actor          string
 	Reconfigure    bool
 	MaxWorkers     uint
 	ExportTemplate string
@@ -305,8 +312,12 @@ type DeployOptions struct {
 
 // ApplyOptions contains options for applying topology changes to a lab.
 type ApplyOptions struct {
-	TopoPath       string
-	Username       string
+	TopoPath string
+	// LabName is the API-authorized lab name.
+	LabName  string
+	Username string
+	// Actor is the user who asked for the apply, when it is not Username (the lab owner).
+	Actor          string
 	DryRun         bool
 	MaxWorkers     uint
 	ExportTemplate string
@@ -331,6 +342,9 @@ type DestroyOptions struct {
 
 // ListOptions contains options for listing labs/containers.
 type ListOptions struct {
+	// Username is the user the listing is for. Lab runtimes list only the labs this user
+	// can access, and act as this user.
+	Username      string
 	LabName       string
 	ContainerName string
 	NodeName      string
@@ -351,7 +365,9 @@ type ExecOptions struct {
 
 // SaveOptions contains options for saving lab configuration.
 type SaveOptions struct {
-	TopoPath   string
+	TopoPath string
+	// LabName is the API-authorized lab name.
+	LabName    string
 	Username   string
 	NodeFilter []string
 	// CopyOut, when set, copies saved configs like `containerlab save --copy`.
@@ -554,9 +570,7 @@ func (s *Service) ResolveTopologySource(
 
 	clab, err := newContainerLabForOwner(
 		opts.Username,
-		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{
-			Timeout: defaultTimeout,
-		}),
+		runtimeOption(defaultTimeout),
 		clabcore.WithTopoPath(topologyPath, nil),
 	)
 	if err != nil {
@@ -574,14 +588,15 @@ func (s *Service) ResolveTopologySource(
 	}, nil
 }
 
-func deployClabOptions(topoPath, labName string, opts DeployOptions) []clabcore.ClabOption {
+func deployClabOptions(topoPath, labName string, opts DeployOptions, scope *LabScope) []clabcore.ClabOption {
 	clabOpts := []clabcore.ClabOption{
 		clabcore.WithTimeout(defaultTimeout),
 		clabcore.WithTopoPath(topoPath, opts.VarsFiles),
 		clabcore.WithTopologyName(labName),
-		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{
-			Timeout: defaultTimeout,
-		}),
+	}
+	clabOpts = append(clabOpts, runtimeOptions(scope, defaultTimeout)...)
+	if scope != nil && scope.Owner != "" {
+		clabOpts = append(clabOpts, clabcore.WithLabOwner(scope.Owner))
 	}
 
 	if len(opts.NodeFilter) > 0 {
@@ -618,7 +633,7 @@ func wrapMgmtOverrideError(err error) error {
 // openDeployLab prepares the process state a deploy runs in (owner env, work
 // directory, containerlab lock) and loads the topology with the deploy options.
 // The returned release function must be called once the instance is no longer used.
-func (s *Service) openDeployLab(opts DeployOptions) (*clabcore.CLab, func(), error) {
+func (s *Service) openDeployLab(opts DeployOptions, scope *LabScope) (*clabcore.CLab, func(), error) {
 	labName := strings.TrimSpace(opts.LabName)
 	if labName == "" {
 		return nil, nil, fmt.Errorf("authorized lab name is required")
@@ -666,7 +681,7 @@ func (s *Service) openDeployLab(opts DeployOptions) (*clabcore.CLab, func(), err
 		"runtime", config.AppConfig.ClabRuntime,
 	)
 
-	clab, err := clabcore.NewContainerLab(deployClabOptions(topoPath, labName, opts)...)
+	clab, err := clabcore.NewContainerLab(deployClabOptions(topoPath, labName, opts, scope)...)
 	if err != nil {
 		release()
 		return nil, nil, fmt.Errorf("failed to create containerlab instance: %w", wrapMgmtOverrideError(err))
@@ -679,7 +694,12 @@ func (s *Service) openDeployLab(opts DeployOptions) (*clabcore.CLab, func(), err
 // changing any lab state, so callers can reject invalid options before a
 // destructive step such as the destroy phase of a redeploy.
 func (s *Service) ValidateDeploy(opts DeployOptions) error {
-	_, release, err := s.openDeployLab(opts)
+	if IsLabRuntime() {
+		if err := validateLabRuntimeDeployOptions(opts); err != nil {
+			return err
+		}
+	}
+	_, release, err := s.openDeployLab(opts, nil)
 	if err != nil {
 		return err
 	}
@@ -692,7 +712,19 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
-	clab, release, err := s.openDeployLab(opts)
+	var scope *LabScope
+	if IsLabRuntime() {
+		if err := validateLabRuntimeDeployOptions(opts); err != nil {
+			return nil, err
+		}
+		prepared, err := s.labScoper().PrepareDeploy(ctx, actorOf(opts.Actor, opts.Username), strings.TrimSpace(opts.LabName), opts.TopoPath)
+		if err != nil {
+			return nil, err
+		}
+		scope = &prepared
+	}
+
+	clab, release, err := s.openDeployLab(opts, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -714,6 +746,7 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 	if len(opts.RestoreNodeSnapshots) > 0 {
 		deployOpts.SetRestoreNodeSnapshots(opts.RestoreNodeSnapshots)
 	}
+	labRuntimeDeployOptions(deployOpts)
 
 	log.Info("Deploying lab",
 		"username", opts.Username,
@@ -729,8 +762,10 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 	if err != nil {
 		return nil, fmt.Errorf("deployment failed: %w", err)
 	}
-	if err := syncLabHostsFiles(ctx, clab); err != nil {
-		return nil, fmt.Errorf("deployment completed but host name resolution setup failed: %w", err)
+	if clab.LabRuntime == nil {
+		if err := syncLabHostsFiles(ctx, clab); err != nil {
+			return nil, fmt.Errorf("deployment completed but host name resolution setup failed: %w", err)
+		}
 	}
 
 	log.Info("Lab deployed successfully",
@@ -742,12 +777,15 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 }
 
 // Apply applies topology changes to a lab using the containerlab library.
-func (s *Service) Apply(ctx context.Context, opts ApplyOptions) (*clabcore.ApplyResult, error) {
+func (s *Service) Apply(ctx context.Context, opts ApplyOptions) (*ApplyOutcome, error) {
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
 	if strings.TrimSpace(opts.TopoPath) == "" {
 		return nil, fmt.Errorf("topology path is required")
+	}
+	if IsLabRuntime() {
+		return s.applyWithLabRuntime(ctx, opts)
 	}
 
 	workDir, err := s.prepareWorkDir(opts.Username)
@@ -774,10 +812,8 @@ func (s *Service) Apply(ctx context.Context, opts ApplyOptions) (*clabcore.Apply
 	clabOpts := []clabcore.ClabOption{
 		clabcore.WithTimeout(defaultTimeout),
 		clabcore.WithTopoPath(opts.TopoPath, nil),
-		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{
-			Timeout: defaultTimeout,
-		}),
 	}
+	clabOpts = append(clabOpts, runtimeOptions(nil, defaultTimeout)...)
 
 	log.Debug("Creating containerlab instance for apply",
 		"topoPath", opts.TopoPath,
@@ -817,7 +853,7 @@ func (s *Service) Apply(ctx context.Context, opts ApplyOptions) (*clabcore.Apply
 		}
 	}
 
-	return result, nil
+	return &ApplyOutcome{ApplyResult: result}, nil
 }
 
 // ErrInvalidTopology marks a topology that containerlab rejected during validation.
@@ -868,13 +904,10 @@ func (s *Service) Validate(ctx context.Context, opts ValidateOptions) (*Validate
 		}
 	}()
 
-	clab, err := clabcore.NewContainerLab(
+	clab, err := clabcore.NewContainerLab(append([]clabcore.ClabOption{
 		clabcore.WithTimeout(defaultTimeout),
 		clabcore.WithTopoPath(opts.TopoPath, nil),
-		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{
-			Timeout: defaultTimeout,
-		}),
-	)
+	}, runtimeOptions(nil, defaultTimeout)...)...)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidTopology, err)
 	}
@@ -909,6 +942,10 @@ func (s *Service) Validate(ctx context.Context, opts ValidateOptions) (*Validate
 func (s *Service) Destroy(ctx context.Context, opts DestroyOptions) error {
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
+
+	if IsLabRuntime() {
+		return s.destroyWithLabRuntime(ctx, opts)
+	}
 
 	// Prepare clab working directory
 	workDir, err := s.prepareWorkDir(opts.Username)
@@ -948,9 +985,7 @@ func (s *Service) Destroy(ctx context.Context, opts DestroyOptions) error {
 		return fmt.Errorf("either lab name or topology path is required")
 	}
 
-	clabOpts = append(clabOpts,
-		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{Timeout: clabTimeout}),
-	)
+	clabOpts = append(clabOpts, runtimeOptions(nil, clabTimeout)...)
 
 	if opts.KeepMgmtNet {
 		clabOpts = append(clabOpts, clabcore.WithKeepMgmtNet())
@@ -1026,11 +1061,14 @@ func (s *Service) ListContainers(ctx context.Context, opts ListOptions) ([]clabr
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
-	// Create a minimal clab instance for listing (no topology needed)
-	clabOpts := []clabcore.ClabOption{
-		clabcore.WithTimeout(defaultTimeout),
-		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{Timeout: defaultTimeout}),
+	if IsLabRuntime() {
+		return s.listLabRuntimeContainers(ctx, opts)
 	}
+
+	// Create a minimal clab instance for listing (no topology needed)
+	clabOpts := append([]clabcore.ClabOption{
+		clabcore.WithTimeout(defaultTimeout),
+	}, runtimeOptions(nil, defaultTimeout)...)
 
 	clab, err := newContainerLab(clabOpts...)
 	if err != nil {
@@ -1079,6 +1117,9 @@ func (s *Service) RunNodeLifecycleAction(ctx context.Context, opts NodeLifecycle
 	case NodeLifecycleActionStart, NodeLifecycleActionStop, NodeLifecycleActionRestart:
 		return s.runTopologyNodeLifecycleAction(ctx, opts)
 	case NodeLifecycleActionPause, NodeLifecycleActionUnpause:
+		if err := RequireContainerRuntime("pausing nodes"); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("unsupported node lifecycle action: %q", opts.Action)
 	}
@@ -1120,6 +1161,10 @@ func (s *Service) RunLabLifecycleAction(ctx context.Context, opts NodeLifecycleO
 }
 
 func (s *Service) runTopologyNodeLifecycleAction(ctx context.Context, opts NodeLifecycleOptions) error {
+	if IsLabRuntime() {
+		return s.labRuntimeNodeLifecycle(ctx, opts)
+	}
+
 	workDir, err := s.prepareWorkDir(opts.Username)
 	if err != nil {
 		return fmt.Errorf("failed to prepare working directory: %w", err)
@@ -1138,10 +1183,9 @@ func (s *Service) runTopologyNodeLifecycleAction(ctx context.Context, opts NodeL
 		}
 	}()
 
-	clabOpts := []clabcore.ClabOption{
+	clabOpts := append([]clabcore.ClabOption{
 		clabcore.WithTimeout(defaultTimeout),
-		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{Timeout: defaultTimeout}),
-	}
+	}, runtimeOptions(nil, defaultTimeout)...)
 
 	topoPath := strings.TrimSpace(opts.TopoPath)
 	labName := strings.TrimSpace(opts.LabName)
@@ -1197,6 +1241,9 @@ func cleanNodeNames(nodeNames []string) []string {
 }
 
 func (s *Service) RunContainerlabTool(ctx context.Context, opts ContainerlabToolRunOptions) (string, error) {
+	if err := RequireContainerRuntime("containerlab tools"); err != nil {
+		return "", err
+	}
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
@@ -1254,6 +1301,9 @@ func appendUniqueString(values []string, value string) []string {
 }
 
 func (s *Service) ListRuntimeImages(ctx context.Context) ([]RuntimeImageSummary, error) {
+	if err := RequireContainerRuntime("image management"); err != nil {
+		return nil, err
+	}
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
@@ -1315,6 +1365,9 @@ func (s *Service) ListRuntimeImages(ctx context.Context) ([]RuntimeImageSummary,
 }
 
 func (s *Service) PullRuntimeImage(ctx context.Context, image string) (string, error) {
+	if err := RequireContainerRuntime("image management"); err != nil {
+		return "", err
+	}
 	baseCtx := ctx
 	if _, hasDeadline := baseCtx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
@@ -1325,6 +1378,9 @@ func (s *Service) PullRuntimeImage(ctx context.Context, image string) (string, e
 }
 
 func (s *Service) RemoveRuntimeImage(ctx context.Context, reference string, force bool) (string, error) {
+	if err := RequireContainerRuntime("image management"); err != nil {
+		return "", err
+	}
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
@@ -1337,6 +1393,9 @@ func (s *Service) RemoveRuntimeImage(ctx context.Context, reference string, forc
 }
 
 func (s *Service) RunFcliCommand(ctx context.Context, opts FcliRunOptions) (string, error) {
+	if err := RequireContainerRuntime("fcli"); err != nil {
+		return "", err
+	}
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
@@ -1387,7 +1446,7 @@ func (s *Service) fcliNetworkArgs(ctx context.Context, topologyPath string) ([]s
 	lab, err := newContainerLab(
 		clabcore.WithTimeout(defaultTimeout),
 		clabcore.WithTopoPath(topologyPath, nil),
-		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{Timeout: defaultTimeout}),
+		runtimeOption(defaultTimeout),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load topology: %w", err)
@@ -1540,12 +1599,17 @@ func (s *Service) GenerateGraphExport(ctx context.Context, opts GraphExportOptio
 	clab, err := clabcore.NewContainerLab(
 		clabcore.WithTimeout(defaultTimeout),
 		clabcore.WithTopoPath(opts.TopoPath, nil),
-		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{
-			Timeout: defaultTimeout,
-		}),
+		runtimeOption(defaultTimeout),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidTopology, err)
+	}
+
+	// Lab runtimes do not build the topology's nodes; graphs render from the topology file.
+	if clab.LabRuntime != nil {
+		if err := clab.LoadTopologyNodes(); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidTopology, err)
+		}
 	}
 
 	if err := clab.ResolveLinks(); err != nil {
@@ -1616,12 +1680,15 @@ func chownGraphOutput(owner, labDir string, labDirExisted bool, graphDir string)
 
 // ListContainerInterfaces lists interfaces for a specific container.
 func (s *Service) ListContainerInterfaces(ctx context.Context, container *clabruntime.GenericContainer) (*clabtypes.ContainerInterfaces, error) {
+	if err := RequireContainerRuntime("interface inspection"); err != nil {
+		return nil, err
+	}
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
 	clabOpts := []clabcore.ClabOption{
 		clabcore.WithTimeout(defaultTimeout),
-		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{Timeout: defaultTimeout}),
+		runtimeOption(defaultTimeout),
 	}
 
 	clab, err := newContainerLab(clabOpts...)
@@ -1639,12 +1706,15 @@ func (s *Service) ListContainerInterfaces(ctx context.Context, container *clabru
 
 // ListContainersInterfaces lists interfaces for multiple containers.
 func (s *Service) ListContainersInterfaces(ctx context.Context, containers []clabruntime.GenericContainer) ([]*clabtypes.ContainerInterfaces, error) {
+	if err := RequireContainerRuntime("interface inspection"); err != nil {
+		return nil, err
+	}
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
 	clabOpts := []clabcore.ClabOption{
 		clabcore.WithTimeout(defaultTimeout),
-		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{Timeout: defaultTimeout}),
+		runtimeOption(defaultTimeout),
 	}
 
 	clab, err := newContainerLab(clabOpts...)
@@ -1664,6 +1734,10 @@ func (s *Service) ListContainersInterfaces(ctx context.Context, containers []cla
 func (s *Service) Exec(ctx context.Context, opts ExecOptions) (*clabexec.ExecCollection, error) {
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
+
+	if IsLabRuntime() {
+		return s.execWithLabRuntime(ctx, opts)
+	}
 
 	// Prepare clab working directory
 	workDir, err := s.prepareWorkDir(opts.Username)
@@ -1690,9 +1764,7 @@ func (s *Service) Exec(ctx context.Context, opts ExecOptions) (*clabexec.ExecCol
 	if opts.TopoPath != "" {
 		clabOpts = append(clabOpts, clabcore.WithTopoPath(opts.TopoPath, nil))
 	}
-	clabOpts = append(clabOpts,
-		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{Timeout: defaultTimeout}),
-	)
+	clabOpts = append(clabOpts, runtimeOptions(nil, defaultTimeout)...)
 
 	clab, err := clabcore.NewContainerLab(clabOpts...)
 	if err != nil {
@@ -1730,6 +1802,10 @@ func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) (*SaveResult
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
+	if IsLabRuntime() {
+		return s.saveWithLabRuntime(ctx, opts)
+	}
+
 	// Prepare clab working directory
 	workDir, err := s.prepareWorkDir(opts.Username)
 	if err != nil {
@@ -1749,11 +1825,10 @@ func (s *Service) SaveConfig(ctx context.Context, opts SaveOptions) (*SaveResult
 		}
 	}()
 
-	clabOpts := []clabcore.ClabOption{
+	clabOpts := append([]clabcore.ClabOption{
 		clabcore.WithTimeout(defaultTimeout),
 		clabcore.WithTopoPath(opts.TopoPath, nil),
-		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{Timeout: defaultTimeout}),
-	}
+	}, runtimeOptions(nil, defaultTimeout)...)
 
 	clab, err := clabcore.NewContainerLab(clabOpts...)
 	if err != nil {
@@ -2016,12 +2091,15 @@ type DisableTxOffloadOptions struct {
 
 // DisableTxOffload disables TX checksum offload on a container's interface.
 func (s *Service) DisableTxOffload(ctx context.Context, opts DisableTxOffloadOptions) error {
+	if err := RequireContainerRuntime("disabling TX offload"); err != nil {
+		return err
+	}
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
 	clabOpts := []clabcore.ClabOption{
 		clabcore.WithTimeout(defaultTimeout),
-		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{Timeout: defaultTimeout}),
+		runtimeOption(defaultTimeout),
 	}
 
 	clab, err := newContainerLab(clabOpts...)
@@ -2085,6 +2163,9 @@ type VethCreateOptions struct {
 
 // CreateVeth creates a veth pair between two endpoints.
 func (s *Service) CreateVeth(ctx context.Context, opts VethCreateOptions) error {
+	if err := RequireContainerRuntime("veth tools"); err != nil {
+		return err
+	}
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
@@ -2100,7 +2181,7 @@ func (s *Service) CreateVeth(ctx context.Context, opts VethCreateOptions) error 
 
 	clabOpts := []clabcore.ClabOption{
 		clabcore.WithTimeout(defaultTimeout),
-		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{Timeout: defaultTimeout}),
+		runtimeOption(defaultTimeout),
 	}
 
 	clab, err := newContainerLab(clabOpts...)
@@ -2244,6 +2325,9 @@ type VxlanCreateOptions struct {
 
 // CreateVxlan creates a VxLAN tunnel.
 func (s *Service) CreateVxlan(ctx context.Context, opts VxlanCreateOptions) error {
+	if err := RequireContainerRuntime("VxLAN tools"); err != nil {
+		return err
+	}
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
@@ -2378,6 +2462,9 @@ func stitchInterfaces(srcIface, dstIface string) error {
 
 // DeleteVxlan deletes VxLAN tunnels matching a prefix.
 func (s *Service) DeleteVxlan(ctx context.Context, prefix string) ([]string, error) {
+	if err := RequireContainerRuntime("VxLAN tools"); err != nil {
+		return nil, err
+	}
 	_, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
@@ -2507,7 +2594,7 @@ func (s *Service) withRunningLab(labName, username string, fn func(*clabcore.CLa
 	// WithTopologyFromLab looks the lab up through the runtime, so it must come after WithRuntime.
 	lab, err := clabcore.NewContainerLab(
 		clabcore.WithTimeout(defaultTimeout),
-		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{Timeout: defaultTimeout}),
+		runtimeOption(defaultTimeout),
 		clabcore.WithTopologyFromLab(labName, nil),
 	)
 	if err != nil {
@@ -2558,6 +2645,9 @@ func withNetemInterface(target *clabcore.NetemTarget, fn func(tcnl *gotc.Tc, ifa
 // SetNetem applies netem impairments to an interface of a node. Interfaces of
 // stitched links are impaired on their host-side tools interface, like the CLI does.
 func (s *Service) SetNetem(ctx context.Context, opts NetemSetOptions) error {
+	if err := RequireContainerRuntime("link impairment (netem)"); err != nil {
+		return err
+	}
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
@@ -2627,6 +2717,9 @@ func resolveNetemLink(iface string) (netlink.Link, error) {
 
 // ResetNetem removes netem impairments from an interface of a node.
 func (s *Service) ResetNetem(ctx context.Context, nodeTarget NetemTarget, ifaceName string) error {
+	if err := RequireContainerRuntime("link impairment (netem)"); err != nil {
+		return err
+	}
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
@@ -2691,6 +2784,9 @@ func isNetemAlreadyClearError(err error) bool {
 
 // ShowNetem returns the netem impairments of a node.
 func (s *Service) ShowNetem(ctx context.Context, target NetemTarget) ([]clabtypes.ImpairmentData, error) {
+	if err := RequireContainerRuntime("link impairment (netem)"); err != nil {
+		return nil, err
+	}
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
@@ -2705,6 +2801,9 @@ func (s *Service) ShowNetem(ctx context.Context, target NetemTarget) ([]clabtype
 // ShowLabNetem returns the netem impairments of every deployed node of a lab,
 // keyed by topology node name (`clab tools netem show --name <lab>`).
 func (s *Service) ShowLabNetem(ctx context.Context, labName, username string) (map[string][]clabtypes.ImpairmentData, error) {
+	if err := RequireContainerRuntime("link impairment (netem)"); err != nil {
+		return nil, err
+	}
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
@@ -2855,10 +2954,12 @@ func toolsInterfaceImpairments(node *clabcore.NetemNode, ifaces []string) ([]cla
 }
 
 func (s *Service) getContainerRuntime() (clabruntime.ContainerRuntime, error) {
-	clabOpts := []clabcore.ClabOption{
-		clabcore.WithTimeout(defaultTimeout),
-		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{Timeout: defaultTimeout}),
+	if err := RequireContainerRuntime("this operation"); err != nil {
+		return nil, err
 	}
+	clabOpts := append([]clabcore.ClabOption{
+		clabcore.WithTimeout(defaultTimeout),
+	}, runtimeOptions(nil, defaultTimeout)...)
 
 	clab, err := newContainerLab(clabOpts...)
 	if err != nil {

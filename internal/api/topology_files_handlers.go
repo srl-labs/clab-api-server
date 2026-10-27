@@ -572,6 +572,7 @@ func DeployTopologyHandler(c *gin.Context) {
 		TopoPath:       topologyPath,
 		LabName:        labName,
 		Username:       targetOwner,
+		Actor:          username,
 		Reconfigure:    reconfigure,
 		MaxWorkers:     uint(maxWorkers),
 		ExportTemplate: exportTemplate,
@@ -768,7 +769,9 @@ func ApplyTopologyHandler(c *gin.Context) {
 
 	applyOptions := clab.ApplyOptions{
 		TopoPath:       topologyPath,
+		LabName:        labName,
 		Username:       targetOwner,
+		Actor:          username,
 		DryRun:         dryRun,
 		MaxWorkers:     uint(maxWorkers),
 		ExportTemplate: exportTemplate,
@@ -780,7 +783,7 @@ func ApplyTopologyHandler(c *gin.Context) {
 		if applyErr != nil {
 			return models.ApplyLabResponse{}, fmt.Errorf("Failed to apply lab '%s': %s", labName, applyErr.Error())
 		}
-		return clab.ApplyResultToResponse(result), nil
+		return clab.ApplyOutcomeToResponse(result), nil
 	}
 
 	if streamLogs {
