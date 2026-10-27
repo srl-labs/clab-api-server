@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/log"
 	clabconst "github.com/srl-labs/containerlab/constants"
@@ -253,6 +254,9 @@ func (s *Service) applyWithLabRuntime(ctx context.Context, opts ApplyOptions) (*
 
 	result, err := clab.Deploy(ctx, coreOpts)
 	if err != nil {
+		if !opts.DryRun && scope != nil {
+			s.releaseAfterFailedDeploy(ctx, clab, *scope)
+		}
 		return nil, fmt.Errorf("apply failed: %w", err)
 	}
 
@@ -565,4 +569,30 @@ func actorOf(actor, username string) string {
 		return strings.TrimSpace(actor)
 	}
 	return strings.TrimSpace(username)
+}
+
+// releaseAfterFailedDeploy lets the scoper release what it prepared for a deploy that
+// failed and left no lab behind. A failed fresh deploy removes what containerlab created,
+// so the namespace prepared for it would otherwise stay empty; a lab that still exists
+// (a failed update) is left alone.
+func (s *Service) releaseAfterFailedDeploy(ctx context.Context, clab *clabcore.CLab, scope LabScope) {
+	checker, ok := clab.LabRuntime.(clablabruntime.LabExistenceChecker)
+	if !ok {
+		return
+	}
+	// The deploy's context may be what ended it; the release gets its own time.
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	defer cancel()
+	exists, err := checker.LabExists(releaseCtx, clablabruntime.InspectRequest{
+		Name:      clab.Config.Name,
+		Namespace: scope.Namespace,
+		Identity:  scope.Identity,
+	})
+	if err != nil || exists {
+		return
+	}
+	if err := s.labScoper().AfterDestroy(releaseCtx, scope, false); err != nil {
+		log.Warn("Failed to release the namespace of a failed deploy", "lab", clab.Config.Name,
+			"namespace", scope.Namespace, "error", err)
+	}
 }

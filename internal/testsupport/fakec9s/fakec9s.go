@@ -59,6 +59,8 @@ type Runtime struct {
 	ExposedPorts []clablabruntime.ExposedPort
 	// PortHandler serves connections DialPort opens; nil echoes.
 	PortHandler func(port int, conn net.Conn)
+	// DeployErr fails every deploy; the lab state stays as it was.
+	DeployErr error
 }
 
 // Install registers the fake as the c9s lab runtime until the test ends.
@@ -212,6 +214,10 @@ func (r *instance) Deploy(_ context.Context, req clablabruntime.DeployRequest) (
 		return nil, err
 	}
 	r.fake.mu.Lock()
+	if err := r.fake.DeployErr; err != nil {
+		r.fake.mu.Unlock()
+		return nil, err
+	}
 	state := &clablabruntime.LabState{
 		Name: req.Name, Namespace: namespace, Owner: req.Owner, TopologyPath: req.TopologyFile,
 		State: "running", Ready: true,

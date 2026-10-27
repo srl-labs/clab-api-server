@@ -2,6 +2,7 @@ package kube
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -201,4 +202,37 @@ func TestServiceOnC9sProvisionsActsAsTheUserAndReleases(t *testing.T) {
 	_, err = client.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
 	require.Error(t, err, "destroy with cleanup deletes the namespace")
 	require.True(t, runtime.CallsOf("destroy")[1].Cleanup)
+}
+
+func TestFailedFirstDeployReleasesItsNamespace(t *testing.T) {
+	previous := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = previous })
+	config.AppConfig.ClabRuntime = config.RuntimeC9s
+	runtime := fakec9s.Install(t)
+	current, err := user.Current()
+	require.NoError(t, err)
+	me := current.Username
+	scoper, client := testScoper(t, fakeUsers{})
+	svc := clab.NewService()
+	svc.SetLabScoper(scoper)
+	ctx := context.Background()
+	topology := filepath.Join(t.TempDir(), "broken.clab.yml")
+	require.NoError(t, os.WriteFile(topology, []byte("name: broken\ntopology:\n  nodes:\n    n1: {kind: linux, image: alpine}\n"), 0o644))
+	namespace := NamespaceName(DefaultNamespaceTemplate, me, "broken")
+
+	runtime.DeployErr = errors.New("image pull denied")
+	_, err = svc.Deploy(ctx, clab.DeployOptions{TopoPath: topology, LabName: "broken", Username: me})
+	require.ErrorContains(t, err, "image pull denied")
+	_, err = client.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+	require.Error(t, err, "a failed first deploy leaves no empty namespace behind")
+
+	// A failed update of a running lab keeps everything.
+	runtime.DeployErr = nil
+	_, err = svc.Deploy(ctx, clab.DeployOptions{TopoPath: topology, LabName: "broken", Username: me})
+	require.NoError(t, err)
+	runtime.DeployErr = errors.New("update rejected")
+	_, err = svc.Deploy(ctx, clab.DeployOptions{TopoPath: topology, LabName: "broken", Username: me})
+	require.Error(t, err)
+	_, err = client.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+	require.NoError(t, err, "the running lab keeps its namespace")
 }
