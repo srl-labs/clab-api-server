@@ -1,0 +1,33 @@
+# Superusers of clab-api-server with CLAB_RUNTIME=c9s.
+#
+# Members of SUPERUSER_GROUP act as the group "clab:admins". This binding lets them see and
+# manage every lab, as on a Docker host. It is an installation step: the server never creates
+# cluster-wide bindings itself. Change "clab:" when CLAB_KUBE_USER_PREFIX is not the default.
+#
+# Apply: kubectl apply -f admins-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: clab-admins-lab-editor
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: clabernetes-lab-editor
+subjects:
+  - kind: Group
+    apiGroup: rbac.authorization.k8s.io
+    name: clab:admins
+---
+# The access role (from provisioner-rbac.yaml) cluster-wide: get on every lab namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: clab-admins-lab-access
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: clab-lab-access
+subjects:
+  - kind: Group
+    apiGroup: rbac.authorization.k8s.io
+    name: clab:admins
