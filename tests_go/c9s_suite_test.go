@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
@@ -234,6 +235,20 @@ func (s *C9sSuite) TestC9sMultiUserLab() {
 		}
 		_, status = s.inspect(s.otherHeaders)
 		s.Require().Equal(http.StatusNotFound, status, "the claimed owner gets nothing")
+
+		// The events stream reports what inspect reports, not what the Topology says.
+		stream := s.followEvents(s.userHeaders, "initialState=true")
+		defer stream.close()
+		seen := map[string]bool{}
+		stream.until(s.T(), time.Minute, "snapshots of both nodes", func(event c9sEvent) bool {
+			if event.Type != "container" {
+				return false
+			}
+			s.Require().Equal(fmt.Sprintf("k8s://%s/topologies/%s", s.namespace, s.labName), event.Attributes["clab-topo-file"], "%+v", event)
+			s.Require().Equal(s.cfg.APIUserUser, event.Attributes["clab-owner"], "%+v", event)
+			seen[event.Attributes["clab-node-name"]] = true
+			return seen["n1"] && seen["n2"]
+		})
 	})
 
 	s.Run("another user cannot see or touch the lab", func() {
@@ -378,6 +393,37 @@ func (s *C9sSuite) TestC9sMultiUserLab() {
 			}
 			s.Require().Equal("up", interfaces[node]["eth1"], "%s: the lab link is up", node)
 		}
+	})
+
+	s.Run("interfaces", func() {
+		data, status := s.request(http.MethodGet, s.url("/api/v1/labs/%s/interfaces", s.labName), s.userHeaders, nil, 2*time.Minute)
+		s.Require().Equal(http.StatusOK, status, string(data))
+		var nodes []struct {
+			Name       string `json:"name"`
+			Interfaces []struct {
+				Name  string `json:"name"`
+				State string `json:"state"`
+				Mac   string `json:"mac"`
+				Mtu   int    `json:"mtu"`
+			} `json:"interfaces"`
+		}
+		s.Require().NoError(json.Unmarshal(data, &nodes), string(data))
+		s.Require().Len(nodes, 2, string(data))
+		for _, node := range nodes {
+			s.Require().Contains([]string{s.labName + "-n1", s.labName + "-n2"}, node.Name)
+			states := map[string]string{}
+			for _, iface := range node.Interfaces {
+				states[iface.Name] = iface.State
+				if iface.Name == "eth1" {
+					s.Require().NotEmpty(iface.Mac)
+					s.Require().Positive(iface.Mtu)
+				}
+			}
+			s.Require().ElementsMatch([]string{"eth0", "eth1", "lo"}, slices.Collect(maps.Keys(states)), "%s: %s", node.Name, string(data))
+			s.Require().Equal("up", states["eth1"], node.Name)
+		}
+		_, status = s.request(http.MethodGet, s.url("/api/v1/labs/%s/interfaces", s.labName), s.otherHeaders, nil, s.cfg.RequestTimeout)
+		s.Require().Equal(http.StatusNotFound, status)
 	})
 
 	s.Run("stats", func() {
