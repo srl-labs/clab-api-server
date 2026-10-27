@@ -123,8 +123,8 @@ func SetupRoutes(router *gin.Engine) {
 				labSpecific.POST("/restart", RestartLabNodesHandler) // POST /api/v1/labs/{labName}/restart
 
 				// Inspect lab interfaces
-				labSpecific.GET("/interfaces", requireContainerRuntime("interface inspection"), InspectInterfacesHandler) // GET /api/v1/labs/{labName}/interfaces
-				labSpecific.GET("/links", requireContainerRuntime("link inspection"), ListLabLinksHandler)                // GET /api/v1/labs/{labName}/links
+				labSpecific.GET("/interfaces", InspectInterfacesHandler)                                   // GET /api/v1/labs/{labName}/interfaces
+				labSpecific.GET("/links", requireContainerRuntime("link inspection"), ListLabLinksHandler) // GET /api/v1/labs/{labName}/links
 
 				// Stream CPU and memory usage of the lab's nodes
 				labSpecific.GET("/stats", StreamLabStatsHandler) // GET /api/v1/labs/{labName}/stats

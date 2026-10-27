@@ -240,6 +240,7 @@ of the user's labs; a superuser's every namespace.
 | Browser ports | The node's exposed ports, each with a `proxyPath`: `ANY /api/v1/labs/{lab}/nodes/{node}/ports/{port}/proxy/*` proxies HTTP and WebSockets through a port-forward. The `Authorization` header is not forwarded. |
 | Stats | `metrics.k8s.io` (CPU over the metrics window, memory working set of the device containers). Without the API the stats stream answers 501. |
 | Packet capture | containerlab's c9s capture: clabwire in the node's pod, one merged pcapng stream. See [Packet capture](#packet-capture). |
+| Interfaces (`/interfaces`) | containerlab's c9s interface inspection as the user: per running node (`<lab>-<node>`) the lab link interfaces with their aliases, `eth0` and `lo`, with MAC, index, MTU, type and state, the interfaces the events stream reports. |
 | Graphs | Rendered from the topology file, without the cluster. |
 
 Lab names must be lowercase DNS labels (letters, digits and dashes, starting with a letter).
@@ -317,7 +318,7 @@ These answer `501` with `<operation> is not supported by lab runtime c9s`:
 - VM snapshots (`/snapshots`) and deploys that restore them
 - SSHX and GoTTY sharing, fcli, Tailscale status
 - pause and unpause
-- interface and link inspection (`/interfaces`, `/links`)
+- link inspection (`/links`)
 - host metrics (`/health/metrics`)
 
 Deploy options that only local runtimes have (node filter, management network overrides,

@@ -3720,7 +3720,10 @@ paths:
       - Labs - Graph
   /api/v1/labs/{labName}/interfaces:
     get:
-      description: Returns interface details for nodes in a lab.
+      description: |-
+        Returns interface details for nodes in a lab.
+
+        With the lab runtime c9s the interfaces of the running nodes come from containerlab's c9s runtime, as the signed-in user: the lab link interfaces (with their aliases), eth0 and lo, with MAC, index, MTU, type and state; nodes are named <lab>-<node>.
       parameters:
       - description: Name of the lab
         in: path

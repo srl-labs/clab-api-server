@@ -743,3 +743,55 @@ func TestPacketflixSingleUseTicketRefusesOtherTargets(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, response.StatusCode, "the refused redemption used the ticket up")
 	require.Zero(t, captured.Load())
 }
+
+func TestInspectInterfacesOnC9s(t *testing.T) {
+	api := newC9sAPI(t)
+	api.captureLab()
+	api.fake.AddLab("c9s-foreign", "foreign", "someone-else", "", "x1")
+
+	recorder := api.do(http.MethodGet, "/api/v1/labs/lab1/interfaces", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var nodes models.ClabInspectInterfacesOutput
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &nodes))
+	require.Len(t, nodes, 2)
+	names := map[string][]string{}
+	for _, node := range nodes {
+		for _, iface := range node.Interfaces {
+			names[node.NodeName] = append(names[node.NodeName], iface.Name+"/"+iface.Alias+"/"+iface.State)
+		}
+	}
+	require.Equal(t, map[string][]string{
+		"lab1-n1":   {"eth0//up", "eth1//up", "lo//unknown"},
+		"lab1-srl1": {"eth0//up", "e1-1/ethernet-1/1/up", "lo//unknown"},
+	}, names)
+	require.Equal(t, 9500, nodes[0].Interfaces[1].Mtu)
+	calls := api.fake.CallsOf("inspect-interfaces")
+	require.Len(t, calls, 1)
+	require.Equal(t, "c9s-lab1", calls[0].Namespace, "in the lab's namespace")
+	require.Empty(t, calls[0].Nodes)
+
+	// The node query filters like with Docker (part of the node name).
+	recorder = api.do(http.MethodGet, "/api/v1/labs/lab1/interfaces?node=srl1", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	nodes = nil
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &nodes))
+	require.Len(t, nodes, 1)
+	require.Equal(t, "lab1-srl1", nodes[0].NodeName)
+
+	require.Equal(t, http.StatusNotFound, api.do(http.MethodGet, "/api/v1/labs/foreign/interfaces", nil).Code, "another user's lab")
+	require.Equal(t, http.StatusNotFound, api.do(http.MethodGet, "/api/v1/labs/gone/interfaces", nil).Code)
+	require.Len(t, api.fake.CallsOf("inspect-interfaces"), 2)
+}
+
+func TestInspectInterfacesRunsAsTheSignedInUser(t *testing.T) {
+	api := newC9sAPI(t)
+	api.captureLab()
+	api.svc.SetLabScoper(staticScoper{scope: func(user, _ string) (string, clablabruntime.Identity) {
+		return "c9s-lab1", clablabruntime.Identity{User: "clab:" + user, Groups: []string{"clab:users"}}
+	}})
+	recorder := api.do(http.MethodGet, "/api/v1/labs/lab1/interfaces", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	calls := api.fake.CallsOf("inspect-interfaces")
+	require.Equal(t, "clab:"+api.username, calls[len(calls)-1].Identity.User)
+	require.Equal(t, []string{"clab:users"}, calls[len(calls)-1].Identity.Groups)
+}

@@ -178,7 +178,6 @@ func TestContainerRuntimeRoutesAnswer501OnC9s(t *testing.T) {
 		{http.MethodGet, "/api/v1/images"},
 		{http.MethodPost, "/api/v1/images/pull"},
 		{http.MethodDelete, "/api/v1/images"},
-		{http.MethodGet, "/api/v1/labs/lab1/interfaces"},
 		{http.MethodGet, "/api/v1/labs/lab1/links"},
 		{http.MethodPost, "/api/v1/labs/lab1/snapshots"},
 		{http.MethodPost, "/api/v1/labs/lab1/capture/packetflix"},

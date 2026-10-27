@@ -10,6 +10,7 @@ import (
 	"time"
 
 	clablabruntime "github.com/srl-labs/containerlab/labruntime"
+	clabtypes "github.com/srl-labs/containerlab/types"
 )
 
 // LabCaptureOptions selects what a lab runtime packet capture streams.
@@ -43,6 +44,20 @@ func (s *Service) LabCaptureInterfaces(
 		return nil, err
 	}
 	return clab.CaptureInterfaces(ctx, nodes...)
+}
+
+// LabRuntimeInterfaces lists the interfaces of the lab's running nodes on the lab runtime, as
+// the user, in the shape interface inspection reports for local containers: per node (named
+// <lab>-<node>) the lab link interfaces, eth0 and lo, with their state.
+func (s *Service) LabRuntimeInterfaces(ctx context.Context, username, labName string) ([]*clabtypes.ContainerInterfaces, error) {
+	if err := requireLabRuntime("interface inspection"); err != nil {
+		return nil, err
+	}
+	clab, _, err := s.openLabRuntimeLab(ctx, username, labName, "")
+	if err != nil {
+		return nil, err
+	}
+	return clab.LabRuntimeInterfaces(ctx, "")
 }
 
 // CaptureLab streams pcapng of lab link interfaces to w, as the user. It returns when the

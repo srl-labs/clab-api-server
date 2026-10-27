@@ -18,6 +18,7 @@ import (
 
 	clabexec "github.com/srl-labs/containerlab/exec"
 	clablabruntime "github.com/srl-labs/containerlab/labruntime"
+	clabtypes "github.com/srl-labs/containerlab/types"
 	"gopkg.in/yaml.v3"
 )
 
@@ -602,4 +603,40 @@ func (r *instance) Capture(ctx context.Context, req clablabruntime.CaptureReques
 		return nil
 	}
 	return capture(ctx, req, w)
+}
+
+// InspectInterfaces reports, per node of the lab (named <lab>-<node>), eth0, the node's
+// capturable interfaces (CaptureIfaces) and lo, all up, as the c9s runtime does.
+func (r *instance) InspectInterfaces(_ context.Context, req clablabruntime.NodeRequest) ([]*clabtypes.ContainerInterfaces, error) {
+	namespace := r.namespace(req.Namespace, req.Name)
+	if err := r.record(Call{Op: "inspect-interfaces", Lab: req.Name, Namespace: namespace, Identity: r.identity(req.Identity), Nodes: req.Nodes}); err != nil {
+		return nil, err
+	}
+	state, err := r.lab(namespace, req.Name)
+	if err != nil {
+		return nil, err
+	}
+	r.fake.mu.Lock()
+	defer r.fake.mu.Unlock()
+	var result []*clabtypes.ContainerInterfaces
+	for _, node := range state.Nodes {
+		if len(req.Nodes) > 0 && !slices.Contains(req.Nodes, node.Name) {
+			continue
+		}
+		interfaces := []*clabtypes.ContainerInterfaceDetails{{
+			InterfaceName: "eth0", InterfaceMAC: "aa:c1:ab:00:00:00", InterfaceIndex: 2, InterfaceMTU: 1500,
+			InterfaceType: "veth", InterfaceState: "up",
+		}}
+		for idx, iface := range r.fake.CaptureIfaces[node.Name] {
+			interfaces = append(interfaces, &clabtypes.ContainerInterfaceDetails{
+				InterfaceName: iface.Interface, InterfaceAlias: iface.Alias, InterfaceMAC: fmt.Sprintf("aa:c1:ab:00:00:%02x", idx+1),
+				InterfaceIndex: 3 + idx, InterfaceMTU: 9500, InterfaceType: "veth", InterfaceState: "up",
+			})
+		}
+		interfaces = append(interfaces, &clabtypes.ContainerInterfaceDetails{
+			InterfaceName: "lo", InterfaceIndex: 1, InterfaceMTU: 65536, InterfaceType: "device", InterfaceState: "unknown",
+		})
+		result = append(result, &clabtypes.ContainerInterfaces{ContainerName: state.Name + "-" + node.Name, Interfaces: interfaces})
+	}
+	return result, nil
 }
