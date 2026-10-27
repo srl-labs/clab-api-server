@@ -278,7 +278,8 @@ and Wireshark starts capturing. The URI carries the `container` query parameter 
 requires. The interfaces a client names (the `network-interfaces` of `container`, and `nif`,
 also as `Clustershark-*` headers) must be targets of the ticket, otherwise the server answers
 `403` (a single-use ticket is used up); the capture covers the `nif` targets, or all of the
-ticket's. Unknown, used, revoked and expired tickets get `404`. cshargextcap
+ticket's. Unknown, used, revoked and expired tickets get `404`. The server's request and
+error logs show ticket paths as `/api/v1/capture/packetflix/<redacted>`. cshargextcap
 asks `{ticket}/discover/mobyshark` first and dials `{ticket}/capture`; the server answers both.
 The capture ends with a close frame (1000) after the ticket's duration, or when the client
 closes.
