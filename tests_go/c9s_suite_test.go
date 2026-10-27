@@ -150,6 +150,9 @@ func (s *C9sSuite) TestC9sMultiUserLab() {
 		subjects, err := s.kubectl("get", "rolebinding", "clab-lab-editor", "-n", s.namespace, "-o", "jsonpath={.roleRef.name} {.subjects[0].name}")
 		s.Require().NoError(err, subjects)
 		s.Require().Equal("clabernetes-lab-editor "+s.prefix+s.cfg.APIUserUser, subjects)
+		bindings, err := s.kubectl("get", "rolebindings", "-n", s.namespace, "-o", "name")
+		s.Require().NoError(err, bindings)
+		s.Require().NotContains(bindings, "clab-lab-access", "the lab editor role is all a lab user needs")
 		owner, err := s.kubectl("get", "topology.c9s.run", s.labName, "-n", s.namespace, "-o", "jsonpath={.metadata.labels.clab-owner}")
 		s.Require().NoError(err, owner)
 		s.Require().Equal(s.cfg.APIUserUser, owner, "--owner reaches the Topology")
@@ -334,10 +337,6 @@ func (s *C9sSuite) TestC9sMultiUserLab() {
 
 	s.Run("stop and start a node", func() {
 		data, status := s.request(http.MethodPost, s.url("/api/v1/labs/%s/stop?nodeFilter=n2", s.labName), s.userHeaders, nil, 5*time.Minute)
-		if status != http.StatusOK && strings.Contains(string(data), `cannot update resource \"deployments\"`) {
-			s.T().Skipf("the linked containerlab still stops nodes by scaling Deployments, which clabernetes-lab-editor does not allow; "+
-				"it needs containerlab with Node.spec.runState: %s", string(data))
-		}
 		s.Require().Equal(http.StatusOK, status, string(data))
 		runState, err := s.kubectl("get", "nodes.c9s.run", "n2", "-n", s.namespace, "-o", "jsonpath={.spec.runState}")
 		s.Require().NoError(err, runState)
