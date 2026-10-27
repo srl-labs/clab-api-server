@@ -47,7 +47,8 @@ var serverFeatures = []string{
 	// node-logs-runtime: node logs come from the configured runtime (CLAB_RUNTIME),
 	// including the device container log on c9s.
 	"node-logs-runtime",
-	// interface-state: the events stream reports interface up/down events.
+	// interface-state: the events stream reports the state of node interfaces
+	// (netlink-style create/update/delete events with up, down, lower-layer-down, ...).
 	"interface-state",
 	// c9s-runtime: labs run on Kubernetes through clabernetes (only with CLAB_RUNTIME=c9s).
 	"c9s-runtime",

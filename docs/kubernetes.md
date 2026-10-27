@@ -174,7 +174,7 @@ If any of them fails, it exits with a message that names what is missing.
 |---|---|
 | `c9s-runtime` | Labs run on Kubernetes through clabernetes. Only with `CLAB_RUNTIME=c9s`. |
 | `node-logs-runtime` | Node logs come from the configured runtime (on c9s: the device container log). |
-| `interface-state` | The events stream reports interface `up`/`down` events. |
+| `interface-state` | The events stream reports the state of node interfaces (`create`, `update`, `delete` with `state` `up`, `down`, `lower-layer-down`, ...), as netlink does for Docker labs. |
 | `node-stats` | Left out on c9s while `metrics.k8s.io` is not served. |
 | `lab-host-info` | `GET /api/v1/lab-host` describes the lab runtime (all runtimes). |
 | `capture-stream` | Packet capture through clabwire: `capture/interfaces`, `capture/stream` and capture tickets (see [Packet capture](#packet-capture)). Only with `CLAB_RUNTIME=c9s`. |
@@ -214,7 +214,20 @@ Features that need Docker or Podman on the server host are left out on c9s:
 
 Inspect records of c9s nodes carry `namespace`, `pod`, `container`, `node_uid`,
 `exposed_ports` and `load_balancer_address`; `container_id` is `<namespace>/<lab>/<node>` and
-the node name is `<lab>-<node>`.
+the node name is `<lab>-<node>`. Otherwise they read like Docker's:
+
+- `state` is `created`, `running` or `exited`, and `status` `Created`, `health: starting`,
+  `healthy` or `Exited`;
+- `labPath`/`absLabPath` is the topology file on the server host the lab was deployed from (see
+  [What users can edit](#users-and-their-rights) for when the server reports
+  `k8s://<namespace>/topologies/<lab>` instead).
+
+The events stream is containerlab's: container events with Docker's actions (`create`, `start`,
+`kill`, `stop`, `die`, `destroy`, `health_status: ...`) and attributes (`containerlab`,
+`clab-node-name`, `clab-node-kind`, `clab-owner`, `clab-topo-file`, `image`, `mgmt_ipv4`,
+`state`, ...), plus `namespace`, `node` and `pod`; interface events for the node's link
+interfaces under their topology names, `eth0` and `lo`. A user's stream covers the namespaces
+of the user's labs; a superuser's every namespace.
 
 ## How the server reaches nodes
 
