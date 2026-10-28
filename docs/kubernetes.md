@@ -177,7 +177,7 @@ If any of them fails, it exits with a message that names what is missing.
 | `interface-state` | The events stream reports the state of node interfaces (`create`, `update`, `delete` with `state` `up`, `down`, `lower-layer-down`, ...), as netlink does for Docker labs. |
 | `node-stats` | Left out on c9s while `metrics.k8s.io` is not served. |
 | `lab-host-info` | `GET /api/v1/lab-host` describes the lab runtime (all runtimes). |
-| `capture-stream` | Packet capture through clabwire: `capture/interfaces`, `capture/stream` and capture tickets (see [Packet capture](#packet-capture)). Only with `CLAB_RUNTIME=c9s`. |
+| `capture-stream` | Packet capture through clabwire: `capture/interfaces` and `capture/stream` (see [Packet capture](#packet-capture)). Only with `CLAB_RUNTIME=c9s`. |
 | `wireshark-vnc` | Wireshark VNC capture sessions. On c9s only while Docker answers on the server host (checked once a minute). |
 
 `namespaceMode` is always `per-lab`: every lab has its own namespace.
@@ -264,47 +264,31 @@ containerlab without gaps or duplicates. When the client goes away the capture s
 |---|---|
 | `GET /api/v1/labs/{lab}/capture/interfaces` | The capturable interfaces of the running nodes: `[{"node","interface","alias"?,"peerNode","peerInterface"}]`. |
 | `GET /api/v1/labs/{lab}/capture/stream?target=<node>:<iface>[&target=…][&duration=30s][&packetLimit=N][&snapLength=N][&download=1]` | The capture as `application/x-pcapng`, chunked and flushed as it is produced, until the duration or packet limit is reached or the client disconnects. `download=1` adds `Content-Disposition: attachment; filename="<lab>-<timestamp>.pcapng"`. Errors before the first byte are JSON: 400 for a target the lab cannot capture, 403 when Kubernetes refuses, 404 for a lab the user does not have, 409 for a node that is not running, 501 without c9s. |
-| `POST /api/v1/labs/{lab}/capture/tickets` | Body `{"targets":[{"node","interface"}],"duration"?:"30s"}`; answers `201 {"ticket","packetflixUri","expiresAt"}`. |
-| `GET /api/v1/capture/packetflix/{ticket}` | A websocket without a bearer token: the ticket is the credential. |
 
 A target names the node as the topology does (or its sanitized name) and the interface by name
 or alias, e.g. `srl1:ethernet-1/1`. The node ends at the first colon.
 
-**Tickets and Packetflix.** Clients that cannot send a bearer token use a ticket: 256 random
-bits, single use, valid for 60 seconds, bound to the user, the lab and the targets. Redeeming it
-starts the capture as that user and sends the pcapng stream in binary websocket messages, like
-Edgeshark's Packetflix service, so Edgeshark's `packetflix:` URL handler
-([cshargextcap](https://github.com/siemens/cshargextcap)) works unchanged: open `packetflixUri`
-and Wireshark starts capturing. The URI carries the `container` query parameter cshargextcap
-requires. The interfaces a client names (the `network-interfaces` of `container`, and `nif`,
-also as `Clustershark-*` headers) must be targets of the ticket, otherwise the server answers
-`403` (a single-use ticket is used up); the capture covers the `nif` targets, or all of the
-ticket's. Unknown, used, revoked and expired tickets get `404`. The server's request and
-error logs show ticket paths as `/api/v1/capture/packetflix/<redacted>`. cshargextcap
-asks `{ticket}/discover/mobyshark` first and dials `{ticket}/capture`; the server answers both.
-The capture ends with a close frame (1000) after the ticket's duration, or when the client
-closes.
-
-The scheme and host of `packetflixUri` come from the request. Behind a reverse proxy, list the
-proxy in `TRUSTED_PROXIES`; only then does the server use its `X-Forwarded-Proto` and
-`X-Forwarded-Host`.
-
 **Wireshark VNC.** `POST /api/v1/labs/{lab}/capture/wireshark-vnc-sessions` takes the node's
 inspect name (`<lab>-<node>`) as `containerName` and an interface (or alias) as
-`interfaceName`, and starts one Wireshark VNC container per node on the server host. Its
-`PACKETFLIX_LINK` is a ticket URL of this server, reached through the Docker host gateway; it
-is not attached to an Edgeshark network. With TLS, the container reaches the server under the
-first DNS name of its certificate other than `localhost` (mapped to the host gateway), or its
-first non-loopback IP address, and trusts the certificate (mounted, `SSL_CERT_FILE`). The
-certificate therefore needs such a name; the auto-generated one has the host name. This needs
-Docker on the server host; without it the routes answer 501 and `/health` leaves out
-`wireshark-vnc`.
+`interfaceName`, and starts one Wireshark VNC container per node on the server host. The server
+captures the node's requested interfaces as the signed-in user, in one pcapng stream like
+`capture/stream`, and writes it into a named pipe in the container (`docker exec -i`), which
+the container's Wireshark reads. The container is not attached to an Edgeshark network and does
+not reach the server. This needs Docker on the server host; without it the routes answer 501
+and `/health` leaves out `wireshark-vnc`.
 
-A session's link carries a **session ticket**, so restarting the capture inside its Wireshark
-works: it is bound to the user, the lab and the session's targets like any ticket, but redeems
-any number of times while the session exists. Closing the session, or its expiry
-(`CAPTURE_WIRESHARK_SESSION_TTL`), revokes it: it is refused from then on, and captures that
-still run on it end (close `1008` "capture ticket revoked"), as does the container.
+The pipe is the `CLABWIRE_CAPTURE_PIPE` mode of
+[wireshark-vnc-docker](https://github.com/srl-labs/wireshark-vnc-docker), so
+`CAPTURE_WIRESHARK_DOCKER_IMAGE` (default `ghcr.io/srl-labs/wireshark-vnc-docker:latest`) must
+be a release that has it. Until one is released, only the `:dev` tag has it. With an older
+image no pipe appears, and the session fails within a minute (see below).
+
+Stopping and restarting the capture inside the session's Wireshark works: each time Wireshark
+opens the pipe, the server starts a new capture into it, and stops it when Wireshark closes the
+pipe. Closing the session, or its expiry (`CAPTURE_WIRESHARK_SESSION_TTL`), stops the capture
+in the pods and the container. When the capture fails (for example when the node's pod is gone,
+or the lab was destroyed), the server stops the session's container and its `ready` and `vnc`
+routes answer `500` with the reason until the session is closed or expires.
 
 ## Not supported on c9s
 
