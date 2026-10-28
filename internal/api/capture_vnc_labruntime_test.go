@@ -3,44 +3,120 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/gorilla/websocket"
 	clablabruntime "github.com/srl-labs/containerlab/labruntime"
 	"github.com/stretchr/testify/require"
 
-	"github.com/srl-labs/clab-api-server/internal/capture"
 	"github.com/srl-labs/clab-api-server/internal/config"
 	"github.com/srl-labs/clab-api-server/internal/models"
-	"github.com/srl-labs/clab-api-server/internal/tlsconfig"
 )
 
-// fakeDocker puts a docker command on PATH that logs its arguments and answers run with a
-// container ID. It returns the log path.
+// fakeDocker puts a docker command on PATH that logs its arguments, answers run with the
+// container's name as its ID, and plays the capture pipe for exec: it reports the pipe open
+// and appends its stdin to <dir>/pipe-<container>. It returns the directory.
 func fakeDocker(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	logPath := filepath.Join(dir, "docker.log")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"" + logPath + "\"\n[ \"$1\" = run ] && echo wireshark-id\nexit 0\n"
+	script := `#!/bin/sh
+dir="` + dir + `"
+case "$1" in
+run)
+	printf '%s\n' "$*" >> "$dir/docker.log"
+	prev=""
+	for arg in "$@"; do
+		[ "$prev" = "--name" ] && name="$arg"
+		prev="$arg"
+	done
+	echo "$name"
+	;;
+exec)
+	printf 'exec %s\n' "$3" >> "$dir/docker.log"
+	echo open
+	exec cat >> "$dir/pipe-$3"
+	;;
+*)
+	printf '%s\n' "$*" >> "$dir/docker.log"
+	;;
+esac
+exit 0
+`
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o755))
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	return logPath
+	return dir
 }
 
-var packetflixLinkRx = regexp.MustCompile(`PACKETFLIX_LINK=(\S+)`)
+// dockerLog returns the lines the fake docker logged.
+func dockerLog(t *testing.T, dir string) []string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, "docker.log"))
+	require.NoError(t, err)
+	return strings.Split(strings.TrimSpace(string(data)), "\n")
+}
 
-// startVncSessions creates Wireshark VNC sessions on the c9s fake and returns the docker run
-// lines, the links, the grants of the tickets the links carry, and the sessions.
-func startVncSessions(t *testing.T, api *c9sAPI, logPath string) ([]string, []string, []capture.TicketGrant, []models.CaptureWiresharkVncSession) {
+// pipeContent returns what the server wrote into the capture pipe of a node's session.
+func pipeContent(t *testing.T, dir, containerName string) string {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(dir, "pipe-clab_ws_vnc_*_"+containerName+"_*"))
+	require.NoError(t, err)
+	if len(files) != 1 {
+		return ""
+	}
+	data, err := os.ReadFile(files[0])
+	require.NoError(t, err)
+	return string(data)
+}
+
+// labCaptures records the captures the fake lab runtime runs, and ends them with their context.
+type labCaptures struct {
+	mu       sync.Mutex
+	requests []clablabruntime.CaptureRequest
+	running  int
+	fail     error
+}
+
+func (l *labCaptures) capture(ctx context.Context, req clablabruntime.CaptureRequest, w io.Writer) error {
+	l.mu.Lock()
+	l.requests = append(l.requests, req)
+	l.running++
+	fail := l.fail
+	l.mu.Unlock()
+	defer func() {
+		l.mu.Lock()
+		l.running--
+		l.mu.Unlock()
+	}()
+	names := make([]string, 0, len(req.Targets))
+	for _, target := range req.Targets {
+		names = append(names, target.Node+":"+target.Interface)
+	}
+	if _, err := fmt.Fprintf(w, "pcapng of %s;", strings.Join(names, ",")); err != nil {
+		return err
+	}
+	if fail != nil {
+		return fail
+	}
+	<-ctx.Done()
+	return nil
+}
+
+func (l *labCaptures) runningCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.running
+}
+
+// startVncSessions creates Wireshark VNC sessions on the c9s fake.
+func startVncSessions(t *testing.T, api *c9sAPI, body string) []models.CaptureWiresharkVncSession {
 	t.Helper()
 	config.AppConfig.CaptureWiresharkPullPolicy = "never"
 	config.AppConfig.CaptureWiresharkDockerImage = "example/wireshark:test"
@@ -48,21 +124,38 @@ func startVncSessions(t *testing.T, api *c9sAPI, logPath string) ([]string, []st
 	t.Cleanup(ShutdownCaptureManager)
 	wiresharkVncProbe = func() bool { return true }
 
-	recorder := api.do(http.MethodPost, "/api/v1/labs/lab1/capture/wireshark-vnc-sessions", []byte(`{"theme":"dark","targets":[
-		{"containerName":"lab1-n1","interfaceName":"eth1"},
-		{"containerName":"lab1-srl1","interfaceName":"ethernet-1/1"}]}`))
+	recorder := api.do(http.MethodPost, "/api/v1/labs/lab1/capture/wireshark-vnc-sessions", []byte(body))
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	var response models.CaptureWiresharkVncCreateResponse
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
-	require.Len(t, response.Sessions, 2, "one session per node")
-	require.Equal(t, "lab1-n1", response.Sessions[0].ContainerName)
-	require.Equal(t, []string{"eth1"}, response.Sessions[0].InterfaceNames)
-	require.Equal(t, []string{"e1-1"}, response.Sessions[1].InterfaceNames)
+	return response.Sessions
+}
 
-	data, err := os.ReadFile(logPath)
-	require.NoError(t, err)
+// TestWiresharkVncOnC9sFeedsACapturePipe starts sessions for two interfaces of one node and
+// one of another: one session per node, each fed with one capture of its node's interfaces,
+// as the requesting user, through the container's capture pipe. Closing a session ends its
+// capture.
+func TestWiresharkVncOnC9sFeedsACapturePipe(t *testing.T) {
+	api := newC9sAPI(t)
+	api.captureLab()
+	api.fake.CaptureIfaces["n1"] = append(api.fake.CaptureIfaces["n1"],
+		clablabruntime.CaptureInterface{Node: "n1", Interface: "eth2", PeerNode: "host", PeerInterface: "n1-eth2"})
+	captures := &labCaptures{}
+	api.fake.CaptureFunc = captures.capture
+	dir := fakeDocker(t)
+
+	sessions := startVncSessions(t, api, `{"theme":"dark","targets":[
+		{"containerName":"lab1-n1","interfaceName":"eth1"},
+		{"containerName":"lab1-srl1","interfaceName":"ethernet-1/1"},
+		{"containerName":"lab1-n1","interfaceName":"eth2"}]}`)
+	require.Len(t, sessions, 2, "one session per node")
+	require.Equal(t, "lab1-n1", sessions[0].ContainerName)
+	require.Equal(t, []string{"eth1", "eth2"}, sessions[0].InterfaceNames)
+	require.Equal(t, "lab1-srl1", sessions[1].ContainerName)
+	require.Equal(t, []string{"e1-1"}, sessions[1].InterfaceNames)
+
 	var runs []string
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+	for _, line := range dockerLog(t, dir) {
 		require.NotContains(t, line, "network connect", "no Edgeshark network")
 		require.False(t, strings.HasPrefix(line, "ps"), "no Edgeshark lookup: %s", line)
 		if strings.HasPrefix(line, "run ") {
@@ -70,170 +163,59 @@ func startVncSessions(t *testing.T, api *c9sAPI, logPath string) ([]string, []st
 		}
 	}
 	require.Len(t, runs, 2)
-	var links []string
-	var grants []capture.TicketGrant
+	require.Contains(t, runs[0], "-e CLABWIRE_CAPTURE_PIPE=/tmp/clabwire/lab1-n1 -e DARK_MODE=1 example/wireshark:test")
+	require.Contains(t, runs[1], "-e CLABWIRE_CAPTURE_PIPE=/tmp/clabwire/lab1-srl1 -e DARK_MODE=1 example/wireshark:test")
 	for _, run := range runs {
-		require.Contains(t, run, "-e DARK_MODE=1 example/wireshark:test")
-		match := packetflixLinkRx.FindStringSubmatch(run)
-		require.NotNil(t, match, run)
-		links = append(links, match[1])
-		parsed, err := url.Parse(strings.TrimPrefix(match[1], "packetflix:"))
-		require.NoError(t, err)
-		ticket := strings.TrimPrefix(parsed.Path, captureTicketPath)
-		redemption, err := captureTicketStore().Redeem(ticket, nil)
-		require.NoError(t, err, "the link carries a fresh ticket")
-		require.NotNil(t, redemption.Revoked, "a session ticket")
-		grants = append(grants, redemption.TicketGrant)
-	}
-	return runs, links, grants, response.Sessions
-}
-
-func TestWiresharkVncOnC9sCapturesThroughATicket(t *testing.T) {
-	api := newC9sAPI(t)
-	api.captureLab()
-	logPath := fakeDocker(t)
-	config.AppConfig.TLSEnable = false
-	config.AppConfig.APIPort = "8080"
-
-	runs, links, grants, _ := startVncSessions(t, api, logPath)
-	for _, run := range runs {
-		require.Contains(t, run, "--add-host host.docker.internal:host-gateway")
+		require.NotContains(t, run, "PACKETFLIX_LINK")
+		require.NotContains(t, run, "--add-host", "the container does not reach the server")
 		require.NotContains(t, run, "SSL_CERT_FILE")
 	}
-	require.True(t, strings.HasPrefix(links[0], "packetflix:ws://host.docker.internal:8080/api/v1/capture/packetflix/"), links[0])
-	require.Equal(t, capture.TicketGrant{Username: api.username, LabName: "lab1",
-		Targets: []capture.Target{{Node: "n1", Interface: "eth1"}}}, grants[0], "the requesting user's ticket, without a duration")
-	require.Equal(t, []capture.Target{{Node: "srl1", Interface: "e1-1"}}, grants[1].Targets)
-}
 
-func TestWiresharkVncOnC9sTrustsTheServerCertificate(t *testing.T) {
-	api := newC9sAPI(t)
-	api.captureLab()
-	logPath := fakeDocker(t)
-	certDir := t.TempDir()
-	certFile, keyFile := filepath.Join(certDir, "server.crt"), filepath.Join(certDir, "server.key")
-	_, err := tlsconfig.EnsureSelfSignedCertificate(certFile, keyFile, []string{"localhost", "127.0.0.1", "clab-host.test"})
-	require.NoError(t, err)
-	SetServerCertificateFile(certFile)
-	t.Cleanup(func() { SetServerCertificateFile("") })
-	config.AppConfig.TLSEnable = true
-	config.AppConfig.APIPort = "8443"
-
-	runs, links, _, _ := startVncSessions(t, api, logPath)
-	for _, run := range runs {
-		require.Contains(t, run, "-v "+certFile+":/etc/clab-api-server/server.crt:ro -e SSL_CERT_FILE=/etc/clab-api-server/server.crt --add-host clab-host.test:host-gateway")
+	require.Eventually(t, func() bool {
+		return pipeContent(t, dir, "lab1-n1") == "pcapng of n1:eth1,n1:eth2;" &&
+			pipeContent(t, dir, "lab1-srl1") == "pcapng of srl1:e1-1;"
+	}, 10*time.Second, 50*time.Millisecond, "each session's Wireshark reads its node's capture")
+	captures.mu.Lock()
+	requests := append([]clablabruntime.CaptureRequest(nil), captures.requests...)
+	captures.mu.Unlock()
+	require.Len(t, requests, 2)
+	for _, req := range requests {
+		require.Equal(t, "lab1", req.Name)
+		require.Zero(t, req.Duration, "the capture lasts as long as the session")
 	}
-	for _, link := range links {
-		require.True(t, strings.HasPrefix(link, "packetflix:wss://clab-host.test:8443/api/v1/capture/packetflix/"), link)
-	}
-}
 
-func TestCertificateHostForContainers(t *testing.T) {
-	dir := t.TempDir()
-	write := func(name string, hosts ...string) string {
-		certFile := filepath.Join(dir, name+".crt")
-		_, err := tlsconfig.EnsureSelfSignedCertificate(certFile, filepath.Join(dir, name+".key"), hosts)
-		require.NoError(t, err)
-		return certFile
-	}
-	host, isIP, err := certificateHostForContainers(write("dns", "localhost", "127.0.0.1", "clab.example.com", "10.0.0.5"))
-	require.NoError(t, err)
-	require.Equal(t, "clab.example.com", host)
-	require.False(t, isIP)
-	host, isIP, err = certificateHostForContainers(write("ip", "localhost", "127.0.0.1", "::1", "10.0.0.5"))
-	require.NoError(t, err)
-	require.Equal(t, "10.0.0.5", host)
-	require.True(t, isIP)
-	_, _, err = certificateHostForContainers(write("loopback", "localhost", "127.0.0.1"))
-	require.ErrorContains(t, err, "names no host")
-	_, _, err = certificateHostForContainers(filepath.Join(dir, "missing.crt"))
-	require.Error(t, err)
-}
-
-// TestWiresharkVncSessionTicketLastsForTheSession restarts the capture inside a session's
-// Wireshark (cshargextcap connects again with the same link) and closes the session: its
-// ticket redeems for the whole session, is refused for other targets, and is revoked with the
-// session, which also ends a capture that still runs on it.
-func TestWiresharkVncSessionTicketLastsForTheSession(t *testing.T) {
-	api := newC9sAPI(t)
-	api.captureLab()
-	logPath := fakeDocker(t)
-	config.AppConfig.TLSEnable = false
-	config.AppConfig.APIPort = "8080"
-	var captures atomic.Int32
-	var block atomic.Bool
-	ended := make(chan error, 1)
-	api.fake.CaptureFunc = func(ctx context.Context, req clablabruntime.CaptureRequest, w io.Writer) error {
-		captures.Add(1)
-		if _, err := w.Write([]byte("SHB")); err != nil {
-			return err
-		}
-		if block.CompareAndSwap(true, false) {
-			<-ctx.Done()
-			ended <- ctx.Err()
-		}
-		return nil
-	}
-	server := api.server()
-
-	_, links, _, sessions := startVncSessions(t, api, logPath)
-	readCapture := func(link string) {
-		t.Helper()
-		conn, _, err := dialPacketflix(server.URL, link)
-		require.NoError(t, err)
-		defer func() { _ = conn.Close() }()
-		_, data, err := conn.ReadMessage()
-		require.NoError(t, err)
-		require.Equal(t, "SHB", string(data))
-		_, _, err = conn.ReadMessage()
-		var closeErr *websocket.CloseError
-		require.ErrorAs(t, err, &closeErr)
-		require.Equal(t, websocket.CloseNormalClosure, closeErr.Code)
-	}
-	for range 3 {
-		readCapture(links[0])
-	}
-	require.Equal(t, int32(3), captures.Load(), "the session's Wireshark restarts its capture with the same link")
-
-	// The ticket never captures other targets: the other session's interface is refused.
-	other := strings.Replace(links[0], url.QueryEscape(`"n1:eth1"`), url.QueryEscape(`"srl1:e1-1"`), 1)
-	require.NotEqual(t, links[0], other)
-	_, response, err := dialPacketflix(server.URL, other)
-	require.ErrorIs(t, err, websocket.ErrBadHandshake)
-	require.Equal(t, http.StatusForbidden, response.StatusCode)
-	readCapture(links[0])
-
-	// A capture still runs when the session is closed.
-	block.Store(true)
-	conn, _, err := dialPacketflix(server.URL, links[0])
-	require.NoError(t, err)
-	defer func() { _ = conn.Close() }()
-	_, _, err = conn.ReadMessage()
-	require.NoError(t, err)
 	recorder := api.do(http.MethodDelete, "/api/v1/capture/wireshark-vnc-sessions/"+sessions[0].SessionID, nil)
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-	select {
-	case err := <-ended:
-		require.ErrorIs(t, err, context.Canceled, "closing the session ends the capture on its ticket")
-	case <-time.After(5 * time.Second):
-		t.Fatal("the capture outlived its session")
-	}
-	_, _, err = conn.ReadMessage()
-	var closeErr *websocket.CloseError
-	require.ErrorAs(t, err, &closeErr)
-	require.Equal(t, websocket.ClosePolicyViolation, closeErr.Code)
-	require.Equal(t, "capture ticket revoked", closeErr.Text)
-
-	_, response, err = dialPacketflix(server.URL, links[0])
-	require.ErrorIs(t, err, websocket.ErrBadHandshake)
-	require.Equal(t, http.StatusNotFound, response.StatusCode, "a closed session's ticket is refused")
-
-	// The other session's ticket is still valid until that session is closed as well.
-	readCapture(links[1])
+	require.Equal(t, 1, captures.runningCount(), "closing a session ends its capture")
 	recorder = api.do(http.MethodDelete, "/api/v1/capture/wireshark-vnc-sessions", nil)
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-	_, response, err = dialPacketflix(server.URL, links[1])
-	require.ErrorIs(t, err, websocket.ErrBadHandshake)
-	require.Equal(t, http.StatusNotFound, response.StatusCode)
-	require.Zero(t, captureTicketStore().Pending())
+	require.Zero(t, captures.runningCount())
+	require.Contains(t, dockerLog(t, dir), "rm -f "+strings.Fields(runs[0])[4])
+}
+
+// TestWiresharkVncOnC9sReportsAFailedCapture fails the session's capture: the session's
+// container stops and its routes answer with the reason.
+func TestWiresharkVncOnC9sReportsAFailedCapture(t *testing.T) {
+	api := newC9sAPI(t)
+	api.captureLab()
+	api.fake.CaptureFunc = (&labCaptures{fail: errors.New("pod n1 is gone")}).capture
+	dir := fakeDocker(t)
+
+	sessions := startVncSessions(t, api, `{"targets":[{"containerName":"lab1-n1","interfaceName":"eth1"}]}`)
+	require.Len(t, sessions, 1)
+	ready := "/api/v1/capture/wireshark-vnc-sessions/" + sessions[0].SessionID + "/ready"
+	require.Eventually(t, func() bool {
+		return api.do(http.MethodGet, ready, nil).Code == http.StatusInternalServerError
+	}, 10*time.Second, 50*time.Millisecond)
+	recorder := api.do(http.MethodGet, ready, nil)
+	require.Contains(t, decodeError(t, recorder), "pod n1 is gone")
+	require.Equal(t, "pcapng of n1:eth1;", pipeContent(t, dir, "lab1-n1"))
+	var stopped bool
+	for _, line := range dockerLog(t, dir) {
+		stopped = stopped || strings.HasPrefix(line, "rm -f clab_ws_vnc_")
+	}
+	require.True(t, stopped, "the failed session's container is stopped")
+
+	recorder = api.do(http.MethodDelete, "/api/v1/capture/wireshark-vnc-sessions/"+sessions[0].SessionID, nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 }

@@ -41,6 +41,8 @@ var (
 	ErrEdgeSharkNotRunning = errors.New("edgeshark is not running")
 	ErrSessionNotFound     = errors.New("capture session not found")
 	ErrSessionForbidden    = errors.New("capture session not owned by user")
+	// ErrSessionCaptureFailed reports a session whose capture failed; its container is gone.
+	ErrSessionCaptureFailed = errors.New("the capture of the Wireshark VNC session failed")
 )
 
 type pullPolicy string
@@ -131,24 +133,19 @@ type wiresharkSession struct {
 	createdAt      time.Time
 	expiresAt      time.Time
 	lastAccess     time.Time
-	// release ends what the session's Packetflix link grants (a session capture ticket).
-	release     func()
-	releaseOnce sync.Once
-}
-
-// end releases the session's Packetflix link once the session is gone: closed, expired,
-// shut down or failed to start.
-func (s *wiresharkSession) end() {
-	if s == nil || s.release == nil {
-		return
-	}
-	s.releaseOnce.Do(s.release)
+	// stopFeed ends the capture the server writes into the session's capture pipe, and
+	// feedDone is closed once it ended; both are nil for an Edgeshark session.
+	stopFeed context.CancelFunc
+	feedDone chan struct{}
+	// failure is why the session's capture failed; the session then has no container.
+	failure error
 }
 
 type Manager struct {
-	cfg    ManagerConfig
-	runner commandRunner
-	client *http.Client
+	cfg      ManagerConfig
+	runner   commandRunner
+	streamer streamRunner
+	client   *http.Client
 
 	mu       sync.RWMutex
 	sessions map[string]*wiresharkSession
@@ -181,6 +178,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 	m := &Manager{
 		cfg:      normalized,
 		runner:   execRunner{},
+		streamer: execRunner{},
 		client:   &http.Client{Timeout: 2 * time.Second},
 		sessions: make(map[string]*wiresharkSession),
 		stopCh:   make(chan struct{}),
@@ -206,8 +204,7 @@ func (m *Manager) Shutdown(ctx context.Context) {
 	m.mu.Unlock()
 
 	for _, session := range pending {
-		session.end()
-		if err := m.stopWiresharkContainer(ctx, session.containerID); err != nil {
+		if err := m.endSession(ctx, session); err != nil {
 			log.Warnf("capture shutdown: failed stopping session '%s': %v", session.id, err)
 		}
 	}
@@ -432,80 +429,30 @@ func (m *Manager) CreateWiresharkSessions(
 		if len(spec.InterfaceNames) == 0 {
 			continue
 		}
+		uri, err := buildPacketflixURIForSpec(packetflixHost, m.cfg.PacketflixPort, spec)
+		if err != nil {
+			return nil, err
+		}
 		launches = append(launches, sessionLaunch{
 			containerName:  spec.ContainerName,
 			interfaceNames: spec.InterfaceNames,
 			labDir:         spec.LabDirectory,
 			edgesharkNet:   edgesharkNetwork,
-			packetflixLink: func(time.Time) (string, func(), error) {
-				uri, err := buildPacketflixURIForSpec(packetflixHost, m.cfg.PacketflixPort, spec)
-				return uri, nil, err
-			},
+			packetflixURI:  uri,
 		})
 	}
 	return m.startSessions(ctx, options.Username, options.LabName, options.Theme, launches)
 }
 
-// WiresharkLinkSpec is a Wireshark VNC session that opens a Packetflix link the caller
-// provides, such as a capture ticket URL of this server, instead of one of Edgeshark.
-type WiresharkLinkSpec struct {
-	// ContainerName and InterfaceNames describe what the session captures.
-	ContainerName  string
-	InterfaceNames []string
-	// PacketflixLink returns the link the session's Wireshark opens. It is called right
-	// before the session's container starts, with the time the session expires. release, when
-	// not nil, is called once the session ends (closed, expired, shut down, or failed to
-	// start), for example to revoke a capture ticket the link carries for the whole session.
-	PacketflixLink func(expiresAt time.Time) (link string, release func(), err error)
-	// RunArgs are extra container run arguments, for example to reach the link's host.
-	RunArgs []string
-}
-
-// CreateLinkedWiresharkSessionsOptions selects Wireshark VNC sessions with caller-provided
-// Packetflix links.
-type CreateLinkedWiresharkSessionsOptions struct {
-	Username string
-	LabName  string
-	Theme    string
-	Specs    []WiresharkLinkSpec
-}
-
-// CreateLinkedWiresharkSessions starts one Wireshark VNC container per spec that captures from
-// the spec's Packetflix link. It needs neither Edgeshark nor its network, only the container
-// runtime on this host.
-func (m *Manager) CreateLinkedWiresharkSessions(
-	ctx context.Context,
-	options CreateLinkedWiresharkSessionsOptions,
-) ([]WiresharkSessionInfo, error) {
-	if len(options.Specs) == 0 {
-		return nil, errors.New("at least one capture target is required")
-	}
-	if err := m.ensureImageAvailable(ctx); err != nil {
-		return nil, err
-	}
-	launches := make([]sessionLaunch, 0, len(options.Specs))
-	for _, spec := range options.Specs {
-		if spec.PacketflixLink == nil {
-			return nil, errors.New("a linked Wireshark session needs a Packetflix link")
-		}
-		launches = append(launches, sessionLaunch{
-			containerName:  spec.ContainerName,
-			interfaceNames: spec.InterfaceNames,
-			packetflixLink: spec.PacketflixLink,
-			runArgs:        spec.RunArgs,
-		})
-	}
-	return m.startSessions(ctx, options.Username, options.LabName, options.Theme, launches)
-}
-
-// sessionLaunch is one Wireshark VNC container to start.
+// sessionLaunch is one Wireshark VNC container to start: its Wireshark captures from
+// packetflixURI (Edgeshark), or reads what capture writes into its capture pipe.
 type sessionLaunch struct {
 	containerName  string
 	interfaceNames []string
 	labDir         string
 	edgesharkNet   string
-	packetflixLink func(expiresAt time.Time) (string, func(), error)
-	runArgs        []string
+	packetflixURI  string
+	capture        CaptureFunc
 }
 
 // startSessions starts a Wireshark VNC container per launch and registers its session. On
@@ -524,14 +471,6 @@ func (m *Manager) startSessions(
 			return nil, err
 		}
 
-		now := time.Now().UTC()
-		expiresAt := now.Add(m.cfg.WiresharkSessionTTL)
-		packetflix, release, err := launch.packetflixLink(expiresAt)
-		if err != nil {
-			m.cleanupCreatedSessions(ctx, created)
-			return nil, err
-		}
-
 		sessionID := randomSessionID()
 		containerName := buildWiresharkContainerName(
 			username,
@@ -539,24 +478,26 @@ func (m *Manager) startSessions(
 			launch.interfaceNames,
 		)
 
+		capturePipe := ""
+		if launch.capture != nil {
+			capturePipe = wiresharkCapturePipe(launch.containerName)
+		}
 		containerID, err := m.startWiresharkContainer(ctx, startWiresharkOptions{
 			containerName:  containerName,
-			packetflixURI:  packetflix,
+			packetflixURI:  launch.packetflixURI,
+			capturePipe:    capturePipe,
 			darkMode:       strings.EqualFold(strings.TrimSpace(theme), "dark"),
 			localPort:      port,
 			labDir:         strings.TrimSpace(launch.labDir),
 			edgesharkNet:   launch.edgesharkNet,
 			wiresharkImage: m.cfg.WiresharkDockerImage,
-			extraArgs:      launch.runArgs,
 		})
 		if err != nil {
-			if release != nil {
-				release()
-			}
 			m.cleanupCreatedSessions(ctx, created)
 			return nil, err
 		}
 
+		now := time.Now().UTC()
 		session := &wiresharkSession{
 			id:             sessionID,
 			username:       username,
@@ -567,14 +508,22 @@ func (m *Manager) startSessions(
 			port:           port,
 			showVolumeTip:  strings.TrimSpace(launch.labDir) != "",
 			createdAt:      now,
-			expiresAt:      expiresAt,
+			expiresAt:      now.Add(m.cfg.WiresharkSessionTTL),
 			lastAccess:     now,
-			release:        release,
+		}
+		var feedCtx context.Context
+		if launch.capture != nil {
+			// The feed outlives the request that creates the session.
+			feedCtx, session.stopFeed = context.WithCancel(context.Background())
+			session.feedDone = make(chan struct{})
 		}
 
 		m.mu.Lock()
 		m.sessions[session.id] = session
 		m.mu.Unlock()
+		if launch.capture != nil {
+			go m.feedSession(feedCtx, session, launch.capture)
+		}
 
 		created = append(created, session)
 		infos = append(infos, session.toInfo())
@@ -605,8 +554,7 @@ func (m *Manager) CloseSession(
 	delete(m.sessions, sessionID)
 	m.mu.Unlock()
 
-	session.end()
-	return m.stopWiresharkContainer(ctx, session.containerID)
+	return m.endSession(ctx, session)
 }
 
 func (m *Manager) CloseAllSessions(
@@ -635,8 +583,7 @@ func (m *Manager) CloseAllSessions(
 
 	errs := make([]string, 0)
 	for _, session := range pending {
-		session.end()
-		if err := m.stopWiresharkContainer(ctx, session.containerID); err != nil {
+		if err := m.endSession(ctx, session); err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", session.id, err))
 		}
 	}
@@ -700,6 +647,9 @@ func (m *Manager) lookupSession(sessionID, username string, isSuperuser bool) (*
 	if !isSuperuser && session.username != username {
 		return nil, ErrSessionForbidden
 	}
+	if session.failure != nil {
+		return nil, fmt.Errorf("%w: %w", ErrSessionCaptureFailed, session.failure)
+	}
 	session.lastAccess = time.Now().UTC()
 	return session, nil
 }
@@ -712,11 +662,26 @@ func (m *Manager) cleanupCreatedSessions(ctx context.Context, sessions []*wiresh
 		m.mu.Lock()
 		delete(m.sessions, session.id)
 		m.mu.Unlock()
-		session.end()
-		if err := m.stopWiresharkContainer(ctx, session.containerID); err != nil {
+		if err := m.endSession(ctx, session); err != nil {
 			log.Warnf("capture cleanup: failed stopping session '%s': %v", session.id, err)
 		}
 	}
+}
+
+// endSession stops a session that is no longer registered: its capture, if the server feeds
+// one, and its container. It waits for the capture to end, as long as ctx allows.
+func (m *Manager) endSession(ctx context.Context, session *wiresharkSession) error {
+	if session.stopFeed != nil {
+		session.stopFeed()
+	}
+	err := m.stopWiresharkContainer(ctx, session.containerID)
+	if session.feedDone != nil {
+		select {
+		case <-session.feedDone:
+		case <-ctx.Done():
+		}
+	}
+	return err
 }
 
 func (m *Manager) ensureImageAvailable(ctx context.Context) error {
@@ -752,14 +717,16 @@ func (m *Manager) ensureImageAvailable(ctx context.Context) error {
 }
 
 type startWiresharkOptions struct {
-	containerName  string
-	packetflixURI  string
+	containerName string
+	packetflixURI string
+	// capturePipe, when set, replaces packetflixURI: Wireshark reads the named pipe at that
+	// path, which the server writes, and the container needs no network access.
+	capturePipe    string
 	darkMode       bool
 	localPort      int
 	labDir         string
 	edgesharkNet   string
 	wiresharkImage string
-	extraArgs      []string
 }
 
 func (m *Manager) startWiresharkContainer(
@@ -774,14 +741,17 @@ func (m *Manager) startWiresharkContainer(
 		"--name", options.containerName,
 		"-p", fmt.Sprintf("127.0.0.1:%d:5800", options.localPort),
 	}
-	if strings.TrimSpace(options.edgesharkNet) == "" {
+	if options.capturePipe == "" && strings.TrimSpace(options.edgesharkNet) == "" {
 		args = append(args, wiresharkHostGatewayRunArgs(runtime)...)
 	}
 	if strings.TrimSpace(options.labDir) != "" {
 		args = append(args, "-v", fmt.Sprintf("%s:/pcaps", options.labDir))
 	}
-	args = append(args, options.extraArgs...)
-	args = append(args, "-e", fmt.Sprintf("PACKETFLIX_LINK=%s", options.packetflixURI))
+	if options.capturePipe != "" {
+		args = append(args, "-e", fmt.Sprintf("%s=%s", capturePipeEnv, options.capturePipe))
+	} else {
+		args = append(args, "-e", fmt.Sprintf("PACKETFLIX_LINK=%s", options.packetflixURI))
+	}
 	if options.darkMode {
 		args = append(args, "-e", "DARK_MODE=1")
 	}
@@ -1124,8 +1094,7 @@ func (m *Manager) sweepExpiredSessions() {
 	defer cancel()
 
 	for _, session := range expired {
-		session.end()
-		if err := m.stopWiresharkContainer(ctx, session.containerID); err != nil {
+		if err := m.endSession(ctx, session); err != nil {
 			log.Warnf("capture sweeper: failed stopping expired session '%s': %v", session.id, err)
 		}
 	}

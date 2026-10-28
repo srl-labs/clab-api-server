@@ -487,7 +487,7 @@ func BuildPacketflixCaptureHandler(c *gin.Context) {
 
 // CreateWiresharkVncSessionsHandler launches wireshark noVNC sessions for capture targets.
 // @Summary Create Wireshark VNC capture session(s)
-// @Description Creates one or more Wireshark noVNC capture sessions for the specified lab interface targets, one per container. With Docker and Podman the sessions capture through Edgeshark. With lab runtime c9s, containerName is the node's inspect name (<lab>-<node>) and interfaceName a capturable interface (or its alias); each session's Wireshark captures from a capture ticket of the signed-in user on this server, without Edgeshark. That needs Docker on the server host (otherwise 501, and /health leaves out wireshark-vnc).
+// @Description Creates one or more Wireshark noVNC capture sessions for the specified lab interface targets, one per container. With Docker and Podman the sessions capture through Edgeshark. With lab runtime c9s, containerName is the node's inspect name (<lab>-<node>) and interfaceName a capturable interface (or its alias); the server captures the session's interfaces as the signed-in user, in one pcapng stream, and writes it into a named pipe the session's Wireshark reads, without Edgeshark. That needs Docker on the server host (otherwise 501, and /health leaves out wireshark-vnc) and a Wireshark VNC image with the CLABWIRE_CAPTURE_PIPE mode of wireshark-vnc-docker. The capture ends with the session; when it fails, the session's container stops and its ready and VNC routes answer 500 with the reason.
 // @Tags Capture
 // @Security BearerAuth
 // @Accept json
