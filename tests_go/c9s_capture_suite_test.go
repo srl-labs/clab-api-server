@@ -4,21 +4,16 @@ package tests_go
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os/exec"
-	"path"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/gorilla/websocket"
 )
 
 // pcapngSummary is what the capture tests check in a pcapng stream.
@@ -132,58 +127,6 @@ func (s *C9sSuite) clabwireCaptures(namespace, node string) (string, bool) {
 	return strings.Join(captures, "\n"), true
 }
 
-// dialPacketflix connects like cshargextcap does for a packetflix: URL (nif/packetflix.go and
-// csharg's host client): it strips "packetflix:" and a trailing /capture, dials <path>/capture
-// with the container and nif query parameters and the Clustershark headers, no subprotocol and
-// no bearer token. The server's certificate is not verified (--insecure).
-func dialPacketflix(packetflixURI string) (*websocket.Conn, *http.Response, error) {
-	parsed, err := url.Parse(strings.TrimPrefix(packetflixURI, "packetflix:"))
-	if err != nil {
-		return nil, nil, err
-	}
-	container := parsed.Query().Get("container")
-	var target struct {
-		NetworkInterfaces []string `json:"network-interfaces"`
-	}
-	if err := json.Unmarshal([]byte(container), &target); err != nil {
-		return nil, nil, fmt.Errorf("container parameter: %w", err)
-	}
-	nif := strings.Join(target.NetworkInterfaces, "/")
-	parsed.Path = path.Join(strings.TrimSuffix(parsed.Path, "/capture"), "capture")
-	parsed.RawQuery = url.Values{"container": {container}, "nif": {nif}}.Encode()
-	dialer := websocket.Dialer{
-		HandshakeTimeout: 30 * time.Second,
-		TLSClientConfig:  &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // like cshargextcap --insecure against the test server
-	}
-	return dialer.Dial(parsed.String(), http.Header{"Clustershark-Container": {container}, "Clustershark-Nif": {nif}})
-}
-
-// readPacketflix collects the binary messages until the server closes the websocket.
-func (s *C9sSuite) readPacketflix(conn *websocket.Conn, deadline time.Duration) ([]byte, int) {
-	s.T().Helper()
-	var stream []byte
-	_ = conn.SetReadDeadline(time.Now().Add(deadline))
-	for {
-		messageType, data, err := conn.ReadMessage()
-		if err != nil {
-			var closeErr *websocket.CloseError
-			s.Require().ErrorAs(err, &closeErr, "the server ends the capture with a close frame")
-			return stream, closeErr.Code
-		}
-		s.Require().Equal(websocket.BinaryMessage, messageType)
-		stream = append(stream, data...)
-	}
-}
-
-func (s *C9sSuite) mintTicket(headers http.Header, lab string, body any) (map[string]any, int) {
-	data, status := s.request(http.MethodPost, s.url("/api/v1/labs/%s/capture/tickets", lab), headers, body, 2*time.Minute)
-	var response map[string]any
-	if status == http.StatusCreated {
-		s.Require().NoError(json.Unmarshal(data, &response), string(data))
-	}
-	return response, status
-}
-
 func (s *C9sSuite) TestC9sCapture() {
 	lab := s.labName + "-cap"
 	namespace := fmt.Sprintf("c9s-%s-%s", s.cfg.APIUserUser, lab)
@@ -196,7 +139,6 @@ func (s *C9sSuite) TestC9sCapture() {
 	}()
 	s.execInLab(lab, "n1", "ip addr add 10.98.0.1/24 dev eth1")
 	s.execInLab(lab, "n2", "ip addr add 10.98.0.2/24 dev eth1")
-	twoTargets := []map[string]string{{"node": "n1", "interface": "eth1"}, {"node": "n2", "interface": "eth1"}}
 
 	s.Run("health advertises capture-stream", func() {
 		data, status := s.request(http.MethodGet, s.url("/health"), nil, nil, s.cfg.RequestTimeout)
@@ -256,42 +198,6 @@ func (s *C9sSuite) TestC9sCapture() {
 		}, 5*time.Second, 250*time.Millisecond, "no packet-capture process is left in the pods")
 	})
 
-	s.Run("a ticket opens a Packetflix websocket once", func() {
-		ticket, status := s.mintTicket(s.userHeaders, lab, map[string]any{"targets": twoTargets, "duration": "4s"})
-		s.Require().Equal(http.StatusCreated, status)
-		uri, _ := ticket["packetflixUri"].(string)
-		s.Require().True(strings.HasPrefix(uri, "packetflix:wss://") || strings.HasPrefix(uri, "packetflix:ws://"), uri)
-
-		wait := s.pingInBackground(lab, 24)
-		defer wait()
-		conn, _, err := dialPacketflix(uri)
-		s.Require().NoError(err)
-		stream, code := s.readPacketflix(conn, time.Minute)
-		_ = conn.Close()
-		s.Require().Equal(websocket.CloseNormalClosure, code)
-		summary, err := readPCAPNG(stream)
-		s.Require().NoError(err)
-		s.Require().Equal([]string{"n1:eth1", "n2:eth1"}, summary.interfaces)
-		s.Require().Positive(summary.icmp["n1:eth1"], "%+v", summary)
-		s.Require().Positive(summary.icmp["n2:eth1"], "%+v", summary)
-
-		_, response, err := dialPacketflix(uri)
-		s.Require().ErrorIs(err, websocket.ErrBadHandshake, "a used ticket is refused")
-		s.Require().Equal(http.StatusNotFound, response.StatusCode)
-	})
-
-	s.Run("an expired ticket is refused", func() {
-		ticket, status := s.mintTicket(s.userHeaders, lab, map[string]any{"targets": twoTargets[:1]})
-		s.Require().Equal(http.StatusCreated, status)
-		expiresAt, err := time.Parse(time.RFC3339Nano, ticket["expiresAt"].(string))
-		s.Require().NoError(err)
-		s.Require().WithinDuration(time.Now().Add(60*time.Second), expiresAt, 10*time.Second)
-		time.Sleep(time.Until(expiresAt) + time.Second)
-		_, response, err := dialPacketflix(ticket["packetflixUri"].(string))
-		s.Require().ErrorIs(err, websocket.ErrBadHandshake)
-		s.Require().Equal(http.StatusNotFound, response.StatusCode)
-	})
-
 	s.Run("another user is refused", func() {
 		for _, target := range []string{
 			s.url("/api/v1/labs/%s/capture/interfaces", lab),
@@ -300,11 +206,9 @@ func (s *C9sSuite) TestC9sCapture() {
 			data, status := s.request(http.MethodGet, target, s.otherHeaders, nil, s.cfg.RequestTimeout)
 			s.Require().Equal(http.StatusNotFound, status, "%s: %s", target, string(data))
 		}
-		_, status := s.mintTicket(s.otherHeaders, lab, map[string]any{"targets": twoTargets})
-		s.Require().Equal(http.StatusNotFound, status)
 	})
 
-	s.Run("Wireshark VNC captures through a ticket", func() {
+	s.Run("Wireshark VNC reads the capture from its pipe", func() {
 		data, status := s.request(http.MethodGet, s.url("/health"), nil, nil, s.cfg.RequestTimeout)
 		s.Require().Equal(http.StatusOK, status)
 		if !strings.Contains(string(data), `"wireshark-vnc"`) {
@@ -329,25 +233,24 @@ func (s *C9sSuite) TestC9sCapture() {
 		s.Require().Eventually(func() bool {
 			running, ok := s.clabwireCaptures(namespace, "n1")
 			return !ok || running != ""
-		}, time.Minute, time.Second, "the session's Wireshark redeemed its ticket and the capture runs in the pod")
+		}, time.Minute, time.Second, "Wireshark opened its pipe and the capture runs in the pod")
 
-		// Restarting the capture in the session's Wireshark connects again with the same
-		// link: a cshargextcap-like client does so twice, next to the running capture.
-		link := s.wiresharkSessionLink(lab + "-n1")
-		wait := s.pingInBackground(lab, 12)
-		for attempt := 1; attempt <= 2; attempt++ {
-			conn, response, err := dialPacketflix(link)
-			s.Require().NoError(err, "connect %d with the session's link (%v)", attempt, response)
-			stream := s.readPacketflixFor(conn, 4*time.Second)
+		container := s.wiresharkContainer(lab + "-n1")
+		env, err := exec.Command("docker", "inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", container).Output()
+		s.Require().NoError(err)
+		s.Require().Contains(string(env), "CLABWIRE_CAPTURE_PIPE=/tmp/clabwire/"+lab+"-n1")
+		s.Require().NotContains(string(env), "PACKETFLIX_LINK")
+
+		s.pingInBackground(lab, 8)()
+		s.Require().Eventually(func() bool {
+			// Wireshark keeps what it captures in a temporary file.
+			stream, err := exec.Command("docker", "exec", container, "sh", "-c", "cat /tmp/wireshark_*.pcapng").Output()
+			if err != nil {
+				return false
+			}
 			summary, err := readPCAPNG(stream)
-			s.Require().NoError(err)
-			s.Require().Equal([]string{"n1:eth1"}, summary.interfaces, "the session's target only")
-		}
-		wait()
-		other := strings.Replace(link, url.QueryEscape(`"n1:eth1"`), url.QueryEscape(`"n2:eth1"`), 1)
-		_, response, err := dialPacketflix(other)
-		s.Require().ErrorIs(err, websocket.ErrBadHandshake, "the session's ticket is never accepted for other targets")
-		s.Require().Equal(http.StatusForbidden, response.StatusCode)
+			return err == nil && len(summary.interfaces) == 1 && summary.interfaces[0] == "n1:eth1" && summary.icmp["n1:eth1"] > 0
+		}, 30*time.Second, time.Second, "Wireshark captured the pings on n1:eth1")
 
 		data, status = s.request(http.MethodDelete, s.url("/api/v1/capture/wireshark-vnc-sessions/%s", sessionID), s.userHeaders, nil, time.Minute)
 		s.Require().Equal(http.StatusOK, status, string(data))
@@ -355,78 +258,19 @@ func (s *C9sSuite) TestC9sCapture() {
 			running, _ := s.clabwireCaptures(namespace, "n1")
 			return running == ""
 		}, 15*time.Second, 500*time.Millisecond, "closing the session stops the capture")
-		_, response, err = dialPacketflix(link)
-		s.Require().ErrorIs(err, websocket.ErrBadHandshake, "a closed session's ticket is refused")
-		s.Require().Equal(http.StatusNotFound, response.StatusCode)
+		ids, err := exec.Command("docker", "ps", "-aq", "--filter", "id="+container).Output()
+		s.Require().NoError(err)
+		s.Require().Empty(strings.TrimSpace(string(ids)), "closing the session removes its container")
 	})
 }
 
-// wiresharkSessionLink returns the PACKETFLIX_LINK of the Wireshark VNC container of a node,
-// pointed at the API URL (the container reaches the server through the Docker host gateway).
-func (s *C9sSuite) wiresharkSessionLink(containerName string) string {
+// wiresharkContainer returns the ID of the Wireshark VNC container of a node.
+func (s *C9sSuite) wiresharkContainer(containerName string) string {
 	s.T().Helper()
 	prefix := "clab_ws_vnc_" + s.cfg.APIUserUser + "_" + containerName + "_"
 	ids, err := exec.Command("docker", "ps", "-q", "--filter", "name=^"+prefix).Output()
 	s.Require().NoError(err)
 	fields := strings.Fields(string(ids))
 	s.Require().Len(fields, 1, "one Wireshark VNC container named %s*", prefix)
-	env, err := exec.Command("docker", "inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", fields[0]).Output()
-	s.Require().NoError(err)
-	var link string
-	for _, line := range strings.Split(string(env), "\n") {
-		if value, ok := strings.CutPrefix(line, "PACKETFLIX_LINK="); ok {
-			link = value
-		}
-	}
-	s.Require().NotEmpty(link, "the container has a PACKETFLIX_LINK")
-	parsed, err := url.Parse(strings.TrimPrefix(link, "packetflix:"))
-	s.Require().NoError(err)
-	api, err := url.Parse(s.cfg.APIURL)
-	s.Require().NoError(err)
-	parsed.Host = api.Host
-	parsed.Scheme = strings.Replace(api.Scheme, "http", "ws", 1)
-	return "packetflix:" + parsed.String()
-}
-
-// readPacketflixFor reads a capture for a while and stops it like cshargextcap does: a close
-// "ciao", then the server's answer.
-func (s *C9sSuite) readPacketflixFor(conn *websocket.Conn, duration time.Duration) []byte {
-	s.T().Helper()
-	defer func() { _ = conn.Close() }()
-	type result struct {
-		stream []byte
-		err    error
-	}
-	done := make(chan result, 1)
-	go func() {
-		var stream []byte
-		for {
-			messageType, data, err := conn.ReadMessage()
-			if err != nil {
-				done <- result{stream, err}
-				return
-			}
-			if messageType != websocket.BinaryMessage {
-				done <- result{stream, fmt.Errorf("a %d message", messageType)}
-				return
-			}
-			stream = append(stream, data...)
-		}
-	}()
-	select {
-	case ended := <-done:
-		s.Require().Failf("the capture ended before the client stopped it", "%v", ended.err)
-	case <-time.After(duration):
-	}
-	s.Require().NoError(conn.WriteControl(websocket.CloseMessage,
-		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "ciao"), time.Now().Add(5*time.Second)))
-	select {
-	case ended := <-done:
-		var closeErr *websocket.CloseError
-		s.Require().ErrorAs(ended.err, &closeErr, "the server answers the close")
-		return ended.stream
-	case <-time.After(10 * time.Second):
-		s.Require().Fail("the server did not answer the close")
-		return nil
-	}
+	return fields[0]
 }
