@@ -39,6 +39,15 @@ func TestNamespaceNames(t *testing.T) {
 	require.True(t, strings.HasPrefix(numeric, "n-"), numeric)
 }
 
+func TestNamespacePatterns(t *testing.T) {
+	require.Equal(t, "c9s-alice-{lab}", NamespacePattern(DefaultNamespaceTemplate, "alice"))
+	require.Equal(t, "lab-{lab}-j-doe", NamespacePattern("lab-{lab}-{user}", "J.Doe"))
+	require.Equal(t, "c9s-shared-{lab}", SharedNamespacePattern)
+	require.Equal(t, SharedNamespaceName("lab1"), strings.ReplaceAll(SharedNamespacePattern, "{lab}", "lab1"))
+	require.Equal(t, NamespaceName(DefaultNamespaceTemplate, "J.Doe", "lab1"),
+		strings.ReplaceAll(NamespacePattern(DefaultNamespaceTemplate, "J.Doe"), "{lab}", "lab1"))
+}
+
 func TestLabelValues(t *testing.T) {
 	require.Equal(t, "alice", LabelValue("alice"))
 	value := LabelValue("machine$")

@@ -353,6 +353,7 @@ func initLabRuntime(svc *clab.Service) error {
 
 	metrics := kube.NewMetricsProbe(clients.Discovery, time.Minute)
 	api.SetNodeStatsAvailability(metrics.Available)
+	api.SetLabHostCluster(kube.ClusterNames(connection))
 	log.Infof("Kubernetes cluster %s ready for c9s labs: namespaces %s, users %s<user>, node stats %t",
 		restConfig.Host, settings.NamespaceTemplate, settings.UserPrefix, metrics.Available())
 	return nil

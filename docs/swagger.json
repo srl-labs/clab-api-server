@@ -579,6 +579,37 @@
                 }
             }
         },
+        "/api/v1/lab-host": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns the runtime the server runs labs with and, on c9s, the Kubernetes cluster and deploy defaults the signed-in user's labs get.\n\n**Notes**\n- `c9s` is only set when `runtime` is `c9s`. It names the kubeconfig context and cluster (`in-cluster` with the Pod's ServiceAccount) but never the cluster's address, credentials or file paths.\n- `namespacePattern` is the server's namespace template rendered for the signed-in user, with `{lab}` left in. `sharedNamespacePattern` is the namespace of labs in the shared workspace.\n- `metrics` reports whether the cluster serves `metrics.k8s.io`, which node stats need.\n- The server must list `lab-host-info` in the `features` of `/health`.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Health"
+                ],
+                "summary": "Get the lab host",
+                "responses": {
+                    "200": {
+                        "description": "Lab runtime and, on c9s, the cluster and deploy defaults",
+                        "schema": {
+                            "$ref": "#/definitions/models.LabHostResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/labs": {
             "get": {
                 "security": [
@@ -6881,6 +6912,62 @@
                 }
             }
         },
+        "models.C9sLabHost": {
+            "type": "object",
+            "properties": {
+                "cluster": {
+                    "description": "Cluster is the cluster name of that context; \"in-cluster\" for the Pod's ServiceAccount.",
+                    "type": "string",
+                    "example": "c9s"
+                },
+                "context": {
+                    "description": "Context is the kubeconfig context the server uses; empty with the in-cluster\nServiceAccount.",
+                    "type": "string",
+                    "example": "c9s-provisioner"
+                },
+                "exposeType": {
+                    "description": "ExposeType is the Service type of lab nodes (CLAB_C9S_EXPOSE_TYPE).",
+                    "type": "string",
+                    "enum": [
+                        "None",
+                        "ClusterIP",
+                        "Headless",
+                        "LoadBalancer"
+                    ],
+                    "example": "None"
+                },
+                "imagePullSecret": {
+                    "description": "ImagePullSecret is the name of the image pull secret device Pods reference\n(CLAB_C9S_IMAGE_PULL_SECRET); empty when unset.",
+                    "type": "string",
+                    "example": "regcred"
+                },
+                "labQuota": {
+                    "description": "LabQuota reports whether every lab namespace gets a ResourceQuota (CLAB_KUBE_LAB_QUOTA).",
+                    "type": "boolean",
+                    "example": false
+                },
+                "metrics": {
+                    "description": "Metrics reports whether the cluster serves the resource metrics API (metrics.k8s.io)\nnode stats come from.",
+                    "type": "boolean",
+                    "example": true
+                },
+                "namespacePattern": {
+                    "description": "NamespacePattern is the namespace of the signed-in user's labs, with {lab} left in\n(CLAB_KUBE_NAMESPACE_TEMPLATE). Names too long for a namespace are cut and get a hash.",
+                    "type": "string",
+                    "example": "c9s-alice-{lab}"
+                },
+                "persistence": {
+                    "description": "Persistence reports whether node storage outlives Pod replacement and destroy\n(CLAB_C9S_PERSISTENCE).",
+                    "type": "boolean",
+                    "example": true
+                },
+                "sharedNamespacePattern": {
+                    "description": "SharedNamespacePattern is the namespace of labs in the shared workspace, with {lab} left in.",
+                    "type": "string",
+                    "example": "c9s-shared-{lab}"
+                }
+            }
+        },
         "models.CACreateRequest": {
             "type": "object",
             "properties": {
@@ -7983,6 +8070,29 @@
                 "type": {
                     "description": "Interface type (e.g., \"veth\", \"device\", \"dummy\")",
                     "type": "string"
+                }
+            }
+        },
+        "models.LabHostResponse": {
+            "type": "object",
+            "properties": {
+                "c9s": {
+                    "description": "C9s describes the Kubernetes cluster and deploy defaults; only set for c9s.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.C9sLabHost"
+                        }
+                    ]
+                },
+                "runtime": {
+                    "description": "Runtime is the lab runtime: docker, podman or c9s.",
+                    "type": "string",
+                    "enum": [
+                        "docker",
+                        "podman",
+                        "c9s"
+                    ],
+                    "example": "c9s"
                 }
             }
         },

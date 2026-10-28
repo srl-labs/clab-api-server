@@ -97,6 +97,16 @@ func NamespaceName(template, user, lab string) string {
 	return fitLabel(name, user+"\x00"+lab)
 }
 
+// NamespacePattern renders the namespace template for one user and leaves {lab} in, so
+// clients can show where that user's labs go. A namespace too long for a DNS label is cut
+// and gets a hash (see NamespaceName); the pattern does not show that.
+func NamespacePattern(template, user string) string {
+	return strings.ReplaceAll(template, "{user}", sanitizeName(user))
+}
+
+// SharedNamespacePattern is the namespace of a shared lab, with {lab} left in.
+const SharedNamespacePattern = SharedNamespacePrefix + "{lab}"
+
 // SharedNamespaceName is the namespace of a lab in the shared workspace.
 func SharedNamespaceName(lab string) string {
 	return fitLabel(SharedNamespacePrefix+sanitizeName(lab), "shared\x00"+lab)

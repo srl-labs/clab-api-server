@@ -134,3 +134,50 @@ current-context: one
 	_, err = RestConfig(ConnectionSettings{Kubeconfig: kubeconfig, Context: "missing"})
 	require.Error(t, err)
 }
+
+func TestClusterNamesNameTheContextAndItsCluster(t *testing.T) {
+	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
+	require.NoError(t, os.WriteFile(kubeconfig, []byte(`apiVersion: v1
+kind: Config
+current-context: admin
+clusters:
+- name: c9s
+  cluster:
+    server: https://10.0.0.1:6443
+- name: other
+  cluster:
+    server: https://10.0.0.2:6443
+contexts:
+- name: admin
+  context:
+    cluster: other
+    user: admin
+- name: c9s-provisioner
+  context:
+    cluster: c9s
+    user: provisioner
+users:
+- name: admin
+  user:
+    token: admin-token
+- name: provisioner
+  user:
+    token: provisioner-token
+`), 0o600))
+
+	contextName, cluster := ClusterNames(ConnectionSettings{Kubeconfig: kubeconfig, Context: "c9s-provisioner"})
+	require.Equal(t, "c9s-provisioner", contextName)
+	require.Equal(t, "c9s", cluster)
+
+	contextName, cluster = ClusterNames(ConnectionSettings{Kubeconfig: kubeconfig})
+	require.Equal(t, "admin", contextName, "the current context without CLAB_KUBE_CONTEXT")
+	require.Equal(t, "other", cluster)
+}
+
+func TestClusterNamesReportTheServiceAccountInCluster(t *testing.T) {
+	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "missing"))
+	t.Setenv("HOME", t.TempDir())
+	contextName, cluster := ClusterNames(ConnectionSettings{})
+	require.Empty(t, contextName)
+	require.Equal(t, InClusterName, cluster)
+}

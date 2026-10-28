@@ -51,6 +51,9 @@ var serverFeatures = []string{
 	"interface-state",
 	// c9s-runtime: labs run on Kubernetes through clabernetes (only with CLAB_RUNTIME=c9s).
 	"c9s-runtime",
+	// lab-host-info: GET /api/v1/lab-host describes the lab runtime (on c9s the cluster
+	// and deploy defaults).
+	"lab-host-info",
 }
 
 // containerRuntimeOnlyFeatures need Docker or Podman on the server host.

@@ -165,7 +165,7 @@ If any of them fails, it exits with a message that names what is missing.
   "namespaceMode": "per-lab",
   "features": ["validate", "graph-mermaid", "graph-dot", "exec-filters", "lab-lifecycle-node-filter",
                "save-copy", "inspect-details", "node-stats", "log-stream", "terminal-resume",
-               "node-logs-runtime", "interface-state", "c9s-runtime"]
+               "node-logs-runtime", "interface-state", "c9s-runtime", "lab-host-info"]
 }
 ```
 
@@ -175,8 +175,36 @@ If any of them fails, it exits with a message that names what is missing.
 | `node-logs-runtime` | Node logs come from the configured runtime (on c9s: the device container log). |
 | `interface-state` | The events stream reports interface `up`/`down` events. |
 | `node-stats` | Left out on c9s while `metrics.k8s.io` is not served. |
+| `lab-host-info` | `GET /api/v1/lab-host` describes the lab runtime (all runtimes). |
 
 `namespaceMode` is always `per-lab`: every lab has its own namespace.
+
+`GET /api/v1/lab-host` (any signed-in user) names the cluster and the deploy defaults the
+user's labs get:
+
+```json
+{
+  "runtime": "c9s",
+  "c9s": {
+    "context": "c9s-provisioner",
+    "cluster": "c9s",
+    "namespacePattern": "c9s-alice-{lab}",
+    "sharedNamespacePattern": "c9s-shared-{lab}",
+    "exposeType": "None",
+    "persistence": true,
+    "imagePullSecret": "regcred",
+    "labQuota": false,
+    "metrics": true
+  }
+}
+```
+
+`context` and `cluster` are names from the server's kubeconfig (`""` and `in-cluster` with
+the Pod's ServiceAccount); the cluster's address, credentials and file paths are never
+reported. `namespacePattern` is `CLAB_KUBE_NAMESPACE_TEMPLATE` rendered for the signed-in
+user with `{lab}` left in, `imagePullSecret` the secret's name without its namespace,
+`labQuota` whether `CLAB_KUBE_LAB_QUOTA` is set, and `metrics` whether `metrics.k8s.io` is
+served. Docker and Podman servers answer `{"runtime": "docker"}` (or `podman`) without `c9s`.
 
 Features that need Docker or Podman on the server host are left out on c9s:
 `snapshot-save`, `deploy-restore`, `sshx-readers`, `gotty-options`.

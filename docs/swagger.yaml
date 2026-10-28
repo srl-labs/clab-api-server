@@ -45,6 +45,63 @@ definitions:
           type: string
         type: array
     type: object
+  models.C9sLabHost:
+    properties:
+      cluster:
+        description: Cluster is the cluster name of that context; "in-cluster" for
+          the Pod's ServiceAccount.
+        example: c9s
+        type: string
+      context:
+        description: |-
+          Context is the kubeconfig context the server uses; empty with the in-cluster
+          ServiceAccount.
+        example: c9s-provisioner
+        type: string
+      exposeType:
+        description: ExposeType is the Service type of lab nodes (CLAB_C9S_EXPOSE_TYPE).
+        enum:
+        - None
+        - ClusterIP
+        - Headless
+        - LoadBalancer
+        example: None
+        type: string
+      imagePullSecret:
+        description: |-
+          ImagePullSecret is the name of the image pull secret device Pods reference
+          (CLAB_C9S_IMAGE_PULL_SECRET); empty when unset.
+        example: regcred
+        type: string
+      labQuota:
+        description: LabQuota reports whether every lab namespace gets a ResourceQuota
+          (CLAB_KUBE_LAB_QUOTA).
+        example: false
+        type: boolean
+      metrics:
+        description: |-
+          Metrics reports whether the cluster serves the resource metrics API (metrics.k8s.io)
+          node stats come from.
+        example: true
+        type: boolean
+      namespacePattern:
+        description: |-
+          NamespacePattern is the namespace of the signed-in user's labs, with {lab} left in
+          (CLAB_KUBE_NAMESPACE_TEMPLATE). Names too long for a namespace are cut and get a hash.
+        example: c9s-alice-{lab}
+        type: string
+      persistence:
+        description: |-
+          Persistence reports whether node storage outlives Pod replacement and destroy
+          (CLAB_C9S_PERSISTENCE).
+        example: true
+        type: boolean
+      sharedNamespacePattern:
+        description: SharedNamespacePattern is the namespace of labs in the shared
+          workspace, with {lab} left in.
+        example: c9s-shared-{lab}
+        type: string
+    type: object
   models.CACreateRequest:
     properties:
       commonName:
@@ -854,6 +911,22 @@ definitions:
         type: string
       type:
         description: Interface type (e.g., "veth", "device", "dummy")
+        type: string
+    type: object
+  models.LabHostResponse:
+    properties:
+      c9s:
+        allOf:
+        - $ref: '#/definitions/models.C9sLabHost'
+        description: C9s describes the Kubernetes cluster and deploy defaults; only
+          set for c9s.
+      runtime:
+        description: 'Runtime is the lab runtime: docker, podman or c9s.'
+        enum:
+        - docker
+        - podman
+        - c9s
+        example: c9s
         type: string
     type: object
   models.LabLink:
@@ -2254,6 +2327,32 @@ paths:
       summary: Pull a runtime image
       tags:
       - Images
+  /api/v1/lab-host:
+    get:
+      description: |-
+        Returns the runtime the server runs labs with and, on c9s, the Kubernetes cluster and deploy defaults the signed-in user's labs get.
+
+        **Notes**
+        - `c9s` is only set when `runtime` is `c9s`. It names the kubeconfig context and cluster (`in-cluster` with the Pod's ServiceAccount) but never the cluster's address, credentials or file paths.
+        - `namespacePattern` is the server's namespace template rendered for the signed-in user, with `{lab}` left in. `sharedNamespacePattern` is the namespace of labs in the shared workspace.
+        - `metrics` reports whether the cluster serves `metrics.k8s.io`, which node stats need.
+        - The server must list `lab-host-info` in the `features` of `/health`.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Lab runtime and, on c9s, the cluster and deploy defaults
+          schema:
+            $ref: '#/definitions/models.LabHostResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get the lab host
+      tags:
+      - Health
   /api/v1/labs:
     get:
       description: |-
