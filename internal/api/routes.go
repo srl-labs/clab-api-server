@@ -21,13 +21,6 @@ func SetupRoutes(router *gin.Engine) {
 	// Login endpoint - intentionally *not* under /api/v1 group
 	router.POST("/login", LoginHandler)
 
-	// Packetflix capture websocket of a lab runtime capture ticket: the ticket is the
-	// credential, so no bearer token. cshargextcap dials <path>/capture after a target
-	// discovery at <path>/discover/mobyshark.
-	router.GET("/api/v1/capture/packetflix/:ticket", requireLabRuntimeCapture(), PacketflixCaptureHandler)
-	router.GET("/api/v1/capture/packetflix/:ticket/capture", requireLabRuntimeCapture(), PacketflixCshargextcapHandler)
-	router.GET("/api/v1/capture/packetflix/:ticket/discover/mobyshark", requireLabRuntimeCapture(), PacketflixDiscoverHandler)
-
 	// Swagger documentation route
 	// URL needs to match the basePath in your main swagger annotations
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, ginSwagger.URL("/swagger/doc.json")))
@@ -141,7 +134,6 @@ func SetupRoutes(router *gin.Engine) {
 				// Lab runtime (c9s) capture through clabwire
 				labSpecific.GET("/capture/interfaces", requireLabRuntimeCapture(), ListCaptureInterfacesHandler) // GET /api/v1/labs/{labName}/capture/interfaces
 				labSpecific.GET("/capture/stream", requireLabRuntimeCapture(), StreamCaptureHandler)             // GET /api/v1/labs/{labName}/capture/stream
-				labSpecific.POST("/capture/tickets", requireLabRuntimeCapture(), CreateCaptureTicketHandler)     // POST /api/v1/labs/{labName}/capture/tickets
 
 				// Sharing + tools
 				labSpecific.POST("/sshx/:action", requireContainerRuntime("SSHX sharing"), LabSSHXShareHandler)    // POST /api/v1/labs/{labName}/sshx/{action}

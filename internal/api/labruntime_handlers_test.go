@@ -23,7 +23,6 @@ import (
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/srl-labs/clab-api-server/internal/auth"
-	"github.com/srl-labs/clab-api-server/internal/capture"
 	"github.com/srl-labs/clab-api-server/internal/clab"
 	"github.com/srl-labs/clab-api-server/internal/config"
 	"github.com/srl-labs/clab-api-server/internal/kube"
@@ -49,7 +48,6 @@ func newC9sAPI(t *testing.T) *c9sAPI {
 	previousTerminals, previousSSH := terminalManager, sshManager
 	previousStats := nodeStatsAvailable
 	previousVnc := wiresharkVncProbe
-	previousTickets := captureTicketStore()
 	t.Cleanup(func() {
 		config.AppConfig = previous
 		SetClabService(previousService)
@@ -58,11 +56,9 @@ func newC9sAPI(t *testing.T) *c9sAPI {
 		terminalManager, sshManager = previousTerminals, previousSSH
 		nodeStatsAvailable = previousStats
 		wiresharkVncProbe = previousVnc
-		setCaptureTicketStore(previousTickets)
 	})
 	// No Docker for Wireshark VNC unless a test provides it.
 	wiresharkVncProbe = func() bool { return false }
-	setCaptureTicketStore(capture.NewTicketStore(capture.DefaultTicketTTL))
 	config.AppConfig.ClabRuntime = config.RuntimeC9s
 	config.AppConfig.JWTSecret = "test-secret"
 	config.AppConfig.SuperuserGroup = ""

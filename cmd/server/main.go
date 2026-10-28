@@ -153,12 +153,7 @@ func main() {
 		gin.SetMode(gin.DebugMode) // Default to debug
 	}
 	log.Infof("Gin running in '%s' mode", gin.Mode())
-	// Gin's request log, recovery and debug output, with capture tickets (credentials in
-	// Packetflix paths) redacted.
-	gin.DefaultWriter = api.NewRedactingWriter(os.Stdout)
-	gin.DefaultErrorWriter = api.NewRedactingWriter(os.Stderr)
-	router := gin.New()
-	router.Use(api.RequestLogging(os.Stdout, os.Stderr)...)
+	router := gin.Default() // Use Default for logging and recovery middleware
 
 	// Then in the router setup section:
 	if err := templates.LoadTemplates(router); err != nil {

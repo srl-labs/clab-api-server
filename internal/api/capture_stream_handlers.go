@@ -3,38 +3,28 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
-	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
-	"github.com/gorilla/websocket"
 	clablabruntime "github.com/srl-labs/containerlab/labruntime"
 	clabnames "github.com/srl-labs/containerlab/names"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/srl-labs/clab-api-server/internal/capture"
 	"github.com/srl-labs/clab-api-server/internal/clab"
-	"github.com/srl-labs/clab-api-server/internal/config"
 	"github.com/srl-labs/clab-api-server/internal/kube"
 	"github.com/srl-labs/clab-api-server/internal/models"
 )
 
 // Lab runtime packet capture (plan 3.3): the containerlab library captures lab link
 // interfaces through clabwire and writes one merged pcapng stream. The server delivers it as a
-// chunked HTTP response, or over a Packetflix-compatible websocket that a single-use ticket
-// opens, for clients that cannot send a bearer token (cshargextcap's packetflix: URL handler
-// and the Wireshark VNC container).
+// chunked HTTP response, and writes it into the pipe of a Wireshark VNC session.
 
 const (
 	// maxCaptureTargets bounds the interfaces of one capture.
@@ -44,15 +34,6 @@ const (
 	maxCaptureSnapLength = 1 << 20
 	// captureResolveTimeout bounds checking the targets before a capture starts.
 	captureResolveTimeout = 2 * time.Minute
-	// packetflixWriteTimeout bounds one websocket message to a slow client.
-	packetflixWriteTimeout = 30 * time.Second
-	// packetflixCloseWait is how long the server waits for the client to answer its close.
-	packetflixCloseWait = 5 * time.Second
-	// packetflixTargetType is the target type the packetflix: URL's container parameter
-	// carries; cshargextcap writes it into the capture's section comment.
-	packetflixTargetType = "c9s-lab"
-	// captureTicketPath is where tickets are redeemed: /api/v1/capture/packetflix/<ticket>.
-	captureTicketPath = "/api/v1/capture/packetflix/"
 )
 
 // errInvalidCaptureTarget marks a capture target the lab cannot capture (400).
@@ -60,25 +41,6 @@ var errInvalidCaptureTarget = errors.New("invalid capture target")
 
 // errNodeNotRunning marks a capture target on a node without a running pod (409).
 var errNodeNotRunning = errors.New("node is not running")
-
-var (
-	captureTicketsMu sync.Mutex
-	captureTickets   = capture.NewTicketStore(capture.DefaultTicketTTL)
-)
-
-// captureTicketStore returns the store that mints and redeems capture tickets.
-func captureTicketStore() *capture.TicketStore {
-	captureTicketsMu.Lock()
-	defer captureTicketsMu.Unlock()
-	return captureTickets
-}
-
-// setCaptureTicketStore replaces the ticket store (tests).
-func setCaptureTicketStore(store *capture.TicketStore) {
-	captureTicketsMu.Lock()
-	defer captureTicketsMu.Unlock()
-	captureTickets = store
-}
 
 // requireLabRuntimeCapture guards the lab runtime capture routes: they need a lab runtime
 // (c9s), which captures through clabwire. With Docker and Podman, captures go through
@@ -226,8 +188,7 @@ func matchCaptureTargets(available []clablabruntime.CaptureInterface, targets []
 	return resolved, nil
 }
 
-// resolveCaptureTargets checks targets against the lab, as the user, before a capture starts
-// or a ticket is minted.
+// resolveCaptureTargets checks targets against the lab, as the user, before a capture starts.
 func resolveCaptureTargets(ctx context.Context, svc *clab.Service, username, labName string, targets []capture.Target) ([]capture.Target, error) {
 	nodes := make([]string, 0, len(targets))
 	seen := map[string]bool{}
@@ -467,429 +428,4 @@ func StreamCaptureHandler(c *gin.Context) {
 		log.Infof("Capture of lab '%s' by user '%s' ended after %s", labName, username, time.Since(started).Round(time.Millisecond))
 	}
 	writer.start()
-}
-
-// CreateCaptureTicketHandler mints a single-use capture ticket.
-// @Summary Create a capture ticket
-// @Description Mints a single-use ticket for a lab runtime (c9s) capture of the given targets, bound to the signed-in user and the lab. It expires 60 s after creation. Redeeming it at /api/v1/capture/packetflix/{ticket} opens a Packetflix-compatible websocket without a bearer token, for Edgeshark's packetflix: URL handler (cshargextcap) and the Wireshark VNC container. packetflixUri carries the container query parameter cshargextcap requires; a redemption may only name the ticket's targets in it. Wireshark VNC sessions on c9s get a session ticket instead, which redeems until the session is closed or expires.
-// @Tags Capture
-// @Security BearerAuth
-// @Accept json
-// @Produce json
-// @Param labName path string true "Lab name" example="my-lab"
-// @Param ticket_request body models.CaptureTicketRequest true "Targets and optional duration"
-// @Success 201 {object} models.CaptureTicketResponse "Ticket"
-// @Failure 400 {object} models.ErrorResponse "Invalid target or duration"
-// @Failure 401 {object} models.ErrorResponse "Unauthorized"
-// @Failure 403 {object} models.ErrorResponse "Forbidden by Kubernetes RBAC"
-// @Failure 404 {object} models.ErrorResponse "Lab not found"
-// @Failure 409 {object} models.ErrorResponse "A target node is not running"
-// @Failure 500 {object} models.ErrorResponse "Internal server error"
-// @Failure 501 {object} models.ErrorResponse "The server's runtime is not c9s"
-// @Router /api/v1/labs/{labName}/capture/tickets [post]
-func CreateCaptureTicketHandler(c *gin.Context) {
-	username := c.GetString("username")
-	labName := c.Param("labName")
-	if !isValidLabName(labName) {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid lab name format."})
-		return
-	}
-	var req models.CaptureTicketRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid request body: " + err.Error()})
-		return
-	}
-	if len(req.Targets) > maxCaptureTargets {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: fmt.Sprintf("at most %d targets per capture", maxCaptureTargets)})
-		return
-	}
-	targets := make([]capture.Target, 0, len(req.Targets))
-	for _, raw := range req.Targets {
-		target, err := checkCaptureTarget(raw.Node, raw.Interface)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: err.Error()})
-			return
-		}
-		targets = append(targets, target)
-	}
-	duration, err := parseCaptureDuration(req.Duration)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: err.Error()})
-		return
-	}
-
-	if _, err := verifyLabOwnership(c, username, labName); err != nil {
-		return
-	}
-	svc := GetClabService()
-	if svc == nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "containerlab service not initialized"})
-		return
-	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), captureResolveTimeout)
-	defer cancel()
-	targets, err = resolveCaptureTargets(ctx, svc, username, labName, targets)
-	if err != nil {
-		c.JSON(captureErrorStatus(err), models.ErrorResponse{Error: err.Error()})
-		return
-	}
-
-	ticket, err := captureTicketStore().Mint(capture.TicketGrant{
-		Username: username, LabName: labName, Targets: targets, Duration: duration,
-	})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
-		return
-	}
-	scheme, host := publicEndpoint(c.Request)
-	c.JSON(http.StatusCreated, models.CaptureTicketResponse{
-		Ticket:        ticket.ID,
-		PacketflixURI: packetflixTicketURI(scheme, host, ticket.ID, labName, targets),
-		ExpiresAt:     ticket.ExpiresAt.UTC(),
-	})
-}
-
-// packetflixTicketURI is the packetflix: URL of a ticket. cshargextcap refuses a URL without
-// the container query parameter (a JSON capture target) and fills in the interfaces to
-// capture from its network-interfaces when no nif parameter is given; the server checks both
-// against the ticket's targets. cshargextcap dials <path>/capture, which the server
-// serves as well.
-func packetflixTicketURI(scheme, host, ticket, labName string, targets []capture.Target) string {
-	container, _ := json.Marshal(map[string]any{
-		"name":               labName,
-		"type":               packetflixTargetType,
-		"network-interfaces": captureInterfaceNames(targets),
-	})
-	return fmt.Sprintf("packetflix:%s://%s%s%s?container=%s",
-		scheme, host, captureTicketPath, url.PathEscape(ticket), url.QueryEscape(string(container)))
-}
-
-// validHostRx accepts host[:port], with an IPv6 literal in brackets.
-var validHostRx = regexp.MustCompile(`^(\[[0-9a-fA-F:.]+\]|[a-zA-Z0-9.-]+)(:[0-9]{1,5})?$`)
-
-// publicEndpoint returns the websocket scheme (ws or wss) and host[:port] clients reach this
-// server at: the request's, or the X-Forwarded-Proto and X-Forwarded-Host of a proxy listed in
-// TRUSTED_PROXIES.
-func publicEndpoint(r *http.Request) (string, string) {
-	secure := r.TLS != nil
-	host := r.Host
-	if requestFromTrustedProxy(r) {
-		if proto := firstHeaderValue(r.Header.Get("X-Forwarded-Proto")); proto != "" {
-			secure = strings.EqualFold(proto, "https") || strings.EqualFold(proto, "wss")
-		}
-		if forwarded := firstHeaderValue(r.Header.Get("X-Forwarded-Host")); validHostRx.MatchString(forwarded) {
-			host = forwarded
-		}
-	}
-	if !validHostRx.MatchString(host) {
-		host = "localhost:" + config.AppConfig.APIPort
-	}
-	if secure {
-		return "wss", host
-	}
-	return "ws", host
-}
-
-func firstHeaderValue(value string) string {
-	first, _, _ := strings.Cut(value, ",")
-	return strings.TrimSpace(first)
-}
-
-// requestFromTrustedProxy reports a request whose peer is listed in TRUSTED_PROXIES. Without
-// an explicit list (empty, or "nil"), forwarded headers are never honoured.
-func requestFromTrustedProxy(r *http.Request) bool {
-	configured := strings.TrimSpace(config.AppConfig.TrustedProxies)
-	if configured == "" || configured == "nil" {
-		return false
-	}
-	remote, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		remote = r.RemoteAddr
-	}
-	ip := net.ParseIP(strings.TrimSpace(remote))
-	if ip == nil {
-		return false
-	}
-	for _, entry := range strings.Split(configured, ",") {
-		entry = strings.TrimSpace(entry)
-		if entry == "" {
-			continue
-		}
-		if _, network, err := net.ParseCIDR(entry); err == nil {
-			if network.Contains(ip) {
-				return true
-			}
-			continue
-		}
-		if trusted := net.ParseIP(entry); trusted != nil && trusted.Equal(ip) {
-			return true
-		}
-	}
-	return false
-}
-
-var packetflixUpgrader = websocket.Upgrader{
-	ReadBufferSize:  4 << 10,
-	WriteBufferSize: 64 << 10,
-	// The ticket in the path is the credential, not a cookie, so the origin does not matter;
-	// cshargextcap sends none.
-	CheckOrigin: func(*http.Request) bool { return true },
-}
-
-// PacketflixCaptureHandler redeems a capture ticket and streams the capture over a
-// Packetflix-compatible websocket.
-// @Summary Packetflix capture websocket
-// @Description Redeems a capture ticket (no bearer token; the ticket is the credential) and streams the capture as the ticket's user: the pcapng stream in binary websocket messages, starting with the section header, compatible with Edgeshark's Packetflix as cshargextcap consumes it. A ticket from POST /labs/{labName}/capture/tickets redeems once and expires 60 s after it was minted; the ticket of a Wireshark VNC session redeems until the session is closed or expires, which also ends its running captures (close 1008 "capture ticket revoked"). The capture ends after the ticket's duration, with a normal close frame, or when the client closes or disconnects, which stops the capture in the lab. The interfaces cshargextcap names (the network-interfaces of the container parameter, and nif, also as Clustershark-* headers) must be targets of the ticket; the capture covers the nif targets, or all of the ticket's. cshargextcap dials {ticket}/capture, which serves the same websocket. Requires a websocket upgrade; unknown, used, revoked and expired tickets get 404 before the upgrade, other targets 403 (a single-use ticket is used up either way).
-// @Tags Capture
-// @Param ticket path string true "Capture ticket"
-// @Success 101 {string} string "Switching protocols; binary pcapng messages follow"
-// @Failure 400 {object} models.ErrorResponse "Not a websocket upgrade"
-// @Failure 403 {object} models.ErrorResponse "The client names targets the ticket does not grant"
-// @Failure 404 {object} models.ErrorResponse "Ticket unknown, used, revoked or expired, or the lab is gone"
-// @Router /api/v1/capture/packetflix/{ticket} [get]
-func PacketflixCaptureHandler(c *gin.Context) {
-	if !websocket.IsWebSocketUpgrade(c.Request) {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Packetflix capture needs a websocket upgrade"})
-		return
-	}
-	redemption, err := captureTicketStore().Redeem(c.Param("ticket"), packetflixTargetSelector(c.Request))
-	switch {
-	case errors.Is(err, capture.ErrTicketTargets):
-		c.JSON(http.StatusForbidden, models.ErrorResponse{Error: err.Error()})
-		return
-	case err != nil:
-		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
-		return
-	}
-	grant := redemption.TicketGrant
-	// The lab must still be the ticket user's.
-	if _, err := verifyLabOwnership(c, grant.Username, grant.LabName); err != nil {
-		return
-	}
-	svc := GetClabService()
-	if svc == nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "containerlab service not initialized"})
-		return
-	}
-
-	conn, err := packetflixUpgrader.Upgrade(c.Writer, c.Request, nil)
-	if err != nil {
-		log.Warnf("Packetflix capture of lab '%s' for user '%s': websocket upgrade failed: %v", grant.LabName, grant.Username, err)
-		return
-	}
-	log.Infof("Packetflix capture of lab '%s' by user '%s' started: %s", grant.LabName, grant.Username,
-		strings.Join(captureInterfaceNames(grant.Targets), ", "))
-	started := time.Now()
-	ctx, cancel := context.WithCancelCause(c.Request.Context())
-	defer cancel(nil)
-	if redemption.Revoked != nil {
-		// A session ticket's capture ends with its session.
-		go func() {
-			select {
-			case <-redemption.Revoked:
-				cancel(errCaptureTicketRevoked)
-			case <-ctx.Done():
-			}
-		}()
-	}
-	err = servePacketflix(ctx, conn, func(ctx context.Context, w io.Writer) error {
-		return svc.CaptureLab(ctx, clab.LabCaptureOptions{
-			Username: grant.Username,
-			LabName:  grant.LabName,
-			Targets:  libraryCaptureTargets(grant.Targets),
-			Duration: grant.Duration,
-		}, w)
-	})
-	if err != nil {
-		log.Warnf("Packetflix capture of lab '%s' by user '%s' failed after %s: %v", grant.LabName, grant.Username,
-			time.Since(started).Round(time.Millisecond), err)
-		return
-	}
-	log.Infof("Packetflix capture of lab '%s' by user '%s' ended after %s", grant.LabName, grant.Username,
-		time.Since(started).Round(time.Millisecond))
-}
-
-// PacketflixCshargextcapHandler serves the path cshargextcap dials for a packetflix: URL: it
-// strips a trailing /capture from the URL path and csharg appends /capture again.
-// @Summary Packetflix capture websocket (cshargextcap path)
-// @Description The same websocket as /api/v1/capture/packetflix/{ticket}, at the path cshargextcap dials for a packetflix: URL (the URL path with /capture appended).
-// @Tags Capture
-// @Param ticket path string true "Capture ticket"
-// @Success 101 {string} string "Switching protocols; binary pcapng messages follow"
-// @Failure 400 {object} models.ErrorResponse "Not a websocket upgrade"
-// @Failure 403 {object} models.ErrorResponse "The client names targets the ticket does not grant"
-// @Failure 404 {object} models.ErrorResponse "Ticket unknown, used, revoked or expired, or the lab is gone"
-// @Router /api/v1/capture/packetflix/{ticket}/capture [get]
-func PacketflixCshargextcapHandler(c *gin.Context) {
-	PacketflixCaptureHandler(c)
-}
-
-// PacketflixDiscoverHandler answers the target discovery cshargextcap runs before every
-// packetflix: capture (GET <url path>/discover/mobyshark) with an empty target list: the
-// ticket already names the targets. It does not touch the ticket.
-// @Summary Packetflix target discovery
-// @Description Answers cshargextcap's target discovery with an empty list (Ghostwire's shape); the ticket names the targets. Does not consume the ticket.
-// @Tags Capture
-// @Produce json
-// @Param ticket path string true "Capture ticket"
-// @Success 200 {object} map[string][]string "{\"containers\":[]}"
-// @Router /api/v1/capture/packetflix/{ticket}/discover/mobyshark [get]
-func PacketflixDiscoverHandler(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"containers": []string{}})
-}
-
-// packetflixWriter sends each write as one binary websocket message, as Packetflix does with
-// its capture process' output.
-type packetflixWriter struct {
-	conn *websocket.Conn
-}
-
-func (w *packetflixWriter) Write(p []byte) (int, error) {
-	if err := w.conn.SetWriteDeadline(time.Now().Add(packetflixWriteTimeout)); err != nil {
-		return 0, err
-	}
-	if err := w.conn.WriteMessage(websocket.BinaryMessage, p); err != nil {
-		return 0, err
-	}
-	return len(p), nil
-}
-
-// servePacketflix runs capture with the websocket as its output, like Packetflix:
-//   - every write is one binary message; the first ones carry the pcapng section header and
-//     the interface descriptions;
-//   - a close or disconnect of the client cancels the capture (gorilla answers the close);
-//   - when the capture ends, the server sends a close frame, 1000 after a normal end and 1011
-//     with the error otherwise, and waits briefly for the client's answer.
-//
-// It returns the capture's error.
-func servePacketflix(ctx context.Context, conn *websocket.Conn, run func(context.Context, io.Writer) error) error {
-	defer func() { _ = conn.Close() }()
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	clientGone := make(chan struct{})
-	go func() {
-		defer close(clientGone)
-		defer cancel()
-		for {
-			// Data from the client is not part of the protocol; read only to see control frames.
-			if _, _, err := conn.NextReader(); err != nil {
-				return
-			}
-		}
-	}()
-
-	err := run(ctx, &packetflixWriter{conn: conn})
-
-	select {
-	case <-clientGone:
-		// The client closed or went away; the capture ended because of it.
-		return nil
-	default:
-	}
-	code, reason := websocket.CloseNormalClosure, "capture ended"
-	switch {
-	case errors.Is(context.Cause(ctx), errCaptureTicketRevoked):
-		code, reason = websocket.ClosePolicyViolation, errCaptureTicketRevoked.Error()
-		err = nil
-	case err != nil:
-		code, reason = websocket.CloseInternalServerErr, closeReason(err.Error())
-	}
-	_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, reason),
-		time.Now().Add(packetflixCloseWait))
-	select {
-	case <-clientGone:
-	case <-time.After(packetflixCloseWait):
-	}
-	return err
-}
-
-// errCaptureTicketRevoked ends the captures of a session ticket whose session ended.
-var errCaptureTicketRevoked = errors.New("capture ticket revoked")
-
-// packetflixTargetSelector checks the targets a Packetflix client names against the ticket:
-// cshargextcap sends the capture target as the container query parameter (JSON whose
-// network-interfaces are the interfaces it may capture) and the interfaces to capture as nif
-// ("/"-separated, "all" for every one), both also as Clustershark-Container and
-// Clustershark-Nif headers. Every interface either names has to be one the ticket grants;
-// the capture covers those nif names, or every granted target without nif. A client that
-// names none captures what the ticket grants.
-func packetflixTargetSelector(r *http.Request) capture.TargetSelector {
-	container := r.URL.Query().Get("container")
-	if container == "" {
-		container = r.Header.Get("Clustershark-Container")
-	}
-	nif := r.URL.Query().Get("nif")
-	if nif == "" {
-		nif = r.Header.Get("Clustershark-Nif")
-	}
-	return func(grant capture.TicketGrant) ([]capture.Target, error) {
-		if strings.TrimSpace(container) != "" {
-			var target struct {
-				NetworkInterfaces []string `json:"network-interfaces"`
-			}
-			if err := json.Unmarshal([]byte(container), &target); err != nil {
-				return nil, fmt.Errorf("%w: the container parameter is not a capture target", capture.ErrTicketTargets)
-			}
-			if _, err := capture.SelectTargets(grant, target.NetworkInterfaces); err != nil {
-				return nil, err
-			}
-		}
-		if nif == "" || nif == "all" {
-			return capture.SelectTargets(grant, nil)
-		}
-		names, ok := splitGrantedNames(nif, grant.Targets)
-		if !ok {
-			return nil, fmt.Errorf("%w: %s", capture.ErrTicketTargets, nif)
-		}
-		return capture.SelectTargets(grant, names)
-	}
-}
-
-// splitGrantedNames splits a "/"-joined list of target names into names the targets have.
-// Interface names may contain "/" themselves (sros:1/1/3), so the split follows the names.
-func splitGrantedNames(joined string, targets []capture.Target) ([]string, bool) {
-	granted := make(map[string]bool, len(targets))
-	for _, target := range targets {
-		granted[target.Name()] = true
-	}
-	// failed marks the starts from which the rest cannot be split.
-	failed := map[int]bool{}
-	var split func(start int) ([]string, bool)
-	split = func(start int) ([]string, bool) {
-		if failed[start] {
-			return nil, false
-		}
-		for end := start + 1; end <= len(joined); end++ {
-			if end < len(joined) && joined[end] != '/' {
-				continue
-			}
-			name := joined[start:end]
-			if !granted[name] {
-				continue
-			}
-			if end == len(joined) {
-				return []string{name}, true
-			}
-			if rest, ok := split(end + 1); ok {
-				return append([]string{name}, rest...), true
-			}
-		}
-		failed[start] = true
-		return nil, false
-	}
-	return split(0)
-}
-
-// closeReason fits a reason into a close frame (123 bytes).
-func closeReason(reason string) string {
-	const maxReason = 123
-	if len(reason) <= maxReason {
-		return reason
-	}
-	cut := maxReason
-	for cut > 0 && (reason[cut]&0xC0) == 0x80 { // keep UTF-8 runes whole
-		cut--
-	}
-	return reason[:cut]
 }
