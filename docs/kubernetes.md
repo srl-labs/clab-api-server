@@ -221,7 +221,8 @@ containerlab's timeout of a deploy, redeploy, apply or destroy that passes no `t
 (see [Timeouts](#timeouts)).
 
 `capture` describes packet capture with every runtime, with the defaults applied:
-`wiresharkVnc` whether the server runs Wireshark VNC sessions for the user's labs,
+`wiresharkVnc` whether the server runs Wireshark VNC sessions for the user's labs (on c9s
+while Docker answers on the server host, as `wireshark-vnc` in `/health`),
 `wiresharkImage` and `wiresharkPullPolicy` their image and when it is pulled
 (`CAPTURE_WIRESHARK_DOCKER_IMAGE`, `CAPTURE_WIRESHARK_PULL_POLICY`: `always`, `missing` or
 `never`). Docker and Podman servers answer without `c9s` and add Edgeshark, which runs next
