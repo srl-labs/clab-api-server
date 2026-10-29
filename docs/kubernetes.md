@@ -280,8 +280,8 @@ and `/health` leaves out `wireshark-vnc`.
 The pipe is the `CLABWIRE_CAPTURE_PIPE` mode of
 [wireshark-vnc-docker](https://github.com/srl-labs/wireshark-vnc-docker), so
 `CAPTURE_WIRESHARK_DOCKER_IMAGE` (default `ghcr.io/srl-labs/wireshark-vnc-docker:latest`) must
-be a release that has it. Until one is released, only the `:dev` tag has it. With an older
-image no pipe appears, and the session fails within a minute (see below).
+be an image that has it; the current `:latest` does. With an older image no pipe appears, and
+the session fails within a minute (see below).
 
 Stopping and restarting the capture inside the session's Wireshark works: each time Wireshark
 opens the pipe, the server starts a new capture into it, and stops it when Wireshark closes the
