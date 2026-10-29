@@ -829,6 +829,7 @@ func RedeployLabHandler(c *gin.Context) {
 	}
 
 	destroyOpts := clab.DestroyOptions{
+		LabName:         labName,
 		TopoPath:        originalTopoPath,
 		Username:        username,
 		Graceful:        graceful,

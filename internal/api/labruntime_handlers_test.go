@@ -267,6 +267,21 @@ func TestDeployOnC9sRejectsNamesKubernetesCannotCarry(t *testing.T) {
 	require.Equal(t, api.username, deploys[0].Owner)
 }
 
+func TestRedeployOnC9s(t *testing.T) {
+	api := newC9sAPI(t)
+	body := []byte(`{"topologyContent":{"name":"again","topology":{"nodes":{"n1":{"kind":"linux","image":"alpine"}}}}}`)
+	recorder := api.do(http.MethodPost, "/api/v1/labs", body)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	recorder = api.do(http.MethodPut, "/api/v1/labs/again", nil)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	destroys := api.fake.CallsOf("destroy")
+	require.NotEmpty(t, destroys)
+	require.Equal(t, "again", destroys[0].Lab)
+	require.Equal(t, "c9s-again", destroys[0].Namespace)
+	require.Len(t, api.fake.CallsOf("deploy"), 2)
+}
+
 func TestNodeLogsOnC9s(t *testing.T) {
 	api := newC9sAPI(t)
 	api.addLab("lab1", "n1")
