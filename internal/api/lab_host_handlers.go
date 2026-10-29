@@ -35,6 +35,7 @@ func SetLabHostCluster(contextName, cluster string) {
 // @Description - `c9s` is only set when `runtime` is `c9s`. It names the kubeconfig context and cluster (`in-cluster` with the Pod's ServiceAccount) but never the cluster's address, credentials or file paths.
 // @Description - `namespacePattern` is the server's namespace template rendered for the signed-in user, with `{lab}` left in. `sharedNamespacePattern` is the namespace of labs in the shared workspace.
 // @Description - `metrics` reports whether the cluster serves `metrics.k8s.io`, which node stats need.
+// @Description - `defaultTimeout` is containerlab's timeout of a deploy, redeploy, apply or destroy without `timeout` (with every runtime).
 // @Description - The server must list `lab-host-info` in the `features` of `/health`.
 // @Tags Health
 // @Security BearerAuth
@@ -43,7 +44,10 @@ func SetLabHostCluster(contextName, cluster string) {
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
 // @Router /api/v1/lab-host [get]
 func LabHostHandler(c *gin.Context) {
-	response := models.LabHostResponse{Runtime: clab.RuntimeKind()}
+	response := models.LabHostResponse{
+		Runtime:        clab.RuntimeKind(),
+		DefaultTimeout: formatDuration(clab.DefaultLifecycleTimeout()),
+	}
 	if clab.IsLabRuntime() {
 		response.C9s = c9sLabHost(c.GetString("username"))
 	}

@@ -187,6 +187,7 @@ user's labs get:
 ```json
 {
   "runtime": "c9s",
+  "defaultTimeout": "10m",
   "c9s": {
     "context": "c9s-provisioner",
     "cluster": "c9s",
@@ -206,7 +207,9 @@ the Pod's ServiceAccount); the cluster's address, credentials and file paths are
 reported. `namespacePattern` is `CLAB_KUBE_NAMESPACE_TEMPLATE` rendered for the signed-in
 user with `{lab}` left in, `imagePullSecret` the secret's name without its namespace,
 `labQuota` whether `CLAB_KUBE_LAB_QUOTA` is set, and `metrics` whether `metrics.k8s.io` is
-served. Docker and Podman servers answer `{"runtime": "docker"}` (or `podman`) without `c9s`.
+served. `defaultTimeout` is containerlab's timeout of a deploy, redeploy, apply or destroy
+that passes no `timeout` (see [Timeouts](#timeouts)). Docker and Podman servers answer
+`{"runtime": "docker", "defaultTimeout": "5m"}` (or `podman`) without `c9s`.
 
 Features that need Docker or Podman on the server host are left out on c9s:
 `snapshot-save`, `deploy-restore`, `sshx-readers`, `gotty-options`.

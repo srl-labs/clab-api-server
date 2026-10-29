@@ -6,6 +6,9 @@ package models
 type LabHostResponse struct {
 	// Runtime is the lab runtime: docker, podman or c9s.
 	Runtime string `json:"runtime" example:"c9s" enums:"docker,podman,c9s"`
+	// DefaultTimeout is containerlab's timeout of a deploy, redeploy, apply or destroy that
+	// passes no `timeout`, as a Go duration: 10m on c9s, 5m with Docker and Podman.
+	DefaultTimeout string `json:"defaultTimeout" example:"10m"`
 	// C9s describes the Kubernetes cluster and deploy defaults; only set for c9s.
 	C9s *C9sLabHost `json:"c9s,omitempty"`
 }
