@@ -1,0 +1,99 @@
+# RBAC of clab-api-server with CLAB_RUNTIME=c9s.
+#
+# The server's own identity only provisions lab namespaces and acts as the signed-in user
+# (Kubernetes user "clab:<linux user>", groups "clab:users" and, for SUPERUSER_GROUP members,
+# "clab:admins"). It has no rights on clabernetes resources or Pods: every lab call runs as the
+# user, and the user's RoleBinding in the lab namespace decides what it may do.
+#
+# Apply: kubectl apply -f provisioner-rbac.yaml
+# Change "clab:" below when CLAB_KUBE_USER_PREFIX is not the default.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: clab-api-server
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: clab-api-server
+  namespace: clab-api-server
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: clab-api-server-provisioner
+rules:
+  # Lab namespaces: one per lab, labelled with the owner and the lab.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["create", "delete", "get", "list"]
+  # The lab users' RoleBindings in their lab namespace.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["create", "get"]
+  # Binding is limited to the clabernetes lab editor role, so the server cannot hand out
+  # others. get lets the startup check verify that it exists.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    verbs: ["bind", "get"]
+    resourceNames: ["clabernetes-lab-editor"]
+  # Acting as the signed-in user. resourceNames cannot match a prefix, so the groups are
+  # listed and users are not limited. Add "clab:shared-<group>" for every Linux group that
+  # owns labs in CLAB_SHARED_LABS_ROOT. To limit the users too, replace the users rule with
+  # one that lists "clab:<user>" for every API user.
+  - apiGroups: [""]
+    resources: ["users"]
+    verbs: ["impersonate"]
+  - apiGroups: [""]
+    resources: ["groups"]
+    verbs: ["impersonate"]
+    resourceNames: ["clab:users", "clab:admins"]
+  # Optional lab quota (CLAB_KUBE_LAB_QUOTA).
+  - apiGroups: [""]
+    resources: ["resourcequotas"]
+    verbs: ["create"]
+  # Optional image pull secret (CLAB_C9S_IMAGE_PULL_SECRET), copied into each lab namespace.
+  # RBAC cannot limit create to lab namespaces; drop this rule when no secret is copied.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: clab-api-server-provisioner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: clab-api-server-provisioner
+subjects:
+  - kind: ServiceAccount
+    name: clab-api-server
+    namespace: clab-api-server
+---
+# Read access to the source image pull secret. Remove when no secret is copied; otherwise set
+# its name (and namespace, when it is not in clab-api-server).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: clab-api-server-pull-secret
+  namespace: clab-api-server
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+    resourceNames: ["regcred"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: clab-api-server-pull-secret
+  namespace: clab-api-server
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: clab-api-server-pull-secret
+subjects:
+  - kind: ServiceAccount
+    name: clab-api-server
+    namespace: clab-api-server

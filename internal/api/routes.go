@@ -37,6 +37,9 @@ func SetupRoutes(router *gin.Engine) {
 		// Health metrics endpoint (superuser only)
 		apiV1.GET("/health/metrics", requireContainerRuntime("host health metrics"), SystemMetricsHandler)
 
+		// Lab host: the runtime and, on c9s, the cluster and deploy defaults
+		apiV1.GET("/lab-host", LabHostHandler)
+
 		// Events stream
 		apiV1.GET("/events", StreamEventsHandler)
 

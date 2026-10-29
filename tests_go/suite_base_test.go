@@ -669,6 +669,11 @@ type ClabContainerInfo struct {
 	Owner       string `json:"owner"`
 	Group       string `json:"group"`
 	MgmtNetwork string `json:"mgmt_network"`
+	// Lab runtime (c9s) fields.
+	Namespace string `json:"namespace"`
+	Pod       string `json:"pod"`
+	Container string `json:"container"`
+	NodeUID   string `json:"node_uid"`
 }
 
 type ClabInspectOutput map[string][]ClabContainerInfo

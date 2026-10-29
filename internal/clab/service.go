@@ -775,6 +775,9 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 		containers = withoutInternalContainers(deployResult.Containers)
 	}
 	if err != nil {
+		if scope != nil {
+			s.releaseAfterFailedDeploy(ctx, clab, *scope)
+		}
 		return nil, fmt.Errorf("deployment failed: %w", err)
 	}
 	if clab.LabRuntime == nil {

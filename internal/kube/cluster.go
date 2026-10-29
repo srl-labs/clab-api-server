@@ -31,8 +31,8 @@ type ConnectionSettings struct {
 	Context    string
 }
 
-// RestConfig loads the server's own cluster connection.
-func RestConfig(settings ConnectionSettings) (*rest.Config, error) {
+// clientConfig is the loader of the server's own connection.
+func clientConfig(settings ConnectionSettings) clientcmd.ClientConfig {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if settings.Kubeconfig != "" {
 		rules.ExplicitPath = settings.Kubeconfig
@@ -41,11 +41,49 @@ func RestConfig(settings ConnectionSettings) (*rest.Config, error) {
 	if settings.Context != "" {
 		overrides.CurrentContext = settings.Context
 	}
-	config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides).ClientConfig()
+	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides)
+}
+
+// RestConfig loads the server's own cluster connection.
+func RestConfig(settings ConnectionSettings) (*rest.Config, error) {
+	config, err := clientConfig(settings).ClientConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load the Kubernetes connection (CLAB_KUBECONFIG, CLAB_KUBE_CONTEXT or the in-cluster ServiceAccount): %w", err)
 	}
 	return config, nil
+}
+
+// DefaultNamespace is the namespace of the server's own connection: the kubeconfig
+// context's namespace, the ServiceAccount's namespace in a Pod, or "default".
+func DefaultNamespace(settings ConnectionSettings) string {
+	namespace, _, err := clientConfig(settings).Namespace()
+	if err != nil || namespace == "" {
+		return "default"
+	}
+	return namespace
+}
+
+// InClusterName is the cluster name ClusterNames reports for the in-cluster ServiceAccount.
+const InClusterName = "in-cluster"
+
+// ClusterNames returns the kubeconfig context the server's connection uses and the name of
+// that context's cluster. Without a kubeconfig context the server uses the in-cluster
+// ServiceAccount: the context is empty and the cluster InClusterName. Only names are
+// returned, never the cluster's address or credentials.
+func ClusterNames(settings ConnectionSettings) (contextName, cluster string) {
+	raw, err := clientConfig(settings).RawConfig()
+	if err != nil {
+		return "", InClusterName
+	}
+	contextName = settings.Context
+	if contextName == "" {
+		contextName = raw.CurrentContext
+	}
+	kubeContext, found := raw.Contexts[contextName]
+	if contextName == "" || !found || kubeContext == nil {
+		return "", InClusterName
+	}
+	return contextName, kubeContext.Cluster
 }
 
 // Clients are the server's own Kubernetes clients.
@@ -194,25 +232,6 @@ func metricsServed(d discovery.DiscoveryInterface) bool {
 
 // ErrStartup wraps every reason the server refuses to start with CLAB_RUNTIME=c9s.
 var ErrStartup = errors.New("c9s startup check failed")
-
-// ServerIdentityPermissions are the permissions the server needs when it runs every lab
-// call with its own identity. namespace is CLAB_KUBE_NAMESPACE (fixed namespace mode) or
-// empty when every lab gets its own namespace, which containerlab then creates.
-func ServerIdentityPermissions(namespace string) []Permission {
-	permissions := []Permission{
-		{Verb: "create", Group: "c9s.run", Resource: "topologies", Namespace: namespace, Why: "deploy labs"},
-		{Verb: "patch", Group: "c9s.run", Resource: "nodes", Namespace: namespace, Why: "start and stop nodes"},
-		{Verb: "create", Resource: "pods", Subresource: "exec", Namespace: namespace, Why: "exec and terminals"},
-		{Verb: "create", Resource: "pods", Subresource: "portforward", Namespace: namespace, Why: "SSH and browser ports"},
-		{Verb: "get", Resource: "pods", Subresource: "log", Namespace: namespace, Why: "node logs"},
-	}
-	if namespace == "" {
-		permissions = append(permissions,
-			Permission{Verb: "create", Resource: "namespaces", Why: "one namespace per lab"},
-			Permission{Verb: "delete", Resource: "namespaces", Why: "destroy --cleanup"})
-	}
-	return permissions
-}
 
 // CheckStartup runs the startup checks: every permission, then clabernetes support.
 func CheckStartup(ctx context.Context, clients *Clients, permissions []Permission, support SupportCheck) error {

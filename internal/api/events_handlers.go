@@ -14,7 +14,10 @@ import (
 
 	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
+	clabconst "github.com/srl-labs/containerlab/constants"
 	clabevents "github.com/srl-labs/containerlab/core/events"
+	clabruntime "github.com/srl-labs/containerlab/runtime"
+	clabtypes "github.com/srl-labs/containerlab/types"
 
 	"github.com/srl-labs/clab-api-server/internal/clab"
 	"github.com/srl-labs/clab-api-server/internal/config"
@@ -261,6 +264,10 @@ func startEventStreams(
 	lines := make(chan string)
 	done := make(chan error, 1)
 
+	var verifier *eventRecordVerifier
+	if clab.IsLabRuntime() && svc != nil {
+		verifier = newEventRecordVerifier(svc)
+	}
 	runStream := func(ctx context.Context, scope *clab.LabScope) error {
 		streamOpts := opts
 		streamOpts.ClabOptions = clab.EventClabOptions(scope, eventsRuntimeTimeout)
@@ -275,8 +282,15 @@ func startEventStreams(
 		scanner := bufio.NewScanner(reader)
 		scanner.Buffer(make([]byte, 0, 64*1024), eventsScannerMaxBytes)
 		for scanner.Scan() {
+			line := scanner.Text()
+			if verifier != nil {
+				var ok bool
+				if line, ok = verifier.verify(ctx, line); !ok {
+					continue
+				}
+			}
 			select {
-			case lines <- scanner.Text():
+			case lines <- line:
 			case <-ctx.Done():
 				_ = reader.Close()
 				if err := <-errCh; err != nil {
@@ -368,4 +382,101 @@ func startEventStreams(
 		done <- nil
 	}()
 	return lines, done
+}
+
+// eventRecordTTL is how long an events stream reuses what the server verified about a lab's
+// owner and topology file.
+const eventRecordTTL = 10 * time.Second
+
+// eventRecordVerifier gives lab runtime container events the owner and topology file inspect
+// reports: on c9s containerlab takes clab-owner and clab-topo-file from the Topology, which
+// the lab's user can edit, so the stream corrects them from the server's records the way a
+// listing does (clab.Service.VerifyLabRecords).
+type eventRecordVerifier struct {
+	svc *clab.Service
+
+	mu    sync.Mutex
+	cache map[string]verifiedEventRecord
+}
+
+type verifiedEventRecord struct {
+	owner, topoFile string
+	expiresAt       time.Time
+}
+
+func newEventRecordVerifier(svc *clab.Service) *eventRecordVerifier {
+	return &eventRecordVerifier{svc: svc, cache: map[string]verifiedEventRecord{}}
+}
+
+// verify returns the event line with its clab-owner and clab-topo-file as the server's records
+// have them; a line that needs no change is returned as it is. It reports false for an event
+// whose records could not be checked, which the stream leaves out.
+func (v *eventRecordVerifier) verify(ctx context.Context, line string) (string, bool) {
+	var event map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(line), &event); err != nil {
+		return line, true
+	}
+	var attributes map[string]string
+	if raw, ok := event["attributes"]; !ok || json.Unmarshal(raw, &attributes) != nil {
+		return line, true
+	}
+	namespace := attributes["namespace"]
+	owner, hasOwner := attributes[clabconst.Owner]
+	topoFile, hasTopoFile := attributes[clabconst.TopoFile]
+	if namespace == "" || (!hasOwner && !hasTopoFile) {
+		return line, true
+	}
+	lab := attributes[clabconst.Containerlab]
+	if lab == "" {
+		lab = attributes["lab"]
+	}
+
+	key := strings.Join([]string{namespace, lab, owner, topoFile}, "\x00")
+	now := time.Now()
+	v.mu.Lock()
+	record, cached := v.cache[key]
+	v.mu.Unlock()
+	if !cached || !now.Before(record.expiresAt) {
+		container := clabruntime.GenericContainer{
+			Labels: map[string]string{
+				clabconst.Containerlab: lab,
+				clabconst.Owner:        owner,
+				clabconst.TopoFile:     topoFile,
+			},
+			Workload: &clabtypes.LabRuntimeWorkload{Namespace: namespace},
+		}
+		containers := []clabruntime.GenericContainer{container}
+		if err := v.svc.VerifyLabRecords(ctx, containers); err != nil {
+			log.Warnf("events: leaving out an event of lab '%s' in namespace %s: its owner and topology file could not be checked: %v",
+				lab, namespace, err)
+			return "", false
+		}
+		record = verifiedEventRecord{
+			owner:     containers[0].Labels[clabconst.Owner],
+			topoFile:  containers[0].Labels[clabconst.TopoFile],
+			expiresAt: now.Add(eventRecordTTL),
+		}
+		v.mu.Lock()
+		v.cache[key] = record
+		v.mu.Unlock()
+	}
+	if record.owner == owner && record.topoFile == topoFile {
+		return line, true
+	}
+	if hasOwner || record.owner != "" {
+		attributes[clabconst.Owner] = record.owner
+	}
+	if hasTopoFile {
+		attributes[clabconst.TopoFile] = record.topoFile
+	}
+	raw, err := json.Marshal(attributes)
+	if err != nil {
+		return "", false
+	}
+	event["attributes"] = raw
+	rewritten, err := json.Marshal(event)
+	if err != nil {
+		return "", false
+	}
+	return string(rewritten), true
 }
