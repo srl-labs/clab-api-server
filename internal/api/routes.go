@@ -116,8 +116,8 @@ func SetupRoutes(router *gin.Engine) {
 				labSpecific.POST("/restart", RestartLabNodesHandler) // POST /api/v1/labs/{labName}/restart
 
 				// Inspect lab interfaces
-				labSpecific.GET("/interfaces", requireContainerRuntime("interface inspection"), InspectInterfacesHandler) // GET /api/v1/labs/{labName}/interfaces
-				labSpecific.GET("/links", requireContainerRuntime("link inspection"), ListLabLinksHandler)                // GET /api/v1/labs/{labName}/links
+				labSpecific.GET("/interfaces", InspectInterfacesHandler)                                   // GET /api/v1/labs/{labName}/interfaces
+				labSpecific.GET("/links", requireContainerRuntime("link inspection"), ListLabLinksHandler) // GET /api/v1/labs/{labName}/links
 
 				// Stream CPU and memory usage of the lab's nodes
 				labSpecific.GET("/stats", StreamLabStatsHandler) // GET /api/v1/labs/{labName}/stats
@@ -129,8 +129,11 @@ func SetupRoutes(router *gin.Engine) {
 				labSpecific.POST("/snapshots", requireContainerRuntime("VM snapshots"), SaveLabSnapshotsHandler) // POST /api/v1/labs/{labName}/snapshots
 
 				// Capture
-				labSpecific.POST("/capture/packetflix", requireContainerRuntime("Edgeshark packet capture"), BuildPacketflixCaptureHandler)                 // POST /api/v1/labs/{labName}/capture/packetflix
-				labSpecific.POST("/capture/wireshark-vnc-sessions", requireContainerRuntime("Edgeshark packet capture"), CreateWiresharkVncSessionsHandler) // POST /api/v1/labs/{labName}/capture/wireshark-vnc-sessions
+				labSpecific.POST("/capture/packetflix", requireContainerRuntime("Edgeshark packet capture"), BuildPacketflixCaptureHandler) // POST /api/v1/labs/{labName}/capture/packetflix
+				labSpecific.POST("/capture/wireshark-vnc-sessions", requireWiresharkVnc(), CreateWiresharkVncSessionsHandler)               // POST /api/v1/labs/{labName}/capture/wireshark-vnc-sessions
+				// Lab runtime (c9s) capture through clabwire
+				labSpecific.GET("/capture/interfaces", requireLabRuntimeCapture(), ListCaptureInterfacesHandler) // GET /api/v1/labs/{labName}/capture/interfaces
+				labSpecific.GET("/capture/stream", requireLabRuntimeCapture(), StreamCaptureHandler)             // GET /api/v1/labs/{labName}/capture/stream
 
 				// Sharing + tools
 				labSpecific.POST("/sshx/:action", requireContainerRuntime("SSHX sharing"), LabSSHXShareHandler)    // POST /api/v1/labs/{labName}/sshx/{action}
@@ -194,7 +197,7 @@ func SetupRoutes(router *gin.Engine) {
 			terminals.GET("/:sessionId/stream", StreamTerminalSessionHandler) // WS /api/v1/terminal-sessions/{sessionId}/stream
 		}
 
-		captureSessions := apiV1.Group("/capture/wireshark-vnc-sessions", requireContainerRuntime("Edgeshark packet capture"))
+		captureSessions := apiV1.Group("/capture/wireshark-vnc-sessions", requireWiresharkVnc())
 		{
 			captureSessions.DELETE("", DeleteAllWiresharkVncSessionsHandler)
 			captureSessions.GET("/:sessionId/ready", GetWiresharkVncSessionReadyHandler)

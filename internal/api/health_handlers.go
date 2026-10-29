@@ -47,13 +47,20 @@ var serverFeatures = []string{
 	// node-logs-runtime: node logs come from the configured runtime (CLAB_RUNTIME),
 	// including the device container log on c9s.
 	"node-logs-runtime",
-	// interface-state: the events stream reports interface up/down events.
+	// interface-state: the events stream reports the state of node interfaces
+	// (netlink-style create/update/delete events with up, down, lower-layer-down, ...).
 	"interface-state",
 	// c9s-runtime: labs run on Kubernetes through clabernetes (only with CLAB_RUNTIME=c9s).
 	"c9s-runtime",
 	// lab-host-info: GET /api/v1/lab-host describes the lab runtime (on c9s the cluster
 	// and deploy defaults).
 	"lab-host-info",
+	// capture-stream: lab runtime packet capture: capture/interfaces and capture/stream
+	// (only with CLAB_RUNTIME=c9s).
+	"capture-stream",
+	// wireshark-vnc: Wireshark VNC capture sessions. With a lab runtime only when the server
+	// host runs Docker.
+	"wireshark-vnc",
 	// lab-lifecycle-timeout: deploy, redeploy, apply and destroy take a `timeout` (like
 	// containerlab's --timeout).
 	"lab-lifecycle-timeout",
@@ -69,7 +76,8 @@ var containerRuntimeOnlyFeatures = map[string]bool{
 
 // labRuntimeOnlyFeatures need a lab runtime (c9s).
 var labRuntimeOnlyFeatures = map[string]bool{
-	"c9s-runtime": true,
+	"c9s-runtime":    true,
+	"capture-stream": true,
 }
 
 // nodeStatsAvailable reports whether the runtime can sample node CPU and memory. On c9s
@@ -90,6 +98,8 @@ func healthFeatures() []string {
 		case labRuntime && containerRuntimeOnlyFeatures[feature]:
 			continue
 		case !labRuntime && labRuntimeOnlyFeatures[feature]:
+			continue
+		case feature == "wireshark-vnc" && labRuntime && !wiresharkVncProbe():
 			continue
 		case feature == "node-stats" && nodeStatsAvailable != nil && !nodeStatsAvailable():
 			continue

@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
+	clabtypes "github.com/srl-labs/containerlab/types"
 	"gopkg.in/yaml.v3"
 
 	"github.com/srl-labs/clab-api-server/internal/clab"
@@ -1049,6 +1051,8 @@ func InspectLabHandler(c *gin.Context) {
 
 // @Summary List lab interfaces
 // @Description Returns interface details for nodes in a lab.
+// @Description
+// @Description With the lab runtime c9s the interfaces of the running nodes come from containerlab's c9s runtime, as the signed-in user: the lab link interfaces (with their aliases), eth0 and lo, with MAC, index, MTU, type and state; nodes are named <lab>-<node>.
 // @Tags Labs
 // @Security BearerAuth
 // @Produce json
@@ -1088,22 +1092,39 @@ func InspectInterfacesHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
 	defer cancel()
 
-	containers, err := svc.ListContainers(ctx, clab.ListOptions{Username: username, LabName: labName})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to list containers for lab '%s': %s", labName, err.Error())})
-		return
-	}
+	var interfaces []*clabtypes.ContainerInterfaces
+	if clab.IsLabRuntime() {
+		listed, err := svc.LabRuntimeInterfaces(ctx, username, labName)
+		if err != nil {
+			status := http.StatusInternalServerError
+			switch {
+			case isForbidden(err):
+				status = http.StatusForbidden
+			case errors.Is(err, clab.ErrLabNotFound):
+				status = http.StatusNotFound
+			}
+			c.JSON(status, models.ErrorResponse{Error: fmt.Sprintf("Failed to get interfaces for lab '%s': %s", labName, err.Error())})
+			return
+		}
+		interfaces = listed
+	} else {
+		containers, err := svc.ListContainers(ctx, clab.ListOptions{Username: username, LabName: labName})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to list containers for lab '%s': %s", labName, err.Error())})
+			return
+		}
 
-	if len(containers) == 0 {
-		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' not found.", labName)})
-		return
-	}
+		if len(containers) == 0 {
+			c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("Lab '%s' not found.", labName)})
+			return
+		}
 
-	// Get interfaces for each container
-	interfaces, err := svc.ListContainersInterfaces(ctx, containers)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to get interfaces for lab '%s': %s", labName, err.Error())})
-		return
+		// Get interfaces for each container
+		interfaces, err = svc.ListContainersInterfaces(ctx, containers)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to get interfaces for lab '%s': %s", labName, err.Error())})
+			return
+		}
 	}
 
 	result := clab.ContainersInterfacesToInspectOutput(interfaces)

@@ -18,6 +18,7 @@ import (
 
 	clabexec "github.com/srl-labs/containerlab/exec"
 	clablabruntime "github.com/srl-labs/containerlab/labruntime"
+	clabtypes "github.com/srl-labs/containerlab/types"
 	"gopkg.in/yaml.v3"
 )
 
@@ -63,6 +64,11 @@ type Runtime struct {
 	PortHandler func(port int, conn net.Conn)
 	// DeployErr fails every deploy; the lab state stays as it was.
 	DeployErr error
+	// CaptureIfaces are the capturable interfaces CaptureInterfaces reports per node; a node
+	// without an entry has none.
+	CaptureIfaces map[string][]clablabruntime.CaptureInterface
+	// CaptureFunc serves Capture after the lab was found; nil writes nothing and returns.
+	CaptureFunc func(ctx context.Context, req clablabruntime.CaptureRequest, w io.Writer) error
 }
 
 // Install registers the fake as the c9s lab runtime until the test ends.
@@ -138,6 +144,8 @@ func (f *Runtime) Lab(namespace, name string) *clablabruntime.LabState {
 func (f *Runtime) nodeStateLocked(namespace, lab, node string) clablabruntime.NodeState {
 	return clablabruntime.NodeState{
 		Name: node, Kind: "linux", Image: "alpine", State: "running", Ready: true,
+		ContainerState:  clablabruntime.ContainerStateRunning,
+		Health:          clablabruntime.ContainerHealthHealthy,
 		MgmtIPv4Address: "10.0.0.1/32",
 		Pod:             lab + "-" + node + "-pod",
 		Container:       "node-" + node,
@@ -350,7 +358,9 @@ func (r *instance) StreamEvents(ctx context.Context, req clablabruntime.EventStr
 	if err := r.record(Call{Op: "events", Lab: req.Name, Namespace: namespace, Identity: r.identity(req.Identity)}); err != nil {
 		return nil, nil, err
 	}
-	// One interface event per lab the stream covers, then nothing until the stream ends.
+	// For every node of the labs the stream covers a container start and the creation of its
+	// eth1, as the c9s runtime reports them (the events command describes the node from Lab
+	// and Node), then nothing until the stream ends.
 	r.fake.mu.Lock()
 	var events []clablabruntime.Event
 	keys := make([]string, 0, len(r.fake.labs))
@@ -363,11 +373,31 @@ func (r *instance) StreamEvents(ctx context.Context, req clablabruntime.EventStr
 		if (namespace != "" && state.Namespace != namespace) || (req.Name != "" && state.Name != req.Name) {
 			continue
 		}
-		events = append(events, clablabruntime.Event{
-			Timestamp: time.Now(), Type: "interface", Action: "up",
-			ActorID: state.Namespace + "/" + state.Name + "/n1", ActorName: state.Name + "-n1",
-			Attributes: map[string]string{"lab": state.Name, "ifname": "eth1", "namespace": state.Namespace, "origin": "clabernetes"},
-		})
+		lab := *state
+		lab.Nodes = slices.Clone(state.Nodes)
+		for idx := range lab.Nodes {
+			node := lab.Nodes[idx]
+			actorID := state.Namespace + "/" + state.Name + "/" + node.Name
+			own := map[string]string{"namespace": state.Namespace, "node": node.Name, "pod": node.Pod}
+			container := map[string]string{"state": node.ContainerState}
+			for key, value := range own {
+				container[key] = value
+			}
+			events = append(events,
+				clablabruntime.Event{
+					Timestamp: time.Now(), Type: clablabruntime.EventTypeContainer, Action: "start",
+					ActorID: actorID, ActorName: state.Name + "-" + node.Name, ActorFullID: actorID,
+					Attributes: container, Lab: &lab, Node: &node,
+				},
+				clablabruntime.Event{
+					Timestamp: time.Now(), Type: clablabruntime.EventTypeInterface, Action: "create",
+					ActorID: actorID, ActorName: state.Name + "-" + node.Name,
+					Attributes: own, Lab: &lab, Node: &node,
+					Interface: &clablabruntime.InterfaceEventData{
+						Name: "eth1", MTU: 9500, MAC: "aa:c1:ab:00:00:01", OperState: "up", Type: "veth",
+					},
+				})
+		}
 	}
 	r.fake.mu.Unlock()
 	eventCh := make(chan clablabruntime.Event, len(events))
@@ -525,3 +555,92 @@ func (r *instance) SampleStats(_ context.Context, req clablabruntime.InspectRequ
 // ErrMetricsUnavailable is the error SampleStats returns without a metrics API.
 var ErrMetricsUnavailable = fmt.Errorf("%w: the server could not find the requested resource",
 	clablabruntime.ErrMetricsUnavailable)
+
+func (r *instance) CaptureInterfaces(_ context.Context, req clablabruntime.NodeRequest) ([]clablabruntime.CaptureInterface, error) {
+	namespace := r.namespace(req.Namespace, req.Name)
+	if err := r.record(Call{Op: "capture-interfaces", Lab: req.Name, Namespace: namespace, Identity: r.identity(req.Identity), Nodes: req.Nodes}); err != nil {
+		return nil, err
+	}
+	state, err := r.lab(namespace, req.Name)
+	if err != nil {
+		return nil, err
+	}
+	known := map[string]bool{}
+	for _, node := range state.Nodes {
+		known[node.Name] = true
+	}
+	nodes := req.Nodes
+	if len(nodes) == 0 {
+		for _, node := range state.Nodes {
+			nodes = append(nodes, node.Name)
+		}
+	}
+	r.fake.mu.Lock()
+	defer r.fake.mu.Unlock()
+	var result []clablabruntime.CaptureInterface
+	for _, node := range nodes {
+		if !known[node] {
+			// the library's message for a node the lab does not have
+			return nil, fmt.Errorf("node %q was not found in c9s lab %s/%s", node, namespace, req.Name)
+		}
+		result = append(result, r.fake.CaptureIfaces[node]...)
+	}
+	return result, nil
+}
+
+func (r *instance) Capture(ctx context.Context, req clablabruntime.CaptureRequest, w io.Writer) error {
+	namespace := r.namespace(req.Namespace, req.Name)
+	targets := make([]string, 0, len(req.Targets))
+	for _, target := range req.Targets {
+		targets = append(targets, target.Node+":"+target.Interface)
+	}
+	if err := r.record(Call{Op: "capture", Lab: req.Name, Namespace: namespace, Identity: r.identity(req.Identity), Nodes: targets}); err != nil {
+		return err
+	}
+	if _, err := r.lab(namespace, req.Name); err != nil {
+		return err
+	}
+	r.fake.mu.Lock()
+	capture := r.fake.CaptureFunc
+	r.fake.mu.Unlock()
+	if capture == nil {
+		return nil
+	}
+	return capture(ctx, req, w)
+}
+
+// InspectInterfaces reports, per node of the lab (named <lab>-<node>), eth0, the node's
+// capturable interfaces (CaptureIfaces) and lo, all up, as the c9s runtime does.
+func (r *instance) InspectInterfaces(_ context.Context, req clablabruntime.NodeRequest) ([]*clabtypes.ContainerInterfaces, error) {
+	namespace := r.namespace(req.Namespace, req.Name)
+	if err := r.record(Call{Op: "inspect-interfaces", Lab: req.Name, Namespace: namespace, Identity: r.identity(req.Identity), Nodes: req.Nodes}); err != nil {
+		return nil, err
+	}
+	state, err := r.lab(namespace, req.Name)
+	if err != nil {
+		return nil, err
+	}
+	r.fake.mu.Lock()
+	defer r.fake.mu.Unlock()
+	var result []*clabtypes.ContainerInterfaces
+	for _, node := range state.Nodes {
+		if len(req.Nodes) > 0 && !slices.Contains(req.Nodes, node.Name) {
+			continue
+		}
+		interfaces := []*clabtypes.ContainerInterfaceDetails{{
+			InterfaceName: "eth0", InterfaceMAC: "aa:c1:ab:00:00:00", InterfaceIndex: 2, InterfaceMTU: 1500,
+			InterfaceType: "veth", InterfaceState: "up",
+		}}
+		for idx, iface := range r.fake.CaptureIfaces[node.Name] {
+			interfaces = append(interfaces, &clabtypes.ContainerInterfaceDetails{
+				InterfaceName: iface.Interface, InterfaceAlias: iface.Alias, InterfaceMAC: fmt.Sprintf("aa:c1:ab:00:00:%02x", idx+1),
+				InterfaceIndex: 3 + idx, InterfaceMTU: 9500, InterfaceType: "veth", InterfaceState: "up",
+			})
+		}
+		interfaces = append(interfaces, &clabtypes.ContainerInterfaceDetails{
+			InterfaceName: "lo", InterfaceIndex: 1, InterfaceMTU: 65536, InterfaceType: "device", InterfaceState: "unknown",
+		})
+		result = append(result, &clabtypes.ContainerInterfaces{ContainerName: state.Name + "-" + node.Name, Interfaces: interfaces})
+	}
+	return result, nil
+}

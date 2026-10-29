@@ -37,7 +37,7 @@ func SetLabHostCluster(contextName, cluster string) {
 // @Description - `namespacePattern` is the server's namespace template rendered for the signed-in user, with `{lab}` left in. `sharedNamespacePattern` is the namespace of labs in the shared workspace.
 // @Description - `metrics` reports whether the cluster serves `metrics.k8s.io`, which node stats need.
 // @Description - `defaultTimeout` is containerlab's timeout of a deploy, redeploy, apply or destroy without `timeout` (with every runtime).
-// @Description - `capture` is how the server captures packets, with every runtime: whether it runs Wireshark VNC sessions (`wiresharkVnc`), their image and pull policy and, with Docker and Podman, Edgeshark's packetflix port and the names (not values) of its extra environment variables.
+// @Description - `capture` is how the server captures packets, with every runtime: whether it runs Wireshark VNC sessions (`wiresharkVnc`; on c9s only while Docker answers on the server host), their image and pull policy and, with Docker and Podman, Edgeshark's packetflix port and the names (not values) of its extra environment variables.
 // @Description - `c9s.noTopologyCR` is false: the server deploys every lab with clabernetes' Topology resource.
 // @Description - The server must list `lab-host-info` in the `features` of `/health`.
 // @Tags Health
@@ -103,8 +103,8 @@ func captureLabHost() models.CaptureLabHost {
 	return result
 }
 
-// wiresharkVncAvailable reports whether the server runs Wireshark VNC sessions: next to
-// Docker and Podman labs, which Edgeshark captures; not for c9s labs.
+// wiresharkVncAvailable reports whether the server runs Wireshark VNC sessions: always next
+// to Docker and Podman labs; for c9s labs while Docker answers on the server host.
 func wiresharkVncAvailable() bool {
-	return !clab.IsLabRuntime()
+	return wiresharkVncProbe()
 }
