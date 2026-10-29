@@ -170,6 +170,10 @@ func runtimeOptions(scope *LabScope, timeout time.Duration) []clabcore.ClabOptio
 	return append([]clabcore.ClabOption{clabcore.WithRuntime(RuntimeKind(), rtConfig)}, opts...)
 }
 
+// LabRuntimeNoTopologyCR is whether c9s labs deploy without clabernetes' Topology resource:
+// never, as the server keeps a lab's owner and topology file on its Topology.
+const LabRuntimeNoTopologyCR = false
+
 // labRuntimeDeployOptions applies the server's c9s deploy settings.
 func labRuntimeDeployOptions(deployOpts *clabcore.DeployOptions) {
 	if !IsLabRuntime() || deployOpts == nil {
@@ -177,7 +181,8 @@ func labRuntimeDeployOptions(deployOpts *clabcore.DeployOptions) {
 	}
 	deployOpts.SetExposeType(config.AppConfig.ClabC9sExposeType).
 		SetNoPersistence(!config.AppConfig.ClabC9sPersistence).
-		SetImagePullSecret(config.AppConfig.PullSecretName())
+		SetImagePullSecret(config.AppConfig.PullSecretName()).
+		SetNoTopologyCR(LabRuntimeNoTopologyCR)
 }
 
 // labRuntimeLabOption selects a lab by name for a lab runtime: the topology file when it

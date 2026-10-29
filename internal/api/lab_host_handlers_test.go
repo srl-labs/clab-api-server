@@ -43,10 +43,43 @@ func TestLabHostOnDockerNamesOnlyTheRuntime(t *testing.T) {
 	router.ServeHTTP(unauthenticated, httptest.NewRequest(http.MethodGet, "/api/v1/lab-host", nil))
 	require.Equal(t, http.StatusUnauthorized, unauthenticated.Code)
 
-	require.JSONEq(t, `{"runtime":"docker","defaultTimeout":"5m"}`, string(getLabHost(t, router, "alice")))
+	// Unset capture settings report the defaults the capture manager applies.
+	require.JSONEq(t, `{
+		"runtime": "docker",
+		"defaultTimeout": "5m",
+		"capture": {
+			"wiresharkVnc": true,
+			"wiresharkImage": "ghcr.io/srl-labs/wireshark-vnc-docker:latest",
+			"wiresharkPullPolicy": "always",
+			"edgeshark": {"packetflixPort": 5001, "extraEnvVars": []}
+		}
+	}`, string(getLabHost(t, router, "alice")))
 
 	config.AppConfig.ClabRuntime = config.RuntimePodman
-	require.JSONEq(t, `{"runtime":"podman","defaultTimeout":"5m"}`, string(getLabHost(t, router, "alice")))
+	config.AppConfig.CaptureWiresharkDockerImage = " registry.example/wireshark-vnc:1.2 "
+	config.AppConfig.CaptureWiresharkPullPolicy = "Missing"
+	config.AppConfig.CapturePacketflixPort = 5101
+	config.AppConfig.CaptureEdgesharkExtraEnvVars = "NO_PROXY=localhost, HTTP_PROXY=http://user:secret@proxy:3128"
+	body := getLabHost(t, router, "alice")
+	require.JSONEq(t, `{
+		"runtime": "podman",
+		"defaultTimeout": "5m",
+		"capture": {
+			"wiresharkVnc": true,
+			"wiresharkImage": "registry.example/wireshark-vnc:1.2",
+			"wiresharkPullPolicy": "missing",
+			"edgeshark": {"packetflixPort": 5101, "extraEnvVars": ["HTTP_PROXY", "NO_PROXY"]}
+		}
+	}`, string(body))
+	// Edgeshark's variables are named, never their values.
+	require.NotContains(t, string(body), "secret")
+	require.NotContains(t, string(body), "localhost")
+
+	// A pull policy the capture manager does not know falls back to always, as it does.
+	config.AppConfig.CaptureWiresharkPullPolicy = "sometimes"
+	var labHost models.LabHostResponse
+	require.NoError(t, json.Unmarshal(getLabHost(t, router, "alice"), &labHost))
+	require.Equal(t, "always", labHost.Capture.WiresharkPullPolicy)
 }
 
 func TestLabHostOnC9sDescribesTheClusterForTheUser(t *testing.T) {
@@ -63,6 +96,9 @@ func TestLabHostOnC9sDescribesTheClusterForTheUser(t *testing.T) {
 	config.AppConfig.ClabC9sImagePullSecret = "clab-api-server/regcred"
 	config.AppConfig.ClabC9sExposeType = "None"
 	config.AppConfig.ClabC9sPersistence = true
+	config.AppConfig.CaptureWiresharkDockerImage = "registry.example/wireshark-vnc:1.2"
+	config.AppConfig.CaptureWiresharkPullPolicy = "never"
+	config.AppConfig.CaptureEdgesharkExtraEnvVars = "HTTP_PROXY=http://proxy:3128"
 	SetLabHostCluster("c9s-provisioner", "c9s")
 	SetNodeStatsAvailability(func() bool { return true })
 
@@ -70,6 +106,11 @@ func TestLabHostOnC9sDescribesTheClusterForTheUser(t *testing.T) {
 	require.JSONEq(t, `{
 		"runtime": "c9s",
 		"defaultTimeout": "10m",
+		"capture": {
+			"wiresharkVnc": false,
+			"wiresharkImage": "registry.example/wireshark-vnc:1.2",
+			"wiresharkPullPolicy": "never"
+		},
 		"c9s": {
 			"context": "c9s-provisioner",
 			"cluster": "c9s",
@@ -79,6 +120,7 @@ func TestLabHostOnC9sDescribesTheClusterForTheUser(t *testing.T) {
 			"persistence": true,
 			"imagePullSecret": "regcred",
 			"labQuota": true,
+			"noTopologyCR": false,
 			"metrics": true
 		}
 	}`, string(body))
@@ -103,6 +145,11 @@ func TestLabHostOnC9sDescribesTheClusterForTheUser(t *testing.T) {
 	require.JSONEq(t, `{
 		"runtime": "c9s",
 		"defaultTimeout": "10m",
+		"capture": {
+			"wiresharkVnc": false,
+			"wiresharkImage": "registry.example/wireshark-vnc:1.2",
+			"wiresharkPullPolicy": "never"
+		},
 		"c9s": {
 			"context": "",
 			"cluster": "in-cluster",
@@ -112,6 +159,7 @@ func TestLabHostOnC9sDescribesTheClusterForTheUser(t *testing.T) {
 			"persistence": false,
 			"imagePullSecret": "",
 			"labQuota": false,
+			"noTopologyCR": false,
 			"metrics": false
 		}
 	}`, string(getLabHost(t, api.router, "alice")))

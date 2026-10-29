@@ -590,7 +590,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns the runtime the server runs labs with and, on c9s, the Kubernetes cluster and deploy defaults the signed-in user's labs get.\n\n**Notes**\n- ` + "`" + `c9s` + "`" + ` is only set when ` + "`" + `runtime` + "`" + ` is ` + "`" + `c9s` + "`" + `. It names the kubeconfig context and cluster (` + "`" + `in-cluster` + "`" + ` with the Pod's ServiceAccount) but never the cluster's address, credentials or file paths.\n- ` + "`" + `namespacePattern` + "`" + ` is the server's namespace template rendered for the signed-in user, with ` + "`" + `{lab}` + "`" + ` left in. ` + "`" + `sharedNamespacePattern` + "`" + ` is the namespace of labs in the shared workspace.\n- ` + "`" + `metrics` + "`" + ` reports whether the cluster serves ` + "`" + `metrics.k8s.io` + "`" + `, which node stats need.\n- ` + "`" + `defaultTimeout` + "`" + ` is containerlab's timeout of a deploy, redeploy, apply or destroy without ` + "`" + `timeout` + "`" + ` (with every runtime).\n- The server must list ` + "`" + `lab-host-info` + "`" + ` in the ` + "`" + `features` + "`" + ` of ` + "`" + `/health` + "`" + `.",
+                "description": "Returns the runtime the server runs labs with and, on c9s, the Kubernetes cluster and deploy defaults the signed-in user's labs get.\n\n**Notes**\n- ` + "`" + `c9s` + "`" + ` is only set when ` + "`" + `runtime` + "`" + ` is ` + "`" + `c9s` + "`" + `. It names the kubeconfig context and cluster (` + "`" + `in-cluster` + "`" + ` with the Pod's ServiceAccount) but never the cluster's address, credentials or file paths.\n- ` + "`" + `namespacePattern` + "`" + ` is the server's namespace template rendered for the signed-in user, with ` + "`" + `{lab}` + "`" + ` left in. ` + "`" + `sharedNamespacePattern` + "`" + ` is the namespace of labs in the shared workspace.\n- ` + "`" + `metrics` + "`" + ` reports whether the cluster serves ` + "`" + `metrics.k8s.io` + "`" + `, which node stats need.\n- ` + "`" + `defaultTimeout` + "`" + ` is containerlab's timeout of a deploy, redeploy, apply or destroy without ` + "`" + `timeout` + "`" + ` (with every runtime).\n- ` + "`" + `capture` + "`" + ` is how the server captures packets, with every runtime: whether it runs Wireshark VNC sessions (` + "`" + `wiresharkVnc` + "`" + `), their image and pull policy and, with Docker and Podman, Edgeshark's packetflix port and the names (not values) of its extra environment variables.\n- ` + "`" + `c9s.noTopologyCR` + "`" + ` is false: the server deploys every lab with clabernetes' Topology resource.\n- The server must list ` + "`" + `lab-host-info` + "`" + ` in the ` + "`" + `features` + "`" + ` of ` + "`" + `/health` + "`" + `.",
                 "produces": [
                     "application/json"
                 ],
@@ -7196,6 +7196,11 @@ const docTemplate = `{
                     "type": "string",
                     "example": "c9s-alice-{lab}"
                 },
+                "noTopologyCR": {
+                    "description": "NoTopologyCR reports whether labs deploy without clabernetes' Topology resource\n(containerlab's --no-topology-cr). The server always deploys with one: false.",
+                    "type": "boolean",
+                    "example": false
+                },
                 "persistence": {
                     "description": "Persistence reports whether node storage outlives Pod replacement and destroy\n(CLAB_C9S_PERSISTENCE).",
                     "type": "boolean",
@@ -7315,6 +7320,39 @@ const docTemplate = `{
                     "description": "PeerNode is the node at the other end of the link, \"host\" for a host endpoint.",
                     "type": "string",
                     "example": "srl2"
+                }
+            }
+        },
+        "models.CaptureLabHost": {
+            "type": "object",
+            "properties": {
+                "edgeshark": {
+                    "description": "Edgeshark is Edgeshark on the server host; only set for Docker and Podman.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.EdgesharkLabHost"
+                        }
+                    ]
+                },
+                "wiresharkImage": {
+                    "description": "WiresharkImage is the container image of a Wireshark VNC session\n(CAPTURE_WIRESHARK_DOCKER_IMAGE).",
+                    "type": "string",
+                    "example": "ghcr.io/srl-labs/wireshark-vnc-docker:latest"
+                },
+                "wiresharkPullPolicy": {
+                    "description": "WiresharkPullPolicy is when the server pulls that image before a session\n(CAPTURE_WIRESHARK_PULL_POLICY).",
+                    "type": "string",
+                    "enum": [
+                        "always",
+                        "missing",
+                        "never"
+                    ],
+                    "example": "always"
+                },
+                "wiresharkVnc": {
+                    "description": "WiresharkVnc reports whether the server runs Wireshark VNC sessions (Wireshark in a\nbrowser window) for the user's labs.",
+                    "type": "boolean",
+                    "example": true
                 }
             }
         },
@@ -7866,6 +7904,27 @@ const docTemplate = `{
                 }
             }
         },
+        "models.EdgesharkLabHost": {
+            "type": "object",
+            "properties": {
+                "extraEnvVars": {
+                    "description": "ExtraEnvVars names the variables the Edgeshark containers get\n(CAPTURE_EDGESHARK_EXTRA_ENV_VARS), sorted; their values are not reported.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "example": [
+                        "HTTP_PROXY",
+                        "NO_PROXY"
+                    ]
+                },
+                "packetflixPort": {
+                    "description": "PacketflixPort is the port of Edgeshark's packetflix endpoint on the server host\n(CAPTURE_PACKETFLIX_PORT).",
+                    "type": "integer",
+                    "example": 5001
+                }
+            }
+        },
         "models.ErrorResponse": {
             "type": "object",
             "properties": {
@@ -8351,6 +8410,14 @@ const docTemplate = `{
                     "allOf": [
                         {
                             "$ref": "#/definitions/models.C9sLabHost"
+                        }
+                    ]
+                },
+                "capture": {
+                    "description": "Capture is how the server captures packets of the user's labs: Wireshark VNC and, with\nDocker and Podman, Edgeshark.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.CaptureLabHost"
                         }
                     ]
                 },
