@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/srl-labs/clab-api-server/internal/capture"
 	"github.com/srl-labs/clab-api-server/internal/clab"
 	"github.com/srl-labs/clab-api-server/internal/config"
 	"github.com/srl-labs/clab-api-server/internal/kube"
@@ -36,6 +37,8 @@ func SetLabHostCluster(contextName, cluster string) {
 // @Description - `namespacePattern` is the server's namespace template rendered for the signed-in user, with `{lab}` left in. `sharedNamespacePattern` is the namespace of labs in the shared workspace.
 // @Description - `metrics` reports whether the cluster serves `metrics.k8s.io`, which node stats need.
 // @Description - `defaultTimeout` is containerlab's timeout of a deploy, redeploy, apply or destroy without `timeout` (with every runtime).
+// @Description - `capture` is how the server captures packets, with every runtime: whether it runs Wireshark VNC sessions (`wiresharkVnc`), their image and pull policy and, with Docker and Podman, Edgeshark's packetflix port and the names (not values) of its extra environment variables.
+// @Description - `c9s.noTopologyCR` is false: the server deploys every lab with clabernetes' Topology resource.
 // @Description - The server must list `lab-host-info` in the `features` of `/health`.
 // @Tags Health
 // @Security BearerAuth
@@ -47,6 +50,7 @@ func LabHostHandler(c *gin.Context) {
 	response := models.LabHostResponse{
 		Runtime:        clab.RuntimeKind(),
 		DefaultTimeout: formatDuration(clab.DefaultLifecycleTimeout()),
+		Capture:        captureLabHost(),
 	}
 	if clab.IsLabRuntime() {
 		response.C9s = c9sLabHost(c.GetString("username"))
@@ -70,6 +74,37 @@ func c9sLabHost(username string) *models.C9sLabHost {
 		Persistence:            cfg.ClabC9sPersistence,
 		ImagePullSecret:        cfg.PullSecretName(),
 		LabQuota:               cfg.ClabKubeLabQuota != "",
+		NoTopologyCR:           clab.LabRuntimeNoTopologyCR,
 		Metrics:                nodeStatsAvailable != nil && nodeStatsAvailable(),
 	}
+}
+
+// captureLabHost describes Wireshark VNC and Edgeshark as the capture manager runs them.
+func captureLabHost() models.CaptureLabHost {
+	cfg := config.AppConfig
+	normalized := capture.NormalizeConfig(capture.ManagerConfig{
+		Runtime:               cfg.ClabRuntime,
+		PacketflixPort:        cfg.CapturePacketflixPort,
+		WiresharkDockerImage:  cfg.CaptureWiresharkDockerImage,
+		WiresharkPullPolicy:   cfg.CaptureWiresharkPullPolicy,
+		EdgesharkExtraEnvVars: cfg.CaptureEdgesharkExtraEnvVars,
+	})
+	result := models.CaptureLabHost{
+		WiresharkVnc:        wiresharkVncAvailable(),
+		WiresharkImage:      normalized.WiresharkDockerImage,
+		WiresharkPullPolicy: normalized.WiresharkPullPolicy,
+	}
+	if !clab.IsLabRuntime() {
+		result.Edgeshark = &models.EdgesharkLabHost{
+			PacketflixPort: normalized.PacketflixPort,
+			ExtraEnvVars:   capture.ExtraEnvVarNames(normalized.EdgesharkExtraEnvVars),
+		}
+	}
+	return result
+}
+
+// wiresharkVncAvailable reports whether the server runs Wireshark VNC sessions: next to
+// Docker and Podman labs, which Edgeshark captures; not for c9s labs.
+func wiresharkVncAvailable() bool {
+	return !clab.IsLabRuntime()
 }

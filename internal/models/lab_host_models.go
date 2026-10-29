@@ -9,6 +9,9 @@ type LabHostResponse struct {
 	// DefaultTimeout is containerlab's timeout of a deploy, redeploy, apply or destroy that
 	// passes no `timeout`, as a Go duration: 10m on c9s, 5m with Docker and Podman.
 	DefaultTimeout string `json:"defaultTimeout" example:"10m"`
+	// Capture is how the server captures packets of the user's labs: Wireshark VNC and, with
+	// Docker and Podman, Edgeshark.
+	Capture CaptureLabHost `json:"capture"`
 	// C9s describes the Kubernetes cluster and deploy defaults; only set for c9s.
 	C9s *C9sLabHost `json:"c9s,omitempty"`
 }
@@ -36,7 +39,36 @@ type C9sLabHost struct {
 	ImagePullSecret string `json:"imagePullSecret" example:"regcred"`
 	// LabQuota reports whether every lab namespace gets a ResourceQuota (CLAB_KUBE_LAB_QUOTA).
 	LabQuota bool `json:"labQuota" example:"false"`
+	// NoTopologyCR reports whether labs deploy without clabernetes' Topology resource
+	// (containerlab's --no-topology-cr). The server always deploys with one: false.
+	NoTopologyCR bool `json:"noTopologyCR" example:"false"`
 	// Metrics reports whether the cluster serves the resource metrics API (metrics.k8s.io)
 	// node stats come from.
 	Metrics bool `json:"metrics" example:"true"`
+}
+
+// CaptureLabHost is how the server captures packets: the Wireshark VNC sessions it runs
+// and, with Docker and Podman, Edgeshark. Values as the server uses them, defaults applied.
+type CaptureLabHost struct {
+	// WiresharkVnc reports whether the server runs Wireshark VNC sessions (Wireshark in a
+	// browser window) for the user's labs.
+	WiresharkVnc bool `json:"wiresharkVnc" example:"true"`
+	// WiresharkImage is the container image of a Wireshark VNC session
+	// (CAPTURE_WIRESHARK_DOCKER_IMAGE).
+	WiresharkImage string `json:"wiresharkImage" example:"ghcr.io/srl-labs/wireshark-vnc-docker:latest"`
+	// WiresharkPullPolicy is when the server pulls that image before a session
+	// (CAPTURE_WIRESHARK_PULL_POLICY).
+	WiresharkPullPolicy string `json:"wiresharkPullPolicy" example:"always" enums:"always,missing,never"`
+	// Edgeshark is Edgeshark on the server host; only set for Docker and Podman.
+	Edgeshark *EdgesharkLabHost `json:"edgeshark,omitempty"`
+}
+
+// EdgesharkLabHost is how the server runs Edgeshark next to Docker or Podman labs.
+type EdgesharkLabHost struct {
+	// PacketflixPort is the port of Edgeshark's packetflix endpoint on the server host
+	// (CAPTURE_PACKETFLIX_PORT).
+	PacketflixPort int `json:"packetflixPort" example:"5001"`
+	// ExtraEnvVars names the variables the Edgeshark containers get
+	// (CAPTURE_EDGESHARK_EXTRA_ENV_VARS), sorted; their values are not reported.
+	ExtraEnvVars []string `json:"extraEnvVars" example:"HTTP_PROXY,NO_PROXY"`
 }

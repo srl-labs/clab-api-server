@@ -90,6 +90,12 @@ definitions:
           (CLAB_KUBE_NAMESPACE_TEMPLATE). Names too long for a namespace are cut and get a hash.
         example: c9s-alice-{lab}
         type: string
+      noTopologyCR:
+        description: |-
+          NoTopologyCR reports whether labs deploy without clabernetes' Topology resource
+          (containerlab's --no-topology-cr). The server always deploys with one: false.
+        example: false
+        type: boolean
       persistence:
         description: |-
           Persistence reports whether node storage outlives Pod replacement and destroy
@@ -160,6 +166,36 @@ definitions:
         type: integer
       message:
         type: string
+    type: object
+  models.CaptureLabHost:
+    properties:
+      edgeshark:
+        allOf:
+        - $ref: '#/definitions/models.EdgesharkLabHost'
+        description: Edgeshark is Edgeshark on the server host; only set for Docker
+          and Podman.
+      wiresharkImage:
+        description: |-
+          WiresharkImage is the container image of a Wireshark VNC session
+          (CAPTURE_WIRESHARK_DOCKER_IMAGE).
+        example: ghcr.io/srl-labs/wireshark-vnc-docker:latest
+        type: string
+      wiresharkPullPolicy:
+        description: |-
+          WiresharkPullPolicy is when the server pulls that image before a session
+          (CAPTURE_WIRESHARK_PULL_POLICY).
+        enum:
+        - always
+        - missing
+        - never
+        example: always
+        type: string
+      wiresharkVnc:
+        description: |-
+          WiresharkVnc reports whether the server runs Wireshark VNC sessions (Wireshark in a
+          browser window) for the user's labs.
+        example: true
+        type: boolean
     type: object
   models.CapturePacketflixRequest:
     properties:
@@ -565,6 +601,25 @@ definitions:
       version:
         type: string
     type: object
+  models.EdgesharkLabHost:
+    properties:
+      extraEnvVars:
+        description: |-
+          ExtraEnvVars names the variables the Edgeshark containers get
+          (CAPTURE_EDGESHARK_EXTRA_ENV_VARS), sorted; their values are not reported.
+        example:
+        - HTTP_PROXY
+        - NO_PROXY
+        items:
+          type: string
+        type: array
+      packetflixPort:
+        description: |-
+          PacketflixPort is the port of Edgeshark's packetflix endpoint on the server host
+          (CAPTURE_PACKETFLIX_PORT).
+        example: 5001
+        type: integer
+    type: object
   models.ErrorResponse:
     properties:
       error:
@@ -920,6 +975,12 @@ definitions:
         - $ref: '#/definitions/models.C9sLabHost'
         description: C9s describes the Kubernetes cluster and deploy defaults; only
           set for c9s.
+      capture:
+        allOf:
+        - $ref: '#/definitions/models.CaptureLabHost'
+        description: |-
+          Capture is how the server captures packets of the user's labs: Wireshark VNC and, with
+          Docker and Podman, Edgeshark.
       defaultTimeout:
         description: |-
           DefaultTimeout is containerlab's timeout of a deploy, redeploy, apply or destroy that
@@ -2343,6 +2404,8 @@ paths:
         - `namespacePattern` is the server's namespace template rendered for the signed-in user, with `{lab}` left in. `sharedNamespacePattern` is the namespace of labs in the shared workspace.
         - `metrics` reports whether the cluster serves `metrics.k8s.io`, which node stats need.
         - `defaultTimeout` is containerlab's timeout of a deploy, redeploy, apply or destroy without `timeout` (with every runtime).
+        - `capture` is how the server captures packets, with every runtime: whether it runs Wireshark VNC sessions (`wiresharkVnc`), their image and pull policy and, with Docker and Podman, Edgeshark's packetflix port and the names (not values) of its extra environment variables.
+        - `c9s.noTopologyCR` is false: the server deploys every lab with clabernetes' Topology resource.
         - The server must list `lab-host-info` in the `features` of `/health`.
       produces:
       - application/json

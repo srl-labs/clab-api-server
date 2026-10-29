@@ -188,6 +188,11 @@ user's labs get:
 {
   "runtime": "c9s",
   "defaultTimeout": "10m",
+  "capture": {
+    "wiresharkVnc": false,
+    "wiresharkImage": "ghcr.io/srl-labs/wireshark-vnc-docker:latest",
+    "wiresharkPullPolicy": "always"
+  },
   "c9s": {
     "context": "c9s-provisioner",
     "cluster": "c9s",
@@ -197,6 +202,7 @@ user's labs get:
     "persistence": true,
     "imagePullSecret": "regcred",
     "labQuota": false,
+    "noTopologyCR": false,
     "metrics": true
   }
 }
@@ -207,9 +213,31 @@ the Pod's ServiceAccount); the cluster's address, credentials and file paths are
 reported. `namespacePattern` is `CLAB_KUBE_NAMESPACE_TEMPLATE` rendered for the signed-in
 user with `{lab}` left in, `imagePullSecret` the secret's name without its namespace,
 `labQuota` whether `CLAB_KUBE_LAB_QUOTA` is set, and `metrics` whether `metrics.k8s.io` is
-served. `defaultTimeout` is containerlab's timeout of a deploy, redeploy, apply or destroy
-that passes no `timeout` (see [Timeouts](#timeouts)). Docker and Podman servers answer
-`{"runtime": "docker", "defaultTimeout": "5m"}` (or `podman`) without `c9s`.
+served. `noTopologyCR` is always `false`: the server deploys every lab with clabernetes'
+Topology resource, which carries the lab's owner and topology file. `defaultTimeout` is
+containerlab's timeout of a deploy, redeploy, apply or destroy that passes no `timeout`
+(see [Timeouts](#timeouts)).
+
+`capture` describes packet capture with every runtime, with the defaults applied:
+`wiresharkVnc` whether the server runs Wireshark VNC sessions for the user's labs,
+`wiresharkImage` and `wiresharkPullPolicy` their image and when it is pulled
+(`CAPTURE_WIRESHARK_DOCKER_IMAGE`, `CAPTURE_WIRESHARK_PULL_POLICY`: `always`, `missing` or
+`never`). Docker and Podman servers answer without `c9s` and add Edgeshark, which runs next
+to their labs: its packetflix port (`CAPTURE_PACKETFLIX_PORT`) and the names of the
+variables in `CAPTURE_EDGESHARK_EXTRA_ENV_VARS`, never their values:
+
+```json
+{
+  "runtime": "docker",
+  "defaultTimeout": "5m",
+  "capture": {
+    "wiresharkVnc": true,
+    "wiresharkImage": "ghcr.io/srl-labs/wireshark-vnc-docker:latest",
+    "wiresharkPullPolicy": "always",
+    "edgeshark": { "packetflixPort": 5001, "extraEnvVars": ["HTTP_PROXY", "NO_PROXY"] }
+  }
+}
+```
 
 Features that need Docker or Podman on the server host are left out on c9s:
 `snapshot-save`, `deploy-restore`, `sshx-readers`, `gotty-options`.
