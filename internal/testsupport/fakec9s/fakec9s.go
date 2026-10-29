@@ -31,6 +31,8 @@ type Call struct {
 	Cleanup   bool
 	Command   []string
 	Port      int
+	// Timeout is the containerlab timeout of a deploy or destroy call.
+	Timeout time.Duration
 	// Deploy settings of a deploy call.
 	Owner           string
 	ExposeType      string
@@ -210,7 +212,8 @@ func topologyNodes(definition []byte) []string {
 func (r *instance) Deploy(_ context.Context, req clablabruntime.DeployRequest) (*clablabruntime.LabState, error) {
 	namespace := r.namespace(req.Namespace, req.Name)
 	if err := r.record(Call{Op: "deploy", Lab: req.Name, Namespace: namespace, Identity: r.identity(req.Identity),
-		Owner: req.Owner, ExposeType: req.ExposeType, ImagePullSecret: req.ImagePullSecret, NoPersistence: req.NoPersistence}); err != nil {
+		Owner: req.Owner, ExposeType: req.ExposeType, ImagePullSecret: req.ImagePullSecret, NoPersistence: req.NoPersistence,
+		Timeout: req.Timeout}); err != nil {
 		return nil, err
 	}
 	r.fake.mu.Lock()
@@ -232,7 +235,8 @@ func (r *instance) Deploy(_ context.Context, req clablabruntime.DeployRequest) (
 
 func (r *instance) Destroy(_ context.Context, req clablabruntime.DestroyRequest) error {
 	namespace := r.namespace(req.Namespace, req.Name)
-	if err := r.record(Call{Op: "destroy", Lab: req.Name, Namespace: namespace, Identity: r.identity(req.Identity), Cleanup: req.Cleanup}); err != nil {
+	if err := r.record(Call{Op: "destroy", Lab: req.Name, Namespace: namespace, Identity: r.identity(req.Identity), Cleanup: req.Cleanup,
+		Timeout: req.Timeout}); err != nil {
 		return err
 	}
 	r.fake.mu.Lock()

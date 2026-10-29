@@ -2450,6 +2450,11 @@ paths:
           type: string
         name: restore
         type: array
+      - description: containerlab timeout like --timeout, a Go duration such as 10m
+          or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman
+        in: query
+        name: timeout
+        type: string
       produces:
       - application/json
       responses:
@@ -2535,6 +2540,11 @@ paths:
         in: query
         name: includeLogs
         type: boolean
+      - description: containerlab timeout like --timeout, a Go duration such as 10m
+          or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman
+        in: query
+        name: timeout
+        type: string
       produces:
       - application/json
       responses:
@@ -2682,6 +2692,11 @@ paths:
         in: query
         name: ipv6Subnet
         type: string
+      - description: containerlab timeout like --timeout, a Go duration such as 10m
+          or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman
+        in: query
+        name: timeout
+        type: string
       produces:
       - application/json
       responses:
@@ -2756,6 +2771,11 @@ paths:
         in: query
         name: includeLogs
         type: boolean
+      - description: containerlab timeout like --timeout, a Go duration such as 10m
+          or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman
+        in: query
+        name: timeout
+        type: string
       produces:
       - application/json
       responses:
@@ -2982,6 +3002,11 @@ paths:
           type: string
         name: restore
         type: array
+      - description: containerlab timeout like --timeout, a Go duration such as 10m
+          or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman
+        in: query
+        name: timeout
+        type: string
       produces:
       - application/json
       responses:
@@ -5024,6 +5049,11 @@ paths:
           type: string
         name: restore
         type: array
+      - description: containerlab timeout like --timeout, a Go duration such as 10m
+          or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman
+        in: query
+        name: timeout
+        type: string
       produces:
       - application/json
       responses:

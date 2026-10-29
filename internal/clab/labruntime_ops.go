@@ -90,6 +90,16 @@ func (s *Service) openLabRuntimeLab(
 	ctx context.Context,
 	username, labName, topoPath string,
 ) (*clabcore.CLab, *LabScope, error) {
+	return s.openLabRuntimeLabWithTimeout(ctx, username, labName, topoPath, defaultTimeout)
+}
+
+// openLabRuntimeLabWithTimeout is openLabRuntimeLab with containerlab's timeout, for
+// lifecycle operations that wait for the cluster.
+func (s *Service) openLabRuntimeLabWithTimeout(
+	ctx context.Context,
+	username, labName, topoPath string,
+	timeout time.Duration,
+) (*clabcore.CLab, *LabScope, error) {
 	labName = strings.TrimSpace(labName)
 	if labName == "" {
 		return nil, nil, fmt.Errorf("lab name is required")
@@ -98,8 +108,8 @@ func (s *Service) openLabRuntimeLab(
 	if err != nil {
 		return nil, nil, err
 	}
-	opts := []clabcore.ClabOption{clabcore.WithTimeout(defaultTimeout)}
-	opts = append(opts, runtimeOptions(scope, defaultTimeout)...)
+	opts := []clabcore.ClabOption{clabcore.WithTimeout(timeout)}
+	opts = append(opts, runtimeOptions(scope, timeout)...)
 	opts = append(opts, labRuntimeLabOptions(topoPath, labName)...)
 	clab, err := newContainerLab(opts...)
 	if err != nil {
@@ -183,7 +193,8 @@ func (s *Service) destroyWithLabRuntime(ctx context.Context, opts DestroyOptions
 		return fmt.Errorf("lab name is required")
 	}
 
-	clab, scope, err := s.openLabRuntimeLab(ctx, opts.Username, labName, opts.TopoPath)
+	clab, scope, err := s.openLabRuntimeLabWithTimeout(ctx, opts.Username, labName, opts.TopoPath,
+		LifecycleTimeout(opts.Timeout))
 	if err != nil {
 		return err
 	}
@@ -225,7 +236,10 @@ func (s *Service) applyWithLabRuntime(ctx context.Context, opts ApplyOptions) (*
 	if err := ValidateLabRuntimeLabName(labName); err != nil {
 		return nil, err
 	}
-	deployOpts := DeployOptions{TopoPath: opts.TopoPath, LabName: labName, Username: opts.Username, Actor: opts.Actor, MaxWorkers: opts.MaxWorkers}
+	deployOpts := DeployOptions{
+		TopoPath: opts.TopoPath, LabName: labName, Username: opts.Username, Actor: opts.Actor,
+		MaxWorkers: opts.MaxWorkers, Timeout: opts.Timeout,
+	}
 
 	var scope *LabScope
 	if opts.DryRun {

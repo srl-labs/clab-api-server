@@ -752,6 +752,12 @@ const docTemplate = `{
                         "description": "Restore one node from a snapshot file as node=path (like --restore); repeatable, overrides restoreAll",
                         "name": "restore",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "containerlab timeout like --timeout, a Go duration such as 10m or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman",
+                        "name": "timeout",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -895,6 +901,12 @@ const docTemplate = `{
                         "collectionFormat": "multi",
                         "description": "Restore one node from a snapshot file as node=path (like --restore); repeatable, overrides restoreAll",
                         "name": "restore",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "containerlab timeout like --timeout, a Go duration such as 10m or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman",
+                        "name": "timeout",
                         "in": "query"
                     }
                 ],
@@ -1605,6 +1617,12 @@ const docTemplate = `{
                         "description": "Override the management network IPv6 subnet (like --ipv6-subnet)",
                         "name": "ipv6Subnet",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "containerlab timeout like --timeout, a Go duration such as 10m or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman",
+                        "name": "timeout",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1715,6 +1733,12 @@ const docTemplate = `{
                         "description": "Include captured lifecycle logs in the JSON response",
                         "name": "includeLogs",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "containerlab timeout like --timeout, a Go duration such as 10m or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman",
+                        "name": "timeout",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1814,6 +1838,12 @@ const docTemplate = `{
                         "type": "boolean",
                         "description": "Include captured lifecycle logs in the JSON response",
                         "name": "includeLogs",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "containerlab timeout like --timeout, a Go duration such as 10m or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman",
+                        "name": "timeout",
                         "in": "query"
                     }
                 ],
@@ -2136,6 +2166,12 @@ const docTemplate = `{
                         "collectionFormat": "multi",
                         "description": "Restore one node from a snapshot file as node=path (like --restore); repeatable, overrides restoreAll",
                         "name": "restore",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "containerlab timeout like --timeout, a Go duration such as 10m or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman",
+                        "name": "timeout",
                         "in": "query"
                     }
                 ],

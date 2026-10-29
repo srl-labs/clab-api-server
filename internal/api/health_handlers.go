@@ -54,6 +54,9 @@ var serverFeatures = []string{
 	// lab-host-info: GET /api/v1/lab-host describes the lab runtime (on c9s the cluster
 	// and deploy defaults).
 	"lab-host-info",
+	// lab-lifecycle-timeout: deploy, redeploy, apply and destroy take a `timeout` (like
+	// containerlab's --timeout).
+	"lab-lifecycle-timeout",
 }
 
 // containerRuntimeOnlyFeatures need Docker or Podman on the server host.
