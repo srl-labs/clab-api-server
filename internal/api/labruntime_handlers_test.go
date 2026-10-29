@@ -128,7 +128,7 @@ func TestHealthReportsTheRuntimeAndItsFeatures(t *testing.T) {
 	require.Equal(t, "docker", docker.Runtime)
 	require.Empty(t, docker.NamespaceMode)
 	require.Subset(t, docker.Features, []string{"snapshot-save", "deploy-restore", "sshx-readers", "gotty-options",
-		"node-stats", "node-logs-runtime", "interface-state", "terminal-resume"})
+		"node-stats", "node-logs-runtime", "interface-state", "terminal-resume", "lab-lifecycle-timeout"})
 	require.NotContains(t, docker.Features, "c9s-runtime")
 
 	config.AppConfig.ClabRuntime = "c9s"
@@ -138,7 +138,8 @@ func TestHealthReportsTheRuntimeAndItsFeatures(t *testing.T) {
 	require.Equal(t, "c9s", c9s.Runtime)
 	require.Equal(t, "per-lab", c9s.NamespaceMode)
 	require.Subset(t, c9s.Features, []string{"c9s-runtime", "node-logs-runtime", "interface-state", "node-stats",
-		"terminal-resume", "log-stream", "validate", "graph-mermaid", "graph-dot", "exec-filters", "save-copy"})
+		"terminal-resume", "log-stream", "validate", "graph-mermaid", "graph-dot", "exec-filters", "save-copy",
+		"lab-lifecycle-timeout"})
 	for _, feature := range []string{"snapshot-save", "deploy-restore", "sshx-readers", "gotty-options"} {
 		require.NotContains(t, c9s.Features, feature)
 	}

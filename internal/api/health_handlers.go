@@ -51,6 +51,9 @@ var serverFeatures = []string{
 	"interface-state",
 	// c9s-runtime: labs run on Kubernetes through clabernetes (only with CLAB_RUNTIME=c9s).
 	"c9s-runtime",
+	// lab-lifecycle-timeout: deploy, redeploy, apply and destroy take a `timeout` (like
+	// containerlab's --timeout).
+	"lab-lifecycle-timeout",
 }
 
 // containerRuntimeOnlyFeatures need Docker or Podman on the server host.

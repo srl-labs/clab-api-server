@@ -41,7 +41,12 @@ import (
 )
 
 const (
-	defaultTimeout         = 5 * time.Minute
+	defaultTimeout = 5 * time.Minute
+	// defaultLabRuntimeTimeout is containerlab's default timeout on a lab runtime (c9s):
+	// a cluster pulls node images and starts Pods slower than a local container runtime.
+	defaultLabRuntimeTimeout = 10 * time.Minute
+	// MaxLifecycleTimeout bounds the timeout a deploy, redeploy, apply or destroy may ask for.
+	MaxLifecycleTimeout    = 2 * time.Hour
 	gracefulDestroyTimeout = 2 * time.Minute
 	imagePullTimeout       = 30 * time.Minute
 )
@@ -296,6 +301,9 @@ type DeployOptions struct {
 	NodeFilter     []string
 	SkipPostDeploy bool
 	SkipLabDirACLs bool
+	// Timeout is containerlab's timeout (like --timeout); zero uses
+	// DefaultLifecycleTimeout.
+	Timeout time.Duration
 	// MgmtNetwork, MgmtIPv4Subnet and MgmtIPv6Subnet override the topology's
 	// management network like the --network, --ipv4-subnet and --ipv6-subnet flags.
 	MgmtNetwork    string
@@ -322,6 +330,9 @@ type ApplyOptions struct {
 	MaxWorkers     uint
 	ExportTemplate string
 	SkipPostDeploy bool
+	// Timeout is containerlab's timeout (like --timeout); zero uses
+	// DefaultLifecycleTimeout.
+	Timeout time.Duration
 }
 
 // DestroyOptions contains options for destroying a lab.
@@ -335,6 +346,9 @@ type DestroyOptions struct {
 	KeepMgmtNet     bool
 	NodeFilter      []string
 	MaxWorkers      uint
+	// Timeout is containerlab's timeout (like --timeout); zero uses
+	// DefaultLifecycleTimeout. GracefulTimeout wins for a graceful destroy.
+	Timeout time.Duration
 	// VarsFiles are template variable files like --vars, used to render the
 	// topology the lab was deployed from.
 	VarsFiles []string
@@ -589,12 +603,13 @@ func (s *Service) ResolveTopologySource(
 }
 
 func deployClabOptions(topoPath, labName string, opts DeployOptions, scope *LabScope) []clabcore.ClabOption {
+	timeout := LifecycleTimeout(opts.Timeout)
 	clabOpts := []clabcore.ClabOption{
-		clabcore.WithTimeout(defaultTimeout),
+		clabcore.WithTimeout(timeout),
 		clabcore.WithTopoPath(topoPath, opts.VarsFiles),
 		clabcore.WithTopologyName(labName),
 	}
-	clabOpts = append(clabOpts, runtimeOptions(scope, defaultTimeout)...)
+	clabOpts = append(clabOpts, runtimeOptions(scope, timeout)...)
 	if scope != nil && scope.Owner != "" {
 		clabOpts = append(clabOpts, clabcore.WithLabOwner(scope.Owner))
 	}
@@ -809,11 +824,12 @@ func (s *Service) Apply(ctx context.Context, opts ApplyOptions) (*ApplyOutcome, 
 		}
 	}()
 
+	timeout := LifecycleTimeout(opts.Timeout)
 	clabOpts := []clabcore.ClabOption{
-		clabcore.WithTimeout(defaultTimeout),
+		clabcore.WithTimeout(timeout),
 		clabcore.WithTopoPath(opts.TopoPath, nil),
 	}
-	clabOpts = append(clabOpts, runtimeOptions(nil, defaultTimeout)...)
+	clabOpts = append(clabOpts, runtimeOptions(nil, timeout)...)
 
 	log.Debug("Creating containerlab instance for apply",
 		"topoPath", opts.TopoPath,
@@ -967,13 +983,7 @@ func (s *Service) Destroy(ctx context.Context, opts DestroyOptions) error {
 	}()
 
 	// Build clab options - use topology path if available, otherwise use lab name
-	clabTimeout := defaultTimeout
-	if opts.Graceful {
-		clabTimeout = gracefulDestroyTimeout
-		if opts.GracefulTimeout > 0 {
-			clabTimeout = opts.GracefulTimeout
-		}
-	}
+	clabTimeout := destroyTimeout(opts)
 	var clabOpts []clabcore.ClabOption
 	clabOpts = append(clabOpts, clabcore.WithTimeout(clabTimeout))
 
@@ -3311,6 +3321,41 @@ func (s *Service) prepareWorkDir(username string) (string, error) {
 	}
 
 	return clabDir, nil
+}
+
+// DefaultLifecycleTimeout is the containerlab timeout of a deploy, redeploy, apply or
+// destroy that asks for none: containerlab's lab runtime default on c9s, the server's
+// own default with Docker and Podman.
+func DefaultLifecycleTimeout() time.Duration {
+	if IsLabRuntime() {
+		return defaultLabRuntimeTimeout
+	}
+	return defaultTimeout
+}
+
+// LifecycleTimeout is the containerlab timeout of a lifecycle operation: the requested
+// one, or DefaultLifecycleTimeout when none was requested.
+func LifecycleTimeout(requested time.Duration) time.Duration {
+	if requested > 0 {
+		return requested
+	}
+	return DefaultLifecycleTimeout()
+}
+
+// destroyTimeout is containerlab's timeout of a destroy. A graceful destroy waits for
+// its nodes to stop: its own graceful timeout, else the requested timeout, else two
+// minutes.
+func destroyTimeout(opts DestroyOptions) time.Duration {
+	if !opts.Graceful {
+		return LifecycleTimeout(opts.Timeout)
+	}
+	switch {
+	case opts.GracefulTimeout > 0:
+		return opts.GracefulTimeout
+	case opts.Timeout > 0:
+		return opts.Timeout
+	}
+	return gracefulDestroyTimeout
 }
 
 // ensureTimeout ensures the context has a timeout.

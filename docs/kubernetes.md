@@ -50,7 +50,7 @@ If either fails, it exits with a message that names what is missing.
   "namespaceMode": "per-lab",
   "features": ["validate", "graph-mermaid", "graph-dot", "exec-filters", "lab-lifecycle-node-filter",
                "save-copy", "inspect-details", "node-stats", "log-stream", "terminal-resume",
-               "node-logs-runtime", "interface-state", "c9s-runtime"]
+               "node-logs-runtime", "interface-state", "c9s-runtime", "lab-lifecycle-timeout"]
 }
 ```
 
@@ -60,6 +60,7 @@ If either fails, it exits with a message that names what is missing.
 | `node-logs-runtime` | Node logs come from the configured runtime (on c9s: the device container log). |
 | `interface-state` | The events stream reports interface `up`/`down` events. |
 | `node-stats` | Left out on c9s while `metrics.k8s.io` is not served. |
+| `lab-lifecycle-timeout` | Deploy, redeploy, apply and destroy take `timeout` (see below). With every runtime. |
 
 Features that need Docker or Podman on the server host are left out on c9s:
 `snapshot-save`, `deploy-restore`, `sshx-readers`, `gotty-options`.
@@ -82,6 +83,15 @@ the node name is `<lab>-<node>`.
 
 Lab names must be lowercase DNS labels (letters, digits and dashes, starting with a letter).
 Other names are refused with the name to use instead.
+
+## Timeouts
+
+On c9s containerlab waits up to 10 minutes by default for a lab's Pods, as
+`containerlab deploy -r c9s` does: a cluster pulls node images and schedules Pods slower
+than a local Docker. Deploy, redeploy, apply and destroy take an optional `timeout` query
+parameter (containerlab's `--timeout`, a Go duration such as `30m`, at most `2h`) for labs
+with large images. The request runs for the timeout plus 5 minutes, and a redeploy for twice
+the timeout plus 5 minutes, so containerlab's own timeout error reaches the client.
 
 ## Not supported on c9s
 
