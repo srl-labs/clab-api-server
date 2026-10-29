@@ -946,6 +946,12 @@ definitions:
         - $ref: '#/definitions/models.C9sLabHost'
         description: C9s describes the Kubernetes cluster and deploy defaults; only
           set for c9s.
+      defaultTimeout:
+        description: |-
+          DefaultTimeout is containerlab's timeout of a deploy, redeploy, apply or destroy that
+          passes no `timeout`, as a Go duration: 10m on c9s, 5m with Docker and Podman.
+        example: 10m
+        type: string
       runtime:
         description: 'Runtime is the lab runtime: docker, podman or c9s.'
         enum:
@@ -2362,6 +2368,7 @@ paths:
         - `c9s` is only set when `runtime` is `c9s`. It names the kubeconfig context and cluster (`in-cluster` with the Pod's ServiceAccount) but never the cluster's address, credentials or file paths.
         - `namespacePattern` is the server's namespace template rendered for the signed-in user, with `{lab}` left in. `sharedNamespacePattern` is the namespace of labs in the shared workspace.
         - `metrics` reports whether the cluster serves `metrics.k8s.io`, which node stats need.
+        - `defaultTimeout` is containerlab's timeout of a deploy, redeploy, apply or destroy without `timeout` (with every runtime).
         - The server must list `lab-host-info` in the `features` of `/health`.
       produces:
       - application/json
@@ -2476,6 +2483,11 @@ paths:
           type: string
         name: restore
         type: array
+      - description: containerlab timeout like --timeout, a Go duration such as 10m
+          or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman
+        in: query
+        name: timeout
+        type: string
       produces:
       - application/json
       responses:
@@ -2561,6 +2573,11 @@ paths:
         in: query
         name: includeLogs
         type: boolean
+      - description: containerlab timeout like --timeout, a Go duration such as 10m
+          or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman
+        in: query
+        name: timeout
+        type: string
       produces:
       - application/json
       responses:
@@ -2708,6 +2725,11 @@ paths:
         in: query
         name: ipv6Subnet
         type: string
+      - description: containerlab timeout like --timeout, a Go duration such as 10m
+          or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman
+        in: query
+        name: timeout
+        type: string
       produces:
       - application/json
       responses:
@@ -2782,6 +2804,11 @@ paths:
         in: query
         name: includeLogs
         type: boolean
+      - description: containerlab timeout like --timeout, a Go duration such as 10m
+          or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman
+        in: query
+        name: timeout
+        type: string
       produces:
       - application/json
       responses:
@@ -3159,6 +3186,11 @@ paths:
           type: string
         name: restore
         type: array
+      - description: containerlab timeout like --timeout, a Go duration such as 10m
+          or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman
+        in: query
+        name: timeout
+        type: string
       produces:
       - application/json
       responses:
@@ -5204,6 +5236,11 @@ paths:
           type: string
         name: restore
         type: array
+      - description: containerlab timeout like --timeout, a Go duration such as 10m
+          or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman
+        in: query
+        name: timeout
+        type: string
       produces:
       - application/json
       responses:

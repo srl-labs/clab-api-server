@@ -590,7 +590,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns the runtime the server runs labs with and, on c9s, the Kubernetes cluster and deploy defaults the signed-in user's labs get.\n\n**Notes**\n- ` + "`" + `c9s` + "`" + ` is only set when ` + "`" + `runtime` + "`" + ` is ` + "`" + `c9s` + "`" + `. It names the kubeconfig context and cluster (` + "`" + `in-cluster` + "`" + ` with the Pod's ServiceAccount) but never the cluster's address, credentials or file paths.\n- ` + "`" + `namespacePattern` + "`" + ` is the server's namespace template rendered for the signed-in user, with ` + "`" + `{lab}` + "`" + ` left in. ` + "`" + `sharedNamespacePattern` + "`" + ` is the namespace of labs in the shared workspace.\n- ` + "`" + `metrics` + "`" + ` reports whether the cluster serves ` + "`" + `metrics.k8s.io` + "`" + `, which node stats need.\n- The server must list ` + "`" + `lab-host-info` + "`" + ` in the ` + "`" + `features` + "`" + ` of ` + "`" + `/health` + "`" + `.",
+                "description": "Returns the runtime the server runs labs with and, on c9s, the Kubernetes cluster and deploy defaults the signed-in user's labs get.\n\n**Notes**\n- ` + "`" + `c9s` + "`" + ` is only set when ` + "`" + `runtime` + "`" + ` is ` + "`" + `c9s` + "`" + `. It names the kubeconfig context and cluster (` + "`" + `in-cluster` + "`" + ` with the Pod's ServiceAccount) but never the cluster's address, credentials or file paths.\n- ` + "`" + `namespacePattern` + "`" + ` is the server's namespace template rendered for the signed-in user, with ` + "`" + `{lab}` + "`" + ` left in. ` + "`" + `sharedNamespacePattern` + "`" + ` is the namespace of labs in the shared workspace.\n- ` + "`" + `metrics` + "`" + ` reports whether the cluster serves ` + "`" + `metrics.k8s.io` + "`" + `, which node stats need.\n- ` + "`" + `defaultTimeout` + "`" + ` is containerlab's timeout of a deploy, redeploy, apply or destroy without ` + "`" + `timeout` + "`" + ` (with every runtime).\n- The server must list ` + "`" + `lab-host-info` + "`" + ` in the ` + "`" + `features` + "`" + ` of ` + "`" + `/health` + "`" + `.",
                 "produces": [
                     "application/json"
                 ],
@@ -752,6 +752,12 @@ const docTemplate = `{
                         "description": "Restore one node from a snapshot file as node=path (like --restore); repeatable, overrides restoreAll",
                         "name": "restore",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "containerlab timeout like --timeout, a Go duration such as 10m or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman",
+                        "name": "timeout",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -895,6 +901,12 @@ const docTemplate = `{
                         "collectionFormat": "multi",
                         "description": "Restore one node from a snapshot file as node=path (like --restore); repeatable, overrides restoreAll",
                         "name": "restore",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "containerlab timeout like --timeout, a Go duration such as 10m or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman",
+                        "name": "timeout",
                         "in": "query"
                     }
                 ],
@@ -1605,6 +1617,12 @@ const docTemplate = `{
                         "description": "Override the management network IPv6 subnet (like --ipv6-subnet)",
                         "name": "ipv6Subnet",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "containerlab timeout like --timeout, a Go duration such as 10m or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman",
+                        "name": "timeout",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1715,6 +1733,12 @@ const docTemplate = `{
                         "description": "Include captured lifecycle logs in the JSON response",
                         "name": "includeLogs",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "containerlab timeout like --timeout, a Go duration such as 10m or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman",
+                        "name": "timeout",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1814,6 +1838,12 @@ const docTemplate = `{
                         "type": "boolean",
                         "description": "Include captured lifecycle logs in the JSON response",
                         "name": "includeLogs",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "containerlab timeout like --timeout, a Go duration such as 10m or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman",
+                        "name": "timeout",
                         "in": "query"
                     }
                 ],
@@ -2336,6 +2366,12 @@ const docTemplate = `{
                         "collectionFormat": "multi",
                         "description": "Restore one node from a snapshot file as node=path (like --restore); repeatable, overrides restoreAll",
                         "name": "restore",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "containerlab timeout like --timeout, a Go duration such as 10m or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman",
+                        "name": "timeout",
                         "in": "query"
                     }
                 ],
@@ -8317,6 +8353,11 @@ const docTemplate = `{
                             "$ref": "#/definitions/models.C9sLabHost"
                         }
                     ]
+                },
+                "defaultTimeout": {
+                    "description": "DefaultTimeout is containerlab's timeout of a deploy, redeploy, apply or destroy that\npasses no ` + "`" + `timeout` + "`" + `, as a Go duration: 10m on c9s, 5m with Docker and Podman.",
+                    "type": "string",
+                    "example": "10m"
                 },
                 "runtime": {
                     "description": "Runtime is the lab runtime: docker, podman or c9s.",

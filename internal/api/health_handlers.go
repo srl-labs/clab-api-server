@@ -61,6 +61,9 @@ var serverFeatures = []string{
 	// wireshark-vnc: Wireshark VNC capture sessions. With a lab runtime only when the server
 	// host runs Docker.
 	"wireshark-vnc",
+	// lab-lifecycle-timeout: deploy, redeploy, apply and destroy take a `timeout` (like
+	// containerlab's --timeout).
+	"lab-lifecycle-timeout",
 }
 
 // containerRuntimeOnlyFeatures need Docker or Podman on the server host.

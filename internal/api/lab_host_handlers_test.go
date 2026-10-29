@@ -43,10 +43,10 @@ func TestLabHostOnDockerNamesOnlyTheRuntime(t *testing.T) {
 	router.ServeHTTP(unauthenticated, httptest.NewRequest(http.MethodGet, "/api/v1/lab-host", nil))
 	require.Equal(t, http.StatusUnauthorized, unauthenticated.Code)
 
-	require.JSONEq(t, `{"runtime":"docker"}`, string(getLabHost(t, router, "alice")))
+	require.JSONEq(t, `{"runtime":"docker","defaultTimeout":"5m"}`, string(getLabHost(t, router, "alice")))
 
 	config.AppConfig.ClabRuntime = config.RuntimePodman
-	require.JSONEq(t, `{"runtime":"podman"}`, string(getLabHost(t, router, "alice")))
+	require.JSONEq(t, `{"runtime":"podman","defaultTimeout":"5m"}`, string(getLabHost(t, router, "alice")))
 }
 
 func TestLabHostOnC9sDescribesTheClusterForTheUser(t *testing.T) {
@@ -69,6 +69,7 @@ func TestLabHostOnC9sDescribesTheClusterForTheUser(t *testing.T) {
 	body := getLabHost(t, api.router, "alice")
 	require.JSONEq(t, `{
 		"runtime": "c9s",
+		"defaultTimeout": "10m",
 		"c9s": {
 			"context": "c9s-provisioner",
 			"cluster": "c9s",
@@ -101,6 +102,7 @@ func TestLabHostOnC9sDescribesTheClusterForTheUser(t *testing.T) {
 	config.AppConfig.ClabC9sExposeType = "LoadBalancer"
 	require.JSONEq(t, `{
 		"runtime": "c9s",
+		"defaultTimeout": "10m",
 		"c9s": {
 			"context": "",
 			"cluster": "in-cluster",

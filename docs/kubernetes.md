@@ -166,7 +166,7 @@ If any of them fails, it exits with a message that names what is missing.
   "features": ["validate", "graph-mermaid", "graph-dot", "exec-filters", "lab-lifecycle-node-filter",
                "save-copy", "inspect-details", "node-stats", "log-stream", "terminal-resume",
                "node-logs-runtime", "interface-state", "c9s-runtime", "lab-host-info",
-               "capture-stream", "wireshark-vnc"]
+               "capture-stream", "wireshark-vnc", "lab-lifecycle-timeout"]
 }
 ```
 
@@ -179,6 +179,7 @@ If any of them fails, it exits with a message that names what is missing.
 | `lab-host-info` | `GET /api/v1/lab-host` describes the lab runtime (all runtimes). |
 | `capture-stream` | Packet capture through clabwire: `capture/interfaces` and `capture/stream` (see [Packet capture](#packet-capture)). Only with `CLAB_RUNTIME=c9s`. |
 | `wireshark-vnc` | Wireshark VNC capture sessions. On c9s only while Docker answers on the server host (checked once a minute). |
+| `lab-lifecycle-timeout` | Deploy, redeploy, apply and destroy take `timeout` (see [Timeouts](#timeouts)). With every runtime. |
 
 `namespaceMode` is always `per-lab`: every lab has its own namespace.
 
@@ -188,6 +189,7 @@ user's labs get:
 ```json
 {
   "runtime": "c9s",
+  "defaultTimeout": "10m",
   "c9s": {
     "context": "c9s-provisioner",
     "cluster": "c9s",
@@ -207,7 +209,9 @@ the Pod's ServiceAccount); the cluster's address, credentials and file paths are
 reported. `namespacePattern` is `CLAB_KUBE_NAMESPACE_TEMPLATE` rendered for the signed-in
 user with `{lab}` left in, `imagePullSecret` the secret's name without its namespace,
 `labQuota` whether `CLAB_KUBE_LAB_QUOTA` is set, and `metrics` whether `metrics.k8s.io` is
-served. Docker and Podman servers answer `{"runtime": "docker"}` (or `podman`) without `c9s`.
+served. `defaultTimeout` is containerlab's timeout of a deploy, redeploy, apply or destroy
+that passes no `timeout` (see [Timeouts](#timeouts)). Docker and Podman servers answer
+`{"runtime": "docker", "defaultTimeout": "5m"}` (or `podman`) without `c9s`.
 
 Features that need Docker or Podman on the server host are left out on c9s:
 `snapshot-save`, `deploy-restore`, `sshx-readers`, `gotty-options`.
@@ -245,6 +249,15 @@ of the user's labs; a superuser's every namespace.
 
 Lab names must be lowercase DNS labels (letters, digits and dashes, starting with a letter).
 Other names are refused with the name to use instead.
+
+## Timeouts
+
+On c9s containerlab waits up to 10 minutes by default for a lab's Pods, as
+`containerlab deploy -r c9s` does: a cluster pulls node images and schedules Pods slower
+than a local Docker. Deploy, redeploy, apply and destroy take an optional `timeout` query
+parameter (containerlab's `--timeout`, a Go duration such as `30m`, at most `2h`) for labs
+with large images. The request runs for the timeout plus 5 minutes, and a redeploy for twice
+the timeout plus 5 minutes, so containerlab's own timeout error reaches the client.
 
 ## Packet capture
 

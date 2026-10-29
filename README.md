@@ -366,6 +366,22 @@ to the rendered, deploy, redeploy (`PUT /api/v1/labs/{labName}`), and destroy
 (`DELETE /api/v1/labs/{labName}`) endpoints. Pass the same `varsPath` to destroy and
 redeploy that the lab was deployed with.
 
+### Lifecycle timeout
+
+Deploy (`POST /api/v1/labs`, `/api/v1/labs/archive` and `/api/v1/labs/{labName}/deploy`),
+redeploy, apply and destroy take an optional `timeout` query parameter, containerlab's
+`--timeout` as a Go duration such as `90s`, `15m` or `1h`, of at most `2h`. Without it
+containerlab gets the server's default: 5 minutes with Docker and Podman, and on c9s
+containerlab's own c9s default of 10 minutes, since clusters pull node images slowly. The
+request itself runs for the timeout plus 5 minutes (a redeploy for twice the timeout plus
+5 minutes), so containerlab reports its own timeout before the request ends. Servers that
+take `timeout` list `lab-lifecycle-timeout` in the `features` of `/health`.
+
+```bash
+curl -k -X POST -H "Authorization: Bearer $TOKEN" \
+  'https://localhost:8090/api/v1/labs/demo/deploy?path=demo.clab.yml&timeout=30m'
+```
+
 ### Shared labs
 
 Set `CLAB_SHARED_LABS_ROOT=/var/lib/containerlab/shared-labs` in the server's
