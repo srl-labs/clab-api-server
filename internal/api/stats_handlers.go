@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"strings"
@@ -75,6 +77,16 @@ func StreamLabStatsHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), labStatsStreamTimeout)
 	defer cancel()
 
+	// Without a resource metrics API a lab runtime cannot sample nodes at all.
+	if clab.IsLabRuntime() {
+		if _, err := svc.SampleNodeStats(ctx, username, labName); errors.Is(err, clab.ErrMetricsUnavailable) {
+			c.JSON(http.StatusNotImplemented, models.ErrorResponse{
+				Error: fmt.Sprintf("node stats are not supported by lab runtime %s here: %v", clab.RuntimeKind(), err),
+			})
+			return
+		}
+	}
+
 	c.Writer.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
 	c.Writer.Header().Set("X-Content-Type-Options", "nosniff")
 	c.Writer.Header().Set("Cache-Control", "no-cache")
@@ -87,7 +99,7 @@ func StreamLabStatsHandler(c *gin.Context) {
 	}
 	flusher.Flush()
 
-	sampler := labStatsSampler{svc: svc, labName: labName, interval: interval}
+	sampler := labStatsSampler{svc: svc, username: username, labName: labName, interval: interval}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -117,6 +129,7 @@ func StreamLabStatsHandler(c *gin.Context) {
 // labStatsSampler turns raw counters into samples; CPU usage needs the previous counters.
 type labStatsSampler struct {
 	svc      *clab.Service
+	username string
 	labName  string
 	interval time.Duration
 
@@ -132,8 +145,11 @@ func (s *labStatsSampler) next(ctx context.Context) (models.LabStatsSample, erro
 		IntervalSeconds: s.interval.Seconds(),
 		Nodes:           []models.NodeStats{},
 	}
+	if clab.IsLabRuntime() {
+		return s.nextLabRuntime(ctx, sample)
+	}
 	if s.containers == nil || time.Since(s.listedAt) >= labStatsContainerRefresh {
-		containers, err := s.svc.ListContainers(ctx, clab.ListOptions{LabName: s.labName})
+		containers, err := s.svc.ListContainers(ctx, clab.ListOptions{Username: s.username, LabName: s.labName})
 		if err != nil {
 			return sample, err
 		}
@@ -179,4 +195,28 @@ func runningContainers(containers []clabruntime.GenericContainer) []clabruntime.
 		}
 	}
 	return running
+}
+
+// nextLabRuntime samples a lab on a lab runtime from the cluster's resource metrics
+// (metrics.k8s.io). The metrics API already reports CPU usage over its own sampling window,
+// so every sample has a CPU value; memory is the working set of the device containers.
+func (s *labStatsSampler) nextLabRuntime(ctx context.Context, sample models.LabStatsSample) (models.LabStatsSample, error) {
+	stats, err := s.svc.SampleNodeStats(ctx, s.username, s.labName)
+	if err != nil {
+		return sample, err
+	}
+	for _, node := range stats {
+		cpu := math.Round(float64(node.CPUMilliCores)/10*10) / 10
+		memory := uint64(0)
+		if node.MemoryBytes > 0 {
+			memory = uint64(node.MemoryBytes)
+		}
+		sample.Nodes = append(sample.Nodes, models.NodeStats{
+			Name:        s.labName + "-" + node.NodeName,
+			NodeName:    node.NodeName,
+			CPUPercent:  &cpu,
+			MemoryBytes: memory,
+		})
+	}
+	return sample, nil
 }

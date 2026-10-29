@@ -110,7 +110,7 @@ topology:
 
 	clab, err := newContainerLabForOwner(
 		current.Username,
-		deployClabOptions(topologyPath, "authorized", DeployOptions{})...,
+		deployClabOptions(topologyPath, "authorized", DeployOptions{}, nil)...,
 	)
 	if err != nil {
 		t.Fatalf("create containerlab: %v", err)

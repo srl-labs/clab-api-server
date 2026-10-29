@@ -36,7 +36,7 @@ func ContainerToClabContainerInfo(c clabruntime.GenericContainer) models.ClabCon
 	if len(c.Names) > 0 {
 		name = c.Names[0]
 	}
-	return models.ClabContainerInfo{
+	info := models.ClabContainerInfo{
 		Name:        name,
 		ContainerID: c.ShortID,
 		Image:       c.Image,
@@ -54,6 +54,21 @@ func ContainerToClabContainerInfo(c clabruntime.GenericContainer) models.ClabCon
 		MgmtNetwork: containerMgmtNetwork(c),
 		Ports:       containerPorts(c),
 	}
+	if workload := c.Workload; workload != nil {
+		info.Namespace = workload.Namespace
+		info.Pod = workload.Pod
+		info.Container = workload.Container
+		info.NodeUID = workload.NodeUID
+		info.LoadBalancerAddress = workload.LoadBalancerAddress
+		for _, port := range workload.ExposedPorts {
+			info.ExposedPorts = append(info.ExposedPorts, models.ClabExposedPort{
+				Port:       port.Port,
+				ExposePort: port.ExposePort,
+				Protocol:   port.Protocol,
+			})
+		}
+	}
+	return info
 }
 
 // containerMgmtNetwork returns the management network name the runtime reports,
@@ -99,6 +114,32 @@ func ContainersToClabInspectOutput(containers []clabruntime.GenericContainer) mo
 	}
 
 	return result
+}
+
+// ApplyOutcomeToResponse converts an apply outcome to the API response model.
+func ApplyOutcomeToResponse(outcome *ApplyOutcome) models.ApplyLabResponse {
+	if outcome == nil {
+		return ApplyResultToResponse(nil)
+	}
+	response := ApplyResultToResponse(outcome.ApplyResult)
+	if plan := outcome.RuntimePlan; plan != nil {
+		response.RuntimePlan = &models.LabRuntimePlan{
+			Namespace: plan.Namespace,
+			Changes:   make([]models.LabRuntimePlanChange, 0, len(plan.Changes)),
+		}
+		for _, change := range plan.Changes {
+			response.RuntimePlan.Changes = append(response.RuntimePlan.Changes, models.LabRuntimePlanChange{
+				Action:    string(change.Action),
+				Kind:      change.Kind,
+				Namespace: change.Namespace,
+				Name:      change.Name,
+			})
+		}
+		if response.LabName == "" {
+			response.LabName = plan.LabName
+		}
+	}
+	return response
 }
 
 // ApplyResultToResponse converts a containerlab apply result to the API response model.

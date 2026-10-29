@@ -35,12 +35,12 @@ func SetupRoutes(router *gin.Engine) {
 	apiV1.Use(AuthMiddleware()) // Apply JWT authentication middleware to all /api/v1 routes
 	{
 		// Health metrics endpoint (superuser only)
-		apiV1.GET("/health/metrics", SystemMetricsHandler)
+		apiV1.GET("/health/metrics", requireContainerRuntime("host health metrics"), SystemMetricsHandler)
 
 		// Events stream
 		apiV1.GET("/events", StreamEventsHandler)
 
-		images := apiV1.Group("/images")
+		images := apiV1.Group("/images", requireContainerRuntime("image management"))
 		{
 			images.GET("", ListRuntimeImagesHandler)
 			images.POST("/pull", PullRuntimeImageHandler)
@@ -113,8 +113,8 @@ func SetupRoutes(router *gin.Engine) {
 				labSpecific.POST("/restart", RestartLabNodesHandler) // POST /api/v1/labs/{labName}/restart
 
 				// Inspect lab interfaces
-				labSpecific.GET("/interfaces", InspectInterfacesHandler) // GET /api/v1/labs/{labName}/interfaces
-				labSpecific.GET("/links", ListLabLinksHandler)           // GET /api/v1/labs/{labName}/links
+				labSpecific.GET("/interfaces", requireContainerRuntime("interface inspection"), InspectInterfacesHandler) // GET /api/v1/labs/{labName}/interfaces
+				labSpecific.GET("/links", requireContainerRuntime("link inspection"), ListLabLinksHandler)                // GET /api/v1/labs/{labName}/links
 
 				// Stream CPU and memory usage of the lab's nodes
 				labSpecific.GET("/stats", StreamLabStatsHandler) // GET /api/v1/labs/{labName}/stats
@@ -123,20 +123,20 @@ func SetupRoutes(router *gin.Engine) {
 				labSpecific.POST("/save", SaveLabConfigHandler) // POST /api/v1/labs/{labName}/save
 
 				// Save VM snapshots of vrnetlab nodes
-				labSpecific.POST("/snapshots", SaveLabSnapshotsHandler) // POST /api/v1/labs/{labName}/snapshots
+				labSpecific.POST("/snapshots", requireContainerRuntime("VM snapshots"), SaveLabSnapshotsHandler) // POST /api/v1/labs/{labName}/snapshots
 
 				// Capture
-				labSpecific.POST("/capture/packetflix", BuildPacketflixCaptureHandler)                 // POST /api/v1/labs/{labName}/capture/packetflix
-				labSpecific.POST("/capture/wireshark-vnc-sessions", CreateWiresharkVncSessionsHandler) // POST /api/v1/labs/{labName}/capture/wireshark-vnc-sessions
+				labSpecific.POST("/capture/packetflix", requireContainerRuntime("Edgeshark packet capture"), BuildPacketflixCaptureHandler)                 // POST /api/v1/labs/{labName}/capture/packetflix
+				labSpecific.POST("/capture/wireshark-vnc-sessions", requireContainerRuntime("Edgeshark packet capture"), CreateWiresharkVncSessionsHandler) // POST /api/v1/labs/{labName}/capture/wireshark-vnc-sessions
 
 				// Sharing + tools
-				labSpecific.POST("/sshx/:action", LabSSHXShareHandler)   // POST /api/v1/labs/{labName}/sshx/{action}
-				labSpecific.POST("/gotty/:action", LabGoTTYShareHandler) // POST /api/v1/labs/{labName}/gotty/{action}
-				labSpecific.POST("/fcli", RunLabFcliHandler)             // POST /api/v1/labs/{labName}/fcli
+				labSpecific.POST("/sshx/:action", requireContainerRuntime("SSHX sharing"), LabSSHXShareHandler)    // POST /api/v1/labs/{labName}/sshx/{action}
+				labSpecific.POST("/gotty/:action", requireContainerRuntime("GoTTY sharing"), LabGoTTYShareHandler) // POST /api/v1/labs/{labName}/gotty/{action}
+				labSpecific.POST("/fcli", requireContainerRuntime("fcli"), RunLabFcliHandler)                      // POST /api/v1/labs/{labName}/fcli
 				labSpecific.POST("/graph/drawio", GenerateLabDrawioHandler)
 				labSpecific.POST("/graph/mermaid", GenerateLabMermaidHandler)
 				labSpecific.POST("/graph/dot", GenerateLabDotHandler)
-				labSpecific.GET("/tailscale", GetLabTailscaleStatusHandler) // GET /api/v1/labs/{labName}/tailscale
+				labSpecific.GET("/tailscale", requireContainerRuntime("Tailscale status"), GetLabTailscaleStatusHandler) // GET /api/v1/labs/{labName}/tailscale
 
 				// Execute command in lab
 				labSpecific.POST("/exec", ExecCommandHandler) // POST /api/v1/labs/{labName}/exec
@@ -170,14 +170,16 @@ func SetupRoutes(router *gin.Engine) {
 					nodeSpecific.GET("/logs", GetNodeLogsHandler) // GET /api/v1/labs/{labName}/nodes/{nodeName}/logs
 
 					// Lifecycle actions
-					nodeSpecific.POST("/start", StartNodeHandler)     // POST /api/v1/labs/{labName}/nodes/{nodeName}/start
-					nodeSpecific.POST("/stop", StopNodeHandler)       // POST /api/v1/labs/{labName}/nodes/{nodeName}/stop
-					nodeSpecific.POST("/restart", RestartNodeHandler) // POST /api/v1/labs/{labName}/nodes/{nodeName}/restart
-					nodeSpecific.POST("/pause", PauseNodeHandler)     // POST /api/v1/labs/{labName}/nodes/{nodeName}/pause
-					nodeSpecific.POST("/unpause", UnpauseNodeHandler) // POST /api/v1/labs/{labName}/nodes/{nodeName}/unpause
+					nodeSpecific.POST("/start", StartNodeHandler)                                               // POST /api/v1/labs/{labName}/nodes/{nodeName}/start
+					nodeSpecific.POST("/stop", StopNodeHandler)                                                 // POST /api/v1/labs/{labName}/nodes/{nodeName}/stop
+					nodeSpecific.POST("/restart", RestartNodeHandler)                                           // POST /api/v1/labs/{labName}/nodes/{nodeName}/restart
+					nodeSpecific.POST("/pause", requireContainerRuntime("pausing nodes"), PauseNodeHandler)     // POST /api/v1/labs/{labName}/nodes/{nodeName}/pause
+					nodeSpecific.POST("/unpause", requireContainerRuntime("pausing nodes"), UnpauseNodeHandler) // POST /api/v1/labs/{labName}/nodes/{nodeName}/unpause
 
 					// Browser helper
 					nodeSpecific.GET("/browser-ports", GetNodeBrowserPortsHandler)
+					// HTTP proxy to a node port (lab runtimes)
+					nodeSpecific.Any("/ports/:port/proxy/*proxyPath", ProxyNodePortHandler)
 				}
 			}
 		}
@@ -189,7 +191,7 @@ func SetupRoutes(router *gin.Engine) {
 			terminals.GET("/:sessionId/stream", StreamTerminalSessionHandler) // WS /api/v1/terminal-sessions/{sessionId}/stream
 		}
 
-		captureSessions := apiV1.Group("/capture/wireshark-vnc-sessions")
+		captureSessions := apiV1.Group("/capture/wireshark-vnc-sessions", requireContainerRuntime("Edgeshark packet capture"))
 		{
 			captureSessions.DELETE("", DeleteAllWiresharkVncSessionsHandler)
 			captureSessions.GET("/:sessionId/ready", GetWiresharkVncSessionReadyHandler)
@@ -213,7 +215,7 @@ func SetupRoutes(router *gin.Engine) {
 		// Tools Routes (Mostly Superuser)
 		tools := apiV1.Group("/tools")
 		{
-			edgeshark := tools.Group("/edgeshark")
+			edgeshark := tools.Group("/edgeshark", requireContainerRuntime("Edgeshark"))
 			{
 				edgeshark.GET("/status", GetEdgeSharkStatusHandler)
 				edgeshark.POST("/install", InstallEdgeSharkHandler)
@@ -221,7 +223,7 @@ func SetupRoutes(router *gin.Engine) {
 			}
 
 			// Disable TX Offload (Superuser Only)
-			tools.POST("/disable-tx-offload", DisableTxOffloadHandler) // POST /api/v1/tools/disable-tx-offload
+			tools.POST("/disable-tx-offload", requireContainerRuntime("disabling TX offload"), DisableTxOffloadHandler) // POST /api/v1/tools/disable-tx-offload
 
 			// Certificate Tools (Superuser Only)
 			certs := tools.Group("/certs")
@@ -231,17 +233,17 @@ func SetupRoutes(router *gin.Engine) {
 			} // End /certs group
 
 			// vEth Tools (Superuser Only)
-			tools.POST("/veth", CreateVethHandler) // POST /api/v1/tools/veth
+			tools.POST("/veth", requireContainerRuntime("veth tools"), CreateVethHandler) // POST /api/v1/tools/veth
 
 			// VxLAN Tools (Superuser Only)
-			vxlan := tools.Group("/vxlan")
+			vxlan := tools.Group("/vxlan", requireContainerRuntime("VxLAN tools"))
 			{
 				vxlan.POST("", CreateVxlanHandler)   // POST /api/v1/tools/vxlan
 				vxlan.DELETE("", DeleteVxlanHandler) // DELETE /api/v1/tools/vxlan
 			}
 
 			// Netem Tools (Lab Owners + Superusers)
-			netem := tools.Group("/netem")
+			netem := tools.Group("/netem", requireContainerRuntime("link impairment (netem)"))
 			{
 				netem.POST("/set", SetNetemHandler)     // POST /api/v1/tools/netem/set
 				netem.GET("/show", ShowNetemHandler)    // GET /api/v1/tools/netem/show

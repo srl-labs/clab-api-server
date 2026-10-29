@@ -9,14 +9,14 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
-	clabcore "github.com/srl-labs/containerlab/core"
 	clabevents "github.com/srl-labs/containerlab/core/events"
-	clabruntime "github.com/srl-labs/containerlab/runtime"
 
+	"github.com/srl-labs/clab-api-server/internal/clab"
 	"github.com/srl-labs/clab-api-server/internal/config"
 	"github.com/srl-labs/clab-api-server/internal/models"
 )
@@ -123,30 +123,14 @@ func StreamEventsHandler(c *gin.Context) {
 		cancel()
 	}()
 
-	streamReader, streamWriter := io.Pipe()
-	eventsOpts := clabevents.Options{
+	streamOpts := clabevents.Options{
 		Format:                "json",
 		Runtime:               runtime,
 		IncludeInitialState:   initialState,
 		IncludeInterfaceStats: interfaceStats,
 		StatsInterval:         statsInterval,
-		ClabOptions: []clabcore.ClabOption{
-			clabcore.WithTimeout(eventsRuntimeTimeout),
-			clabcore.WithRuntime(runtime, &clabruntime.RuntimeConfig{Timeout: eventsRuntimeTimeout}),
-		},
-		Writer: streamWriter,
 	}
-
-	streamErrCh := make(chan error, 1)
-	go func() {
-		err := clabevents.Stream(ctx, eventsOpts)
-		if err != nil {
-			_ = streamWriter.CloseWithError(err)
-		} else {
-			_ = streamWriter.Close()
-		}
-		streamErrCh <- err
-	}()
+	scanLines, streamErrCh := startEventStreams(ctx, GetClabService(), username, streamOpts)
 
 	// Ensure the client receives headers immediately, even if no events arrive yet.
 	c.Status(http.StatusOK)
@@ -189,25 +173,6 @@ func StreamEventsHandler(c *gin.Context) {
 		return allowed
 	}
 
-	scanner := bufio.NewScanner(streamReader)
-	scanner.Buffer(make([]byte, 0, 64*1024), eventsScannerMaxBytes)
-
-	scanLines := make(chan string)
-	scanErrCh := make(chan error, 1)
-	go func() {
-		defer close(scanLines)
-		defer func() {
-			scanErrCh <- scanner.Err()
-		}()
-		for scanner.Scan() {
-			select {
-			case scanLines <- scanner.Text():
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
 	writer := bufio.NewWriter(c.Writer)
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
@@ -229,9 +194,6 @@ func StreamEventsHandler(c *gin.Context) {
 				cancel()
 				if err := <-streamErrCh; err != nil && ctx.Err() == nil {
 					log.Warnf("StreamEvents user '%s': Events stream ended with error: %v", username, err)
-				}
-				if err := <-scanErrCh; err != nil && ctx.Err() == nil {
-					log.Errorf("StreamEvents user '%s': Scanner error: %v", username, err)
 				}
 				return
 			}
@@ -280,4 +242,130 @@ func parseBoolQuery(c *gin.Context, name string, defaultValue bool) (bool, error
 		return defaultValue, nil
 	}
 	return strconv.ParseBool(raw)
+}
+
+// eventsScopeRefresh is how often a lab runtime events stream looks for labs the user
+// gained or lost, and starts or stops their streams.
+var eventsScopeRefresh = 10 * time.Second
+
+// startEventStreams streams containerlab events as JSON lines. A container runtime has one
+// stream over every lab; a lab runtime has one stream per lab scope of the user (its
+// namespace, as the user), started and stopped as labs come and go. The error channel
+// gets one value once every stream ended.
+func startEventStreams(
+	ctx context.Context,
+	svc *clab.Service,
+	username string,
+	opts clabevents.Options,
+) (<-chan string, <-chan error) {
+	lines := make(chan string)
+	done := make(chan error, 1)
+
+	runStream := func(ctx context.Context, scope *clab.LabScope) error {
+		streamOpts := opts
+		streamOpts.ClabOptions = clab.EventClabOptions(scope, eventsRuntimeTimeout)
+		reader, writer := io.Pipe()
+		streamOpts.Writer = writer
+		errCh := make(chan error, 1)
+		go func() {
+			err := clabevents.Stream(ctx, streamOpts)
+			_ = writer.CloseWithError(err)
+			errCh <- err
+		}()
+		scanner := bufio.NewScanner(reader)
+		scanner.Buffer(make([]byte, 0, 64*1024), eventsScannerMaxBytes)
+		for scanner.Scan() {
+			select {
+			case lines <- scanner.Text():
+			case <-ctx.Done():
+				_ = reader.Close()
+				if err := <-errCh; err != nil {
+					log.Debugf("events stream ended after the client left: %v", err)
+				}
+				return nil
+			}
+		}
+		_ = reader.Close()
+		if err := <-errCh; err != nil {
+			return err
+		}
+		return scanner.Err()
+	}
+
+	if !clab.IsLabRuntime() || svc == nil {
+		go func() {
+			err := runStream(ctx, nil)
+			close(lines)
+			done <- err
+		}()
+		return lines, done
+	}
+
+	go func() {
+		var wg sync.WaitGroup
+		running := map[string]context.CancelFunc{}
+		// ended reports streams that stopped on their own, so a later refresh restarts them.
+		ended := make(chan string, 16)
+		refresh := func() {
+			scopes, err := svc.EventScopes(ctx, username)
+			if err != nil {
+				log.Warnf("StreamEvents user '%s': listing labs failed: %v", username, err)
+				return
+			}
+			wanted := map[string]bool{}
+			for _, scope := range scopes {
+				key := scope.Namespace + "/" + scope.LabName
+				wanted[key] = true
+				if _, ok := running[key]; ok {
+					continue
+				}
+				streamCtx, cancel := context.WithCancel(ctx)
+				running[key] = cancel
+				wg.Add(1)
+				go func(scope clab.LabScope, key string) {
+					defer wg.Done()
+					if err := runStream(streamCtx, &scope); err != nil && streamCtx.Err() == nil {
+						log.Warnf("StreamEvents user '%s': stream of %s ended: %v", username, key, err)
+					}
+					if streamCtx.Err() == nil {
+						select {
+						case ended <- key:
+						case <-ctx.Done():
+						}
+					}
+				}(scope, key)
+			}
+			for key, cancel := range running {
+				if !wanted[key] {
+					cancel()
+					delete(running, key)
+				}
+			}
+		}
+
+		refresh()
+		ticker := time.NewTicker(eventsScopeRefresh)
+		defer ticker.Stop()
+	loop:
+		for {
+			select {
+			case <-ctx.Done():
+				break loop
+			case <-ticker.C:
+				refresh()
+			case key := <-ended:
+				if cancel, ok := running[key]; ok {
+					cancel()
+					delete(running, key)
+				}
+			}
+		}
+		for _, cancel := range running {
+			cancel()
+		}
+		wg.Wait()
+		close(lines)
+		done <- nil
+	}()
+	return lines, done
 }

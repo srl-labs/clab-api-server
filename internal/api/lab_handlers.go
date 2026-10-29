@@ -71,6 +71,7 @@ func resolveURLDeploySource(
 // @Param ipv6Subnet query string false "Override the management network IPv6 subnet (like --ipv6-subnet)"
 // @Param restoreAll query string false "Restore nodes from <node>.tar snapshots in this directory (like --restore-all); relative to the topology directory or absolute, inside the workspace"
 // @Param restore query []string false "Restore one node from a snapshot file as node=path (like --restore); repeatable, overrides restoreAll" collectionFormat(multi)
+// @Param timeout query string false "containerlab timeout like --timeout, a Go duration such as 10m or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman"
 // @Success 200 {object} models.ClabInspectOutput "Deployed lab details"
 // @Failure 400 {object} models.ErrorResponse "Invalid input"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
@@ -80,8 +81,6 @@ func resolveURLDeploySource(
 // @Router /api/v1/labs [post]
 func DeployLabHandler(c *gin.Context) {
 	username := c.GetString("username")
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
-	defer cancel()
 
 	// --- Bind Request Body ---
 	var req models.DeployRequest
@@ -139,6 +138,12 @@ func DeployLabHandler(c *gin.Context) {
 	if !valid {
 		return
 	}
+	timeout, valid := parseLifecycleTimeoutQuery(c)
+	if !valid {
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), lifecycleRequestTimeout(timeout, 1))
+	defer cancel()
 
 	svc := GetClabService()
 	if svc == nil {
@@ -287,6 +292,7 @@ func DeployLabHandler(c *gin.Context) {
 		NodeFilter:     nodeFilterSlice,
 		SkipPostDeploy: skipPostDeploy,
 		SkipLabDirACLs: skipLabdirAcl,
+		Timeout:        timeout,
 	}
 	mgmt.applyTo(&deployOpts)
 	if !applyRestoreQuery(c, username, topoPathForClab, deployOpts.LabName, restore, &deployOpts) {
@@ -327,6 +333,7 @@ func DeployLabHandler(c *gin.Context) {
 // @Param ipv6Subnet query string false "Override the management network IPv6 subnet (like --ipv6-subnet)"
 // @Param restoreAll query string false "Restore nodes from <node>.tar snapshots in this directory (like --restore-all); relative to the topology directory or absolute, inside the workspace"
 // @Param restore query []string false "Restore one node from a snapshot file as node=path (like --restore); repeatable, overrides restoreAll" collectionFormat(multi)
+// @Param timeout query string false "containerlab timeout like --timeout, a Go duration such as 10m or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman"
 // @Success 200 {object} models.ClabInspectOutput "Deployed lab details"
 // @Failure 400 {object} models.ErrorResponse "Invalid input"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
@@ -336,8 +343,6 @@ func DeployLabHandler(c *gin.Context) {
 // @Router /api/v1/labs/archive [post]
 func DeployLabArchiveHandler(c *gin.Context) {
 	username := c.GetString("username")
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
-	defer cancel()
 
 	labName := c.Query("labName")
 	if labName == "" {
@@ -377,6 +382,12 @@ func DeployLabArchiveHandler(c *gin.Context) {
 	if !valid {
 		return
 	}
+	timeout, valid := parseLifecycleTimeoutQuery(c)
+	if !valid {
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), lifecycleRequestTimeout(timeout, 1))
+	defer cancel()
 
 	releaseLabOperation, ok := beginLabOperationOrConflict(c, labName, "deploy")
 	if !ok {
@@ -506,6 +517,7 @@ func DeployLabArchiveHandler(c *gin.Context) {
 		NodeFilter:     nodeFilterSlice,
 		SkipPostDeploy: skipPostDeploy,
 		SkipLabDirACLs: skipLabdirAcl,
+		Timeout:        timeout,
 	}
 	mgmt.applyTo(&deployOpts)
 	if !applyRestoreQuery(c, username, topoPathForClab, deployOpts.LabName, restore, &deployOpts) {
@@ -544,6 +556,7 @@ func DeployLabArchiveHandler(c *gin.Context) {
 // @Param varsPath query string false "Template variables file (like --vars) relative to the lab's topology file directory"
 // @Param stream query boolean false "Stream lifecycle output as NDJSON events"
 // @Param includeLogs query boolean false "Include captured lifecycle logs in the JSON response"
+// @Param timeout query string false "containerlab timeout like --timeout, a Go duration such as 10m or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman"
 // @Success 200 {object} models.GenericSuccessResponse "Lab destroyed successfully"
 // @Failure 400 {object} models.ErrorResponse "Invalid input"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
@@ -555,8 +568,6 @@ func DestroyLabHandler(c *gin.Context) {
 	labName := c.Param("labName")
 	streamLogs := c.Query("stream") == "true"
 	includeLogs := c.Query("includeLogs") == "true"
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
-	defer cancel()
 
 	if !isValidLabName(labName) {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid characters in lab name."})
@@ -570,6 +581,12 @@ func DestroyLabHandler(c *gin.Context) {
 	if !ok {
 		return
 	}
+	timeout, ok := parseLifecycleTimeoutQuery(c)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), lifecycleRequestTimeout(timeout, 1))
+	defer cancel()
 	keepMgmtNet := c.Query("keepMgmtNet") == "true"
 	nodeFilter := c.Query("nodeFilter")
 
@@ -620,6 +637,7 @@ func DestroyLabHandler(c *gin.Context) {
 		Username:        username,
 		Graceful:        graceful,
 		GracefulTimeout: gracefulTimeout,
+		Timeout:         timeout,
 		Cleanup:         cleanup, // Keep containerlab cleanup behavior for all topology locations.
 		KeepMgmtNet:     keepMgmtNet,
 		NodeFilter:      nodeFilterSlice,
@@ -630,9 +648,9 @@ func DestroyLabHandler(c *gin.Context) {
 
 	runDestroy := func() error {
 		if err := svc.Destroy(ctx, destroyOpts); err != nil {
-			return fmt.Errorf("Failed to destroy lab '%s': %s", labName, err.Error())
+			return fmt.Errorf("failed to destroy lab '%s': %w", labName, err)
 		}
-		if err := ensureLabDestroyed(ctx, svc, labName); err != nil {
+		if err := ensureLabDestroyed(ctx, svc, username, labName); err != nil {
 			return err
 		}
 		return nil
@@ -699,7 +717,7 @@ func DestroyLabHandler(c *gin.Context) {
 		lifecycleLogs = logs
 		if destroyErr != nil {
 			log.Errorf("DestroyLab failed for user '%s', lab '%s': %v", username, labName, destroyErr)
-			c.JSON(http.StatusInternalServerError, gin.H{
+			c.JSON(serviceErrorStatus(destroyErr, http.StatusInternalServerError), gin.H{
 				"error": destroyErr.Error(),
 				"logs":  lifecycleLogs,
 			})
@@ -708,7 +726,7 @@ func DestroyLabHandler(c *gin.Context) {
 	} else {
 		if destroyErr := runDestroy(); destroyErr != nil {
 			log.Errorf("DestroyLab failed for user '%s', lab '%s': %v", username, labName, destroyErr)
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: destroyErr.Error()})
+			c.JSON(serviceErrorStatus(destroyErr, http.StatusInternalServerError), models.ErrorResponse{Error: destroyErr.Error()})
 			return
 		}
 	}
@@ -751,6 +769,7 @@ func DestroyLabHandler(c *gin.Context) {
 // @Param network query string false "Override the management network name (like --network); not allowed with multiple management networks"
 // @Param ipv4Subnet query string false "Override the management network IPv4 subnet (like --ipv4-subnet)"
 // @Param ipv6Subnet query string false "Override the management network IPv6 subnet (like --ipv6-subnet)"
+// @Param timeout query string false "containerlab timeout like --timeout, a Go duration such as 10m or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman"
 // @Success 200 {object} models.ClabInspectOutput "Redeployed lab details"
 // @Failure 400 {object} models.ErrorResponse "Invalid input"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
@@ -771,6 +790,10 @@ func RedeployLabHandler(c *gin.Context) {
 	cleanup := c.Query("cleanup") == "true"
 	graceful := c.Query("graceful") == "true"
 	gracefulTimeout, ok := parseGracefulTimeoutQuery(c, graceful)
+	if !ok {
+		return
+	}
+	timeout, ok := parseLifecycleTimeoutQuery(c)
 	if !ok {
 		return
 	}
@@ -815,7 +838,8 @@ func RedeployLabHandler(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
+	// The destroy and the deploy each get containerlab's timeout.
+	ctx, cancel := context.WithTimeout(c.Request.Context(), lifecycleRequestTimeout(timeout, 2))
 	defer cancel()
 
 	// Get current owner
@@ -829,10 +853,12 @@ func RedeployLabHandler(c *gin.Context) {
 	}
 
 	destroyOpts := clab.DestroyOptions{
+		LabName:         labName,
 		TopoPath:        originalTopoPath,
 		Username:        username,
 		Graceful:        graceful,
 		GracefulTimeout: gracefulTimeout,
+		Timeout:         timeout,
 		Cleanup:         cleanup,
 		KeepMgmtNet:     keepMgmtNet,
 		MaxWorkers:      uint(maxWorkers),
@@ -848,6 +874,7 @@ func RedeployLabHandler(c *gin.Context) {
 		ExportTemplate: exportTemplate,
 		SkipPostDeploy: skipPostDeploy,
 		SkipLabDirACLs: skipLabdirAcl,
+		Timeout:        timeout,
 		VarsFiles:      varsFiles,
 	}
 	mgmt.applyTo(&deployOpts)
@@ -866,7 +893,7 @@ func RedeployLabHandler(c *gin.Context) {
 		}
 		// containerlab can report success with cleanup enabled although
 		// containers were left behind; never deploy over a half-destroyed lab.
-		if err := ensureLabDestroyed(ctx, svc, labName); err != nil {
+		if err := ensureLabDestroyed(ctx, svc, username, labName); err != nil {
 			return nil, err
 		}
 
@@ -997,7 +1024,7 @@ func InspectLabHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
 	defer cancel()
 
-	containers, err := svc.ListContainers(ctx, clab.ListOptions{LabName: labName})
+	containers, err := svc.ListContainers(ctx, clab.ListOptions{Username: username, LabName: labName})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to inspect lab '%s': %s", labName, err.Error())})
 		return
@@ -1061,7 +1088,7 @@ func InspectInterfacesHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
 	defer cancel()
 
-	containers, err := svc.ListContainers(ctx, clab.ListOptions{LabName: labName})
+	containers, err := svc.ListContainers(ctx, clab.ListOptions{Username: username, LabName: labName})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to list containers for lab '%s': %s", labName, err.Error())})
 		return
@@ -1142,7 +1169,7 @@ func ListLabLinksHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
 	defer cancel()
 
-	containers, err := svc.ListContainers(ctx, clab.ListOptions{LabName: labName})
+	containers, err := svc.ListContainers(ctx, clab.ListOptions{Username: username, LabName: labName})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to list containers for lab '%s': %s", labName, err.Error())})
 		return
@@ -1198,7 +1225,7 @@ func ListLabsHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
 	defer cancel()
 
-	containers, err := svc.ListContainers(ctx, clab.ListOptions{})
+	containers, err := svc.ListContainers(ctx, clab.ListOptions{Username: username})
 	if err != nil {
 		errMsg := strings.ToLower(err.Error())
 		if strings.Contains(errMsg, "no containers found") || strings.Contains(errMsg, "no containerlab labs found") {
@@ -1303,6 +1330,7 @@ func SaveLabConfigHandler(c *gin.Context) {
 	}
 
 	saveOpts := clab.SaveOptions{
+		LabName:    labName,
 		TopoPath:   originalTopoPath,
 		Username:   username,
 		NodeFilter: nodeFilterSlice,

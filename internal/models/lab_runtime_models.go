@@ -6,6 +6,9 @@ type NodeBrowserPort struct {
 	ContainerPort int    `json:"containerPort"`
 	Protocol      string `json:"protocol,omitempty"`
 	Description   string `json:"description,omitempty"`
+	// ProxyPath is set on a lab runtime (c9s), where nodes have no host ports: the
+	// server proxies HTTP to the node's port under this path, with the caller's token.
+	ProxyPath string `json:"proxyPath,omitempty" example:"/api/v1/labs/lab01/nodes/srl1/ports/80/proxy/"`
 }
 
 type NodeBrowserPortsResponse struct {

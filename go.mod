@@ -16,7 +16,7 @@ require (
 	github.com/msteinert/pam v1.2.0
 	github.com/shirou/gopsutil/v4 v4.26.9
 	github.com/spf13/viper v1.21.0
-	github.com/srl-labs/containerlab v0.82.0
+	github.com/srl-labs/containerlab v0.82.1-0.20261027142745-484cff130409
 	github.com/stretchr/testify v1.12.1
 	github.com/swaggo/files v1.0.1
 	github.com/swaggo/gin-swagger v1.6.1
@@ -29,6 +29,9 @@ require (
 	golang.org/x/sys v0.49.0
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1
+	k8s.io/api v0.36.5
+	k8s.io/apimachinery v0.36.5
+	k8s.io/client-go v0.36.5
 )
 
 require (
@@ -290,10 +293,7 @@ require (
 	gopkg.in/ini.v1 v1.67.3 // indirect
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
-	k8s.io/api v0.36.5 // indirect
 	k8s.io/apiextensions-apiserver v0.36.5 // indirect
-	k8s.io/apimachinery v0.36.5 // indirect
-	k8s.io/client-go v0.36.5 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20260721132016-d427ff9ee9ad // indirect
 	k8s.io/streaming v0.36.5 // indirect
