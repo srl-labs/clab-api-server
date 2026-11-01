@@ -35,6 +35,11 @@ definitions:
         items:
           type: string
         type: array
+      runtimePlan:
+        allOf:
+        - $ref: '#/definitions/models.LabRuntimePlan'
+        description: RuntimePlan is the remote resource plan of a dry run on a lab
+          runtime (c9s).
       startedNodes:
         items:
           type: string
@@ -257,9 +262,19 @@ definitions:
       absLabPath:
         description: Absolute path to topology file
         type: string
+      container:
+        description: Container is the node's primary device container in the Pod.
+        example: node-srl1-6b1f
+        type: string
       container_id:
         description: Docker container ID (short)
         type: string
+      exposed_ports:
+        description: ExposedPorts are the node ports published through the node's
+          Service.
+        items:
+          $ref: '#/definitions/models.ClabExposedPort'
+        type: array
       group:
         description: Group assigned in topology (Might not always be present)
         type: string
@@ -282,6 +297,11 @@ definitions:
       labPath:
         description: Path to the topology file used (relative)
         type: string
+      load_balancer_address:
+        description: LoadBalancerAddress is the address of the LoadBalancer Service
+          that exposes the node.
+        example: 203.0.113.10
+        type: string
       mgmt_network:
         description: |-
           MgmtNetwork is the management network the node is attached to; with
@@ -291,11 +311,22 @@ definitions:
       name:
         description: Name of the container node (e.g., "lab01-client1")
         type: string
+      namespace:
+        description: Namespace is the Kubernetes namespace of the lab.
+        example: c9s-alice-lab01
+        type: string
+      node_uid:
+        description: NodeUID is the UID of the clabernetes Node resource.
+        type: string
       nodeName:
         description: Topology node name from containerlab labels
         type: string
       owner:
         description: OS user from clab inspect output (Used for authorization)
+        type: string
+      pod:
+        description: Pod is the Pod that runs the node.
+        example: lab01-srl1-5c9d8f7b6-x2x7k
         type: string
       ports:
         description: Published ports, as in `clab inspect --format json`
@@ -324,6 +355,18 @@ definitions:
         type: string
       stdout:
         description: Standard output of the command
+        type: string
+    type: object
+  models.ClabExposedPort:
+    properties:
+      expose_port:
+        example: 22
+        type: integer
+      port:
+        example: 22
+        type: integer
+      protocol:
+        example: tcp
         type: string
     type: object
   models.ClabInspectOutput:
@@ -703,6 +746,24 @@ definitions:
         items:
           type: string
         type: array
+      namespaceMode:
+        description: |-
+          NamespaceMode is how c9s labs get namespaces: per-lab (one namespace per lab) or
+          fixed (one namespace for every lab). It is only set for c9s.
+        enum:
+        - per-lab
+        - fixed
+        example: per-lab
+        type: string
+      runtime:
+        description: 'Runtime is the lab runtime the server runs labs with: docker,
+          podman or c9s.'
+        enum:
+        - docker
+        - podman
+        - c9s
+        example: docker
+        type: string
       startTime:
         description: When the server started
         type: string
@@ -806,6 +867,30 @@ definitions:
           Link type: "veth" for veth pairs, "macvlan" for macvlan interfaces whose
           B endpoint is the parent interface.
         example: veth
+        type: string
+    type: object
+  models.LabRuntimePlan:
+    properties:
+      changes:
+        items:
+          $ref: '#/definitions/models.LabRuntimePlanChange'
+        type: array
+      namespace:
+        example: c9s-alice-lab01
+        type: string
+    type: object
+  models.LabRuntimePlanChange:
+    properties:
+      action:
+        example: recreate
+        type: string
+      kind:
+        example: Node
+        type: string
+      name:
+        example: srl1
+        type: string
+      namespace:
         type: string
     type: object
   models.LabStatsSample:
@@ -1045,6 +1130,12 @@ definitions:
       hostPort:
         type: integer
       protocol:
+        type: string
+      proxyPath:
+        description: |-
+          ProxyPath is set on a lab runtime (c9s), where nodes have no host ports: the
+          server proxies HTTP to the node's port under this path, with the caller's token.
+        example: /api/v1/labs/lab01/nodes/srl1/ports/80/proxy/
         type: string
     type: object
   models.NodeBrowserPortsResponse:
@@ -2260,6 +2351,11 @@ paths:
           type: string
         name: restore
         type: array
+      - description: containerlab timeout like --timeout, a Go duration such as 10m
+          or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman
+        in: query
+        name: timeout
+        type: string
       produces:
       - application/json
       responses:
@@ -2345,6 +2441,11 @@ paths:
         in: query
         name: includeLogs
         type: boolean
+      - description: containerlab timeout like --timeout, a Go duration such as 10m
+          or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman
+        in: query
+        name: timeout
+        type: string
       produces:
       - application/json
       responses:
@@ -2492,6 +2593,11 @@ paths:
         in: query
         name: ipv6Subnet
         type: string
+      - description: containerlab timeout like --timeout, a Go duration such as 10m
+          or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman
+        in: query
+        name: timeout
+        type: string
       produces:
       - application/json
       responses:
@@ -2566,6 +2672,11 @@ paths:
         in: query
         name: includeLogs
         type: boolean
+      - description: containerlab timeout like --timeout, a Go duration such as 10m
+          or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman
+        in: query
+        name: timeout
+        type: string
       produces:
       - application/json
       responses:
@@ -2792,6 +2903,11 @@ paths:
           type: string
         name: restore
         type: array
+      - description: containerlab timeout like --timeout, a Go duration such as 10m
+          or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman
+        in: query
+        name: timeout
+        type: string
       produces:
       - application/json
       responses:
@@ -3389,6 +3505,66 @@ paths:
       security:
       - BearerAuth: []
       summary: Pause node
+      tags:
+      - Labs - Nodes
+  /api/v1/labs/{labName}/nodes/{nodeName}/ports/{port}/proxy/{proxyPath}:
+    get:
+      description: |-
+        Proxies an HTTP request (including WebSocket upgrades) to a TCP port of a lab node, through a Kubernetes port-forward opened as the caller.
+
+        **Notes**
+        - Only available with a lab runtime (`runtime` `c9s` on `/health`); other runtimes answer 501 and publish host ports instead.
+        - `browser-ports` lists the ports with their `proxyPath`.
+        - The request is sent to the node without the `Authorization` header.
+      parameters:
+      - description: Lab name
+        in: path
+        name: labName
+        required: true
+        type: string
+      - description: Node name
+        in: path
+        name: nodeName
+        required: true
+        type: string
+      - description: Node TCP port
+        in: path
+        name: port
+        required: true
+        type: integer
+      - description: Path on the node
+        in: path
+        name: proxyPath
+        required: true
+        type: string
+      responses:
+        "200":
+          description: Response of the node
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "501":
+          description: Not supported by the runtime
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "502":
+          description: Node port not reachable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Proxy HTTP to a node port
       tags:
       - Labs - Nodes
   /api/v1/labs/{labName}/nodes/{nodeName}/restart:
@@ -4774,6 +4950,11 @@ paths:
           type: string
         name: restore
         type: array
+      - description: containerlab timeout like --timeout, a Go duration such as 10m
+          or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman
+        in: query
+        name: timeout
+        type: string
       produces:
       - application/json
       responses:
@@ -6364,7 +6545,9 @@ paths:
         Returns basic health status for the API server.
 
         **Notes**
-        - `features` lists optional API capabilities (for example `exec-filters` or `snapshot-save`) so clients can detect what this server supports.
+        - `features` lists optional API capabilities (for example `exec-filters` or `snapshot-save`) so clients can detect what this server supports. Features the configured runtime cannot serve are left out.
+        - `runtime` is the lab runtime the server runs labs with: `docker`, `podman` or `c9s` (Kubernetes through clabernetes).
+        - `namespaceMode` is set for `c9s`: `per-lab` when every lab gets its own namespace, `fixed` when all labs share one.
       produces:
       - application/json
       responses:
