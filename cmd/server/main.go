@@ -22,6 +22,7 @@ import (
 	"github.com/srl-labs/clab-api-server/internal/auth"
 	"github.com/srl-labs/clab-api-server/internal/clab"
 	"github.com/srl-labs/clab-api-server/internal/config"
+	"github.com/srl-labs/clab-api-server/internal/kube"
 	"github.com/srl-labs/clab-api-server/internal/templates"
 	"github.com/srl-labs/clab-api-server/internal/tlsconfig"
 )
@@ -117,6 +118,12 @@ func main() {
 	clabService := clab.NewService()
 	api.SetClabService(clabService)
 	log.Infof("Containerlab service initialized with runtime: %s", config.AppConfig.ClabRuntime)
+
+	if config.AppConfig.IsLabRuntime() {
+		if err := initLabRuntime(clabService); err != nil {
+			log.Fatalf("Refusing to start with CLAB_RUNTIME=%s: %v", config.AppConfig.ClabRuntime, err)
+		}
+	}
 
 	// --- Initialize SSH Manager ---
 	log.Info("Initializing SSH Session Manager...")
@@ -293,4 +300,38 @@ func main() {
 	}
 
 	log.Info("Server exiting gracefully.")
+}
+
+// labRuntimeStartupTimeout bounds the c9s startup checks.
+const labRuntimeStartupTimeout = time.Minute
+
+// initLabRuntime connects to the cluster of CLAB_RUNTIME=c9s, checks that the server may do
+// what it needs and that clabernetes is recent enough, and hands the cluster settings to
+// containerlab.
+func initLabRuntime(_ *clab.Service) error {
+	config.ExportLabRuntimeEnv(config.AppConfig)
+
+	restConfig, err := kube.RestConfig(kube.ConnectionSettings{
+		Kubeconfig: config.AppConfig.ClabKubeconfig,
+		Context:    config.AppConfig.ClabKubeContext,
+	})
+	if err != nil {
+		return err
+	}
+	clients, err := kube.NewClients(restConfig)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), labRuntimeStartupTimeout)
+	defer cancel()
+	if err := kube.CheckStartup(ctx, clients, kube.ServerIdentityPermissions(config.AppConfig.ClabKubeNamespace), kube.CheckLabRuntimeSupport); err != nil {
+		return err
+	}
+
+	metrics := kube.NewMetricsProbe(clients.Discovery, time.Minute)
+	api.SetNodeStatsAvailability(metrics.Available)
+	log.Infof("Kubernetes cluster %s ready for c9s labs (namespace mode %s, node stats %t)",
+		restConfig.Host, config.AppConfig.NamespaceMode(), metrics.Available())
+	return nil
 }

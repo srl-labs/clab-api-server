@@ -42,6 +42,14 @@ type Config struct {
 	SSHMaxPort                   int           `mapstructure:"SSH_MAX_PORT"`    // Maximum port for SSH proxy allocation
 	TerminalMaxSessionsPerUser   int           `mapstructure:"TERMINAL_MAX_SESSIONS_PER_USER"`
 	TerminalIdleTimeout          time.Duration `mapstructure:"TERMINAL_IDLE_TIMEOUT"`
+
+	// Kubernetes (clabernetes, CLAB_RUNTIME=c9s) settings.
+	ClabKubeconfig         string `mapstructure:"CLAB_KUBECONFIG"`            // kubeconfig file; empty uses KUBECONFIG, ~/.kube/config or the in-cluster ServiceAccount
+	ClabKubeContext        string `mapstructure:"CLAB_KUBE_CONTEXT"`          // kubeconfig context; empty uses the current context
+	ClabKubeNamespace      string `mapstructure:"CLAB_KUBE_NAMESPACE"`        // one namespace for every lab (fixed namespace mode); empty gives every lab its own namespace
+	ClabC9sExposeType      string `mapstructure:"CLAB_C9S_EXPOSE_TYPE"`       // Service type of lab nodes: None, ClusterIP, Headless or LoadBalancer
+	ClabC9sPersistence     bool   `mapstructure:"CLAB_C9S_PERSISTENCE"`       // keep node storage (saved configuration) across Pod replacement and destroy
+	ClabC9sImagePullSecret string `mapstructure:"CLAB_C9S_IMAGE_PULL_SECRET"` // image pull secret device Pods reference
 }
 
 var AppConfig Config
@@ -82,6 +90,12 @@ func LoadConfig(envFilePath string) error {
 	viper.SetDefault("SSH_MAX_PORT", 2322)  // Default max port for SSH proxy (allows 100 sessions)
 	viper.SetDefault("TERMINAL_MAX_SESSIONS_PER_USER", 128)
 	viper.SetDefault("TERMINAL_IDLE_TIMEOUT", "30m")
+	viper.SetDefault("CLAB_KUBECONFIG", "")
+	viper.SetDefault("CLAB_KUBE_CONTEXT", "")
+	viper.SetDefault("CLAB_KUBE_NAMESPACE", "")
+	viper.SetDefault("CLAB_C9S_EXPOSE_TYPE", "None")
+	viper.SetDefault("CLAB_C9S_PERSISTENCE", true)
+	viper.SetDefault("CLAB_C9S_IMAGE_PULL_SECRET", "")
 
 	err := viper.ReadInConfig()
 
@@ -159,6 +173,10 @@ func LoadConfig(envFilePath string) error {
 		if AppConfig.ClabRestoreStagingDir == string(filepath.Separator) {
 			return fmt.Errorf("CLAB_RESTORE_STAGING_DIR must not be the filesystem root")
 		}
+	}
+
+	if err := normalizeRuntimeConfig(&AppConfig); err != nil {
+		return err
 	}
 
 	// No need to convert - the value is already a time.Duration thanks to the type in the struct

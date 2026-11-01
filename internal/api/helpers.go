@@ -243,6 +243,7 @@ func getLabInfo(ctx context.Context, username string, labName string) (info *mod
 	// Internal helper containers carry the lab's owner label, so a lab that only
 	// has them left still exists for ownership checks and destroy.
 	containers, listErr := svc.ListContainers(ctx, clab.ListOptions{
+		Username:        username,
 		LabName:         labName,
 		IncludeInternal: true,
 	})
@@ -347,7 +348,7 @@ func verifyContainerOwnership(c *gin.Context, username, containerName string) (*
 	defer cancel()
 
 	// List all containers
-	containers, listErr := svc.ListContainers(ctx, clab.ListOptions{})
+	containers, listErr := svc.ListContainers(ctx, clab.ListOptions{Username: username})
 
 	if listErr != nil {
 		// Don't treat "no labs found" as an error here
@@ -779,8 +780,11 @@ func parseSubnetQuery(c *gin.Context, param string, ipv4 bool) (string, bool) {
 
 // deployErrorStatus maps a deploy failure to the HTTP status reported to the client.
 func deployErrorStatus(err error) int {
-	if errors.Is(err, clab.ErrMgmtOverrideUnsupported) {
+	switch {
+	case errors.Is(err, clab.ErrMgmtOverrideUnsupported), errors.Is(err, clab.ErrInvalidLabName):
 		return http.StatusBadRequest
+	case isUnsupportedByLabRuntime(err):
+		return http.StatusNotImplemented
 	}
 	return http.StatusInternalServerError
 }

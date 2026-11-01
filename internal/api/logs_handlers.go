@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +17,7 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
 
+	"github.com/srl-labs/clab-api-server/internal/clab"
 	"github.com/srl-labs/clab-api-server/internal/models"
 )
 
@@ -62,29 +62,27 @@ func GetNodeLogsHandler(c *gin.Context) {
 	}
 
 	// Process tail parameter
-	var tailLines string
+	var tail *int64
 	if tailQuery != "all" {
-		tail, err := strconv.Atoi(tailQuery)
-		if err != nil || tail < 0 {
+		lines, err := strconv.ParseInt(tailQuery, 10, 64)
+		if err != nil || lines < 0 {
 			log.Warnf("GetNodeLogs failed for user '%s': Invalid tail parameter '%s'", username, tailQuery)
 			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid 'tail' parameter. Use a positive number or 'all'."})
 			return
 		}
-		tailLines = tailQuery
+		tail = &lines
 	}
 
 	log.Debugf("GetNodeLogs user '%s': Fetching logs for lab '%s', container '%s'", username, labName, containerName)
 
 	// --- First verify that the lab exists and user has permission ---
-	_, err := verifyLabOwnership(c, username, labName)
-	if err != nil {
+	if _, err := verifyLabOwnership(c, username, labName); err != nil {
 		// verifyLabOwnership already sent response (404 or 403)
 		return
 	}
 
-	// --- Next, verify the container name follows the expected format for the lab ---
-	expectedPrefix := "clab-" + labName + "-"
-	if !strings.HasPrefix(containerName, expectedPrefix) {
+	// A container of another lab is a client error, not a missing node.
+	if hasDifferentDefaultContainerlabPrefix(labName, containerName) {
 		log.Warnf("GetNodeLogs failed for user '%s': Container '%s' does not belong to lab '%s'",
 			username, containerName, labName)
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{
@@ -93,67 +91,49 @@ func GetNodeLogsHandler(c *gin.Context) {
 		return
 	}
 
-	// --- Now verify container ownership and existence ---
-	containerInfo, err := verifyContainerOwnership(c, username, containerName)
+	svc := GetClabService()
+	if svc == nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Containerlab service not initialized"})
+		return
+	}
+
+	lookupCtx, lookupCancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
+	container, err := resolveLabNodeContainer(lookupCtx, svc, username, labName, containerName)
+	lookupCancel()
 	if err != nil {
-		// verifyContainerOwnership already sent response (404 or 500)
+		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("container '%s' not found", containerName)})
+		return
+	}
+	containerInfo := clab.ContainerToClabContainerInfo(*container)
+	if containerInfo.LabName != labName || !canAccessLab(username, &containerInfo) {
+		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: fmt.Sprintf("container '%s' not found or not owned by user", containerName)})
 		return
 	}
 
-	// Get container ID for direct Docker/Podman call to get logs
-	containerID := containerInfo.ContainerID
-	if containerID == "" {
-		log.Errorf("GetNodeLogs failed for user '%s': Container '%s' has no ID", username, containerName)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Container has no ID for logs retrieval."})
-		return
+	logsOpts := clab.NodeLogsOptions{
+		Username:   username,
+		LabName:    labName,
+		NodeName:   resolveTopologyNodeName(labName, container),
+		Tail:       tail,
+		Timestamps: true,
 	}
 
-	// --- Execute Docker/Podman command to get logs ---
-	// First, determine if running under Docker or Podman
-	containerRuntime, err := getContainerRuntime(c, username)
-	if err != nil {
-		log.Errorf("GetNodeLogs failed for user '%s': Could not determine container runtime: %v", username, err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Could not determine container runtime: %s", err.Error())})
-		return
-	}
-
-	// Build command to get logs based on runtime and parameters
-	args := []string{containerRuntime, "logs"}
-
-	if tailLines != "" && tailLines != "all" {
-		args = append(args, "--tail", tailLines)
-	}
-
-	// Add timestamps for better context
-	args = append(args, "--timestamps")
-
-	// Add container ID as the last argument
-	args = append(args, containerID)
-
-	log.Infof("GetNodeLogs user '%s': Executing %s logs for container '%s'", username, containerRuntime, containerName)
+	log.Infof("GetNodeLogs user '%s': Reading %s logs of container '%s'", username, clab.RuntimeKind(), containerName)
 
 	// Determine if we should stream logs or fetch once
 	if follow {
-		streamNodeLogs(c, username, containerName, append(args, "--follow"))
+		logsOpts.Follow = true
+		streamNodeLogs(c, svc, username, containerName, logsOpts)
 		return
 	}
 
 	// --- Fetch Logs Once ---
-	// The runtime CLI writes the container's stderr to its own stderr, so both
-	// go into the logs, in the order the CLI writes them. exec.Cmd writes to
-	// one shared writer from one goroutine at a time.
-	var output strings.Builder
-	logsCmd := exec.CommandContext(c.Request.Context(), args[0], args[1:]...)
-	logsCmd.Stdout = &output
-	logsCmd.Stderr = &output
-
-	if err := logsCmd.Run(); err != nil {
+	// stdout and stderr go into one text, in the order the runtime writes them.
+	output := &lockedBuffer{}
+	if err := svc.NodeLogs(c.Request.Context(), logsOpts, output, output); err != nil {
 		log.Errorf("GetNodeLogs failed for user '%s', container '%s': %v", username, containerName, err)
 		errMsg := fmt.Sprintf("Failed to get logs for container '%s': %s", containerName, err.Error())
-		if detail := strings.TrimSpace(output.String()); detail != "" {
-			errMsg += "\noutput: " + detail
-		}
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: errMsg})
+		c.JSON(serviceErrorStatus(err, http.StatusInternalServerError), models.ErrorResponse{Error: errMsg})
 		return
 	}
 
@@ -167,6 +147,24 @@ func GetNodeLogsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+// lockedBuffer collects output that two streams may write at the same time.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 const (
 	logsFollowTimeout      = 12 * time.Hour
 	logsScannerMaxLineSize = 1024 * 1024
@@ -177,34 +175,23 @@ type streamedLogLine struct {
 	line   string
 }
 
-// streamNodeLogs runs `<runtime> logs --follow` and streams stdout and stderr as NDJSON
-// lines, with heartbeats while the container is quiet.
-func streamNodeLogs(c *gin.Context, username, containerName string, args []string) {
+// streamNodeLogs follows a node's log through the runtime and streams stdout and stderr
+// as NDJSON lines, with heartbeats while the node is quiet.
+func streamNodeLogs(c *gin.Context, svc *clab.Service, username, containerName string, opts clab.NodeLogsOptions) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), logsFollowTimeout)
 	defer cancel()
 
-	// We can't use RunClabCommand here because we need to stream the output
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		log.Errorf("GetNodeLogs failed for user '%s': Could not create stdout pipe: %v", username, err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Could not create stdout pipe: %s", err.Error())})
-		return
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		log.Errorf("GetNodeLogs failed for user '%s': Could not create stderr pipe: %v", username, err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Could not create stderr pipe: %s", err.Error())})
-		return
-	}
-	if err := cmd.Start(); err != nil {
-		log.Errorf("GetNodeLogs failed for user '%s': Could not start command: %v", username, err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Could not start command: %s", err.Error())})
-		return
-	}
+	stdout, stdoutWriter := io.Pipe()
+	stderr, stderrWriter := io.Pipe()
+	followErr := make(chan error, 1)
+	go func() {
+		err := svc.NodeLogs(ctx, opts, stdoutWriter, stderrWriter)
+		_ = stdoutWriter.CloseWithError(io.EOF)
+		_ = stderrWriter.CloseWithError(io.EOF)
+		followErr <- err
+	}()
 
-	// The runtime CLI writes the container's stderr to its own stderr, so both
-	// pipes carry log lines.
+	// Both pipes carry log lines: the runtime writes the container's stderr to stderr.
 	lines := make(chan streamedLogLine)
 	var readers sync.WaitGroup
 	scan := func(stream string, pipe io.Reader) {
@@ -241,7 +228,11 @@ func streamNodeLogs(c *gin.Context, username, containerName string, args []strin
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
 		cancel()
-		_ = cmd.Wait()
+		_ = stdout.Close()
+		_ = stderr.Close()
+		if err := <-followErr; err != nil {
+			log.Debugf("GetNodeLogs follow ended for user '%s': %v", username, err)
+		}
 		return
 	}
 	flusher.Flush()
@@ -277,45 +268,15 @@ stream:
 		}
 	}
 
-	// Stop the command when the client left; drain so the readers finish.
+	// Stop following when the client left; drain so the readers finish.
 	cancel()
+	_ = stdout.Close()
+	_ = stderr.Close()
 	for range lines {
 	}
-	if err := cmd.Wait(); err != nil && ctx.Err() == nil {
-		log.Warnf("GetNodeLogs command ended for user '%s', container '%s': %v", username, containerName, err)
+	if err := <-followErr; err != nil && ctx.Err() == nil {
+		log.Warnf("GetNodeLogs follow ended for user '%s', container '%s': %v", username, containerName, err)
 	} else if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		log.Infof("Streaming logs ended for user '%s', container '%s' after %s", username, containerName, logsFollowTimeout)
 	}
-}
-
-// getContainerRuntime determines if the system is using Docker or Podman
-func getContainerRuntime(c *gin.Context, username string) (string, error) {
-	// Try Docker first
-	dockerOut, _, dockerErr := runCommand(c.Request.Context(), "docker", "version", "--format", "{{.Server.Version}}")
-	if dockerErr == nil && dockerOut != "" {
-		return "docker", nil
-	}
-
-	// If Docker failed, try Podman
-	podmanOut, _, podmanErr := runCommand(c.Request.Context(), "podman", "version", "--format", "{{.Version}}")
-	if podmanErr == nil && podmanOut != "" {
-		return "podman", nil
-	}
-
-	log.Errorf("Could not determine container runtime (docker/podman). Docker error: %v, Podman error: %v",
-		dockerErr, podmanErr)
-	return "", fmt.Errorf("no supported container runtime (docker/podman) found")
-}
-
-// runCommand executes a command and returns stdout, stderr, and error
-func runCommand(ctx context.Context, command string, args ...string) (string, string, error) {
-	cmd := exec.CommandContext(ctx, command, args...)
-
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-
-	return stdout.String(), stderr.String(), err
 }

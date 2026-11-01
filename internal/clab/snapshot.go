@@ -118,6 +118,9 @@ func selectSnapshotContainers(
 // vrnetlab completion log line is awaited and /snapshot-output.tar is copied to
 // <output>/<node>.tar. Nodes run concurrently.
 func (s *Service) SaveSnapshots(ctx context.Context, opts SnapshotSaveOptions) ([]SnapshotNodeResult, error) {
+	if err := RequireContainerRuntime("VM snapshots"); err != nil {
+		return nil, err
+	}
 	labName := strings.TrimSpace(opts.LabName)
 	if labName == "" {
 		return nil, fmt.Errorf("lab name is required")

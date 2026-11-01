@@ -7,13 +7,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	clablabruntime "github.com/srl-labs/containerlab/labruntime"
 
 	"github.com/srl-labs/clab-api-server/internal/clab"
 	"github.com/srl-labs/clab-api-server/internal/config"
@@ -119,7 +122,7 @@ func RequestTerminalSessionHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	container, err := resolveLabNodeContainer(ctx, svc, labName, requestedNodeName)
+	container, err := resolveLabNodeContainer(ctx, svc, username, labName, requestedNodeName)
 	if err != nil {
 		if hasDifferentDefaultContainerlabPrefix(labName, requestedNodeName) {
 			c.JSON(http.StatusBadRequest, models.ErrorResponse{
@@ -145,7 +148,7 @@ func RequestTerminalSessionHandler(c *gin.Context) {
 	}
 
 	shortNodeName := resolveTopologyNodeName(labName, container)
-	sessionInfo, err := terminalManager.CreateSession(termsvc.CreateSessionOptions{
+	sessionOpts := termsvc.CreateSessionOptions{
 		Username:      username,
 		LabName:       labName,
 		NodeName:      shortNodeName,
@@ -159,7 +162,11 @@ func RequestTerminalSessionHandler(c *gin.Context) {
 		SSHUsername:   req.SSHUsername,
 		TelnetPort:    req.TelnetPort,
 		Resumable:     req.Resumable,
-	})
+	}
+	if clab.IsLabRuntime() {
+		labRuntimeTerminalAccess(&sessionOpts, svc, username, labName, shortNodeName, &containerInfo)
+	}
+	sessionInfo, err := terminalManager.CreateSession(sessionOpts)
 	if err != nil {
 		writeTerminalManagerError(c, username, "create terminal session", err)
 		return
@@ -409,4 +416,50 @@ func writeTerminalManagerError(c *gin.Context, username, action string, err erro
 
 	log.Warnf("terminal action failed: user=%s action=%s error=%v", username, action, err)
 	c.JSON(status, models.ErrorResponse{Error: err.Error()})
+}
+
+// labRuntimeTerminalAccess connects a terminal on a lab runtime node through the runtime:
+// shell and telnet exec in the node's container, SSH goes over a port-forward to port 22,
+// or straight to the node's LoadBalancer address when the node exposes port 22 there.
+// Every stream acts as the user.
+func labRuntimeTerminalAccess(
+	opts *termsvc.CreateSessionOptions,
+	svc *clab.Service,
+	username, labName, nodeName string,
+	info *models.ClabContainerInfo,
+) {
+	opts.Attach = func(ctx context.Context, command []string, tty bool, streams clablabruntime.AttachStreams) error {
+		return svc.AttachNode(ctx, username, labName, nodeName, command, tty, streams)
+	}
+	if address, port, ok := loadBalancerSSHTarget(info); ok {
+		opts.SSHAddress = address
+		opts.Dial = func(ctx context.Context, _ int) (net.Conn, error) {
+			var dialer net.Dialer
+			return dialer.DialContext(ctx, "tcp", net.JoinHostPort(address, strconv.Itoa(port)))
+		}
+		return
+	}
+	opts.SSHAddress = nodeName
+	opts.Dial = func(ctx context.Context, port int) (net.Conn, error) {
+		return svc.DialNodePort(ctx, username, labName, nodeName, port)
+	}
+}
+
+// loadBalancerSSHTarget returns the LoadBalancer address and Service port that publish
+// a node's SSH port, if any.
+func loadBalancerSSHTarget(info *models.ClabContainerInfo) (string, int, bool) {
+	address := strings.TrimSpace(info.LoadBalancerAddress)
+	if address == "" {
+		return "", 0, false
+	}
+	for _, port := range info.ExposedPorts {
+		if port.Port == 22 && (port.Protocol == "" || strings.EqualFold(port.Protocol, "tcp")) {
+			servicePort := port.ExposePort
+			if servicePort <= 0 {
+				servicePort = port.Port
+			}
+			return address, servicePort, true
+		}
+	}
+	return "", 0, false
 }

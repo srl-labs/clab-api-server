@@ -52,6 +52,9 @@ type tailscaleServeConfig struct {
 // These containers are internal helpers, so their state (including the login
 // URL the proxy waits on) is not visible through the regular node endpoints.
 func (s *Service) TailscaleStatus(ctx context.Context, labName string) ([]models.TailscaleDevice, error) {
+	if err := RequireContainerRuntime("Tailscale status"); err != nil {
+		return nil, err
+	}
 	containers, err := s.ListContainers(ctx, ListOptions{LabName: labName, IncludeInternal: true})
 	if err != nil {
 		return nil, err

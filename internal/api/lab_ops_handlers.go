@@ -164,14 +164,14 @@ func parseLifecycleNodeFilter(c *gin.Context) ([]string, bool) {
 
 // verifyLifecycleNodesExist writes a 404 and returns false when a requested
 // node has no container in the lab, so a typo never acts on other nodes.
-func verifyLifecycleNodesExist(c *gin.Context, svc *clab.Service, labName string, nodes []string) bool {
+func verifyLifecycleNodesExist(c *gin.Context, svc *clab.Service, username, labName string, nodes []string) bool {
 	if len(nodes) == 0 {
 		return true
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
 	defer cancel()
 
-	missing, err := svc.MissingLabNodes(ctx, labName, nodes)
+	missing, err := svc.MissingLabNodes(ctx, username, labName, nodes)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: fmt.Sprintf("Failed to list nodes of lab '%s': %s", labName, err.Error())})
 		return false
@@ -196,7 +196,7 @@ func lifecycleErrorStatus(err error) int {
 	if errors.Is(err, clab.ErrIncorrectInput) {
 		return http.StatusBadRequest
 	}
-	return http.StatusInternalServerError
+	return serviceErrorStatus(err, http.StatusInternalServerError)
 }
 
 // inspectLabDetails responds with `containerlab inspect --details` output for one lab.

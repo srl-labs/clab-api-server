@@ -75,6 +75,23 @@ type ApplyLabResponse struct {
 	DeletedEndpoints  []string          `json:"deletedEndpoints"`
 	RestartedNodes    []string          `json:"restartedNodes"`
 	NodeChangeReasons map[string]string `json:"nodeChangeReasons"`
+	// RuntimePlan is the remote resource plan of a dry run on a lab runtime (c9s).
+	RuntimePlan *LabRuntimePlan `json:"runtimePlan,omitempty"`
+}
+
+// LabRuntimePlan lists the Kubernetes resources a deploy or apply on c9s would change.
+type LabRuntimePlan struct {
+	Namespace string                 `json:"namespace" example:"c9s-alice-lab01"`
+	Changes   []LabRuntimePlanChange `json:"changes"`
+}
+
+// LabRuntimePlanChange is one resource change of a lab runtime plan. Action is create,
+// update, delete or recreate (the node's Pod restarts).
+type LabRuntimePlanChange struct {
+	Action    string `json:"action" example:"recreate"`
+	Kind      string `json:"kind" example:"Node"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name" example:"srl1"`
 }
 
 // ValidateTopologyResponse reports whether containerlab accepts a topology file.
@@ -163,6 +180,28 @@ type ClabContainerInfo struct {
 	// several management networks (mgmt list in the topology) it tells them apart.
 	MgmtNetwork string            `json:"mgmt_network,omitempty" example:"clab"`
 	Ports       []ClabPortBinding `json:"ports,omitempty"` // Published ports, as in `clab inspect --format json`
+
+	// The fields below are set for nodes on a lab runtime (c9s), as in `clab inspect --format json`.
+
+	// Namespace is the Kubernetes namespace of the lab.
+	Namespace string `json:"namespace,omitempty" example:"c9s-alice-lab01"`
+	// Pod is the Pod that runs the node.
+	Pod string `json:"pod,omitempty" example:"lab01-srl1-5c9d8f7b6-x2x7k"`
+	// Container is the node's primary device container in the Pod.
+	Container string `json:"container,omitempty" example:"node-srl1-6b1f"`
+	// NodeUID is the UID of the clabernetes Node resource.
+	NodeUID string `json:"node_uid,omitempty"`
+	// ExposedPorts are the node ports published through the node's Service.
+	ExposedPorts []ClabExposedPort `json:"exposed_ports,omitempty"`
+	// LoadBalancerAddress is the address of the LoadBalancer Service that exposes the node.
+	LoadBalancerAddress string `json:"load_balancer_address,omitempty" example:"203.0.113.10"`
+}
+
+// ClabExposedPort is a node port a lab runtime publishes through a Service.
+type ClabExposedPort struct {
+	Port       int    `json:"port" example:"22"`
+	ExposePort int    `json:"expose_port" example:"22"`
+	Protocol   string `json:"protocol" example:"tcp"`
 }
 
 // ClabPortBinding is a port published by a node container.

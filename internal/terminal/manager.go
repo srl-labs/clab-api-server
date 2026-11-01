@@ -8,16 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
-	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/charmbracelet/log"
-	"github.com/creack/pty"
 	clabcore "github.com/srl-labs/containerlab/core"
 	clabnodes "github.com/srl-labs/containerlab/nodes"
 
@@ -103,6 +101,16 @@ type CreateSessionOptions struct {
 	// sessions end with their client, which is what clients that never attach
 	// again expect.
 	Resumable bool
+
+	// Attach, when set, runs shell and telnet sessions in the node's container
+	// through the lab runtime instead of a local "<runtime> exec" process.
+	Attach AttachFunc
+	// Dial, when set, connects SSH sessions to the node through the lab runtime
+	// (a port-forward) instead of the management IP.
+	Dial DialFunc
+	// SSHAddress is the node address to show and, without Dial, to connect to,
+	// such as a LoadBalancer address. Empty uses ContainerIP.
+	SSHAddress string
 }
 
 type Manager struct {
@@ -141,8 +149,7 @@ type Session struct {
 	attachment *Attachment
 	scrollback scrollback
 
-	cmd      *exec.Cmd
-	ptyFile  *os.File
+	backend  sessionBackend
 	pumpDone chan struct{}
 	doneCh   chan struct{}
 }
@@ -256,6 +263,16 @@ func (m *Manager) CreateSession(opts CreateSessionOptions) (*models.TerminalSess
 	if strings.TrimSpace(opts.ContainerID) == "" {
 		return nil, fmt.Errorf("container ID is required")
 	}
+	opts.Protocol = protocol
+
+	if opts.Attach != nil || opts.Dial != nil {
+		start, err := resolveLabRuntimeBackend(protocol, opts)
+		if err != nil {
+			return nil, err
+		}
+		return m.startBackendSession(opts, start)
+	}
+
 	if protocol == models.TerminalProtocolSSH && strings.TrimSpace(opts.ContainerIP) == "" {
 		return nil, fmt.Errorf("container management IP is required for SSH")
 	}
@@ -264,12 +281,68 @@ func (m *Manager) CreateSession(opts CreateSessionOptions) (*models.TerminalSess
 	if err != nil {
 		return nil, err
 	}
-	opts.Protocol = protocol
 	return m.startSession(opts, command)
 }
 
-// startSession runs command in a new terminal for the validated options.
+// resolveLabRuntimeBackend picks the backend of a session on a lab runtime node: an exec
+// in the node's container for shell and telnet, Go's SSH client for ssh.
+func resolveLabRuntimeBackend(protocol models.TerminalProtocol, opts CreateSessionOptions) (backendStarter, error) {
+	switch protocol {
+	case models.TerminalProtocolShell:
+		if opts.Attach == nil {
+			return nil, fmt.Errorf("shell sessions need a lab runtime attach")
+		}
+		return startAttachBackend(opts.Attach, resolveShellCommand(opts.ContainerKind)), nil
+	case models.TerminalProtocolTelnet:
+		if opts.Attach == nil {
+			return nil, fmt.Errorf("telnet sessions need a lab runtime attach")
+		}
+		return startAttachBackend(opts.Attach, telnetCommand(opts.TelnetPort)), nil
+	case models.TerminalProtocolSSH:
+		username := resolveSSHUsername(opts.ContainerKind, opts.SSHUsername)
+		address := strings.TrimSpace(opts.SSHAddress)
+		if address == "" {
+			address = stripCIDRSuffix(opts.ContainerIP)
+		}
+		if opts.Dial != nil {
+			dial := opts.Dial
+			if address == "" {
+				address = opts.NodeName
+			}
+			return startSSHBackend(func(ctx context.Context) (net.Conn, error) {
+				return dial(ctx, sshPort)
+			}, address, username), nil
+		}
+		if address == "" {
+			return nil, fmt.Errorf("container management IP is required for SSH")
+		}
+		target := net.JoinHostPort(address, fmt.Sprint(sshPort))
+		return startSSHBackend(func(ctx context.Context) (net.Conn, error) {
+			var dialer net.Dialer
+			return dialer.DialContext(ctx, "tcp", target)
+		}, address, username), nil
+	default:
+		return nil, fmt.Errorf("unsupported terminal protocol %q", protocol)
+	}
+}
+
+// sshPort is the port SSH sessions connect to on a node.
+const sshPort = 22
+
+func telnetCommand(port int) []string {
+	if port <= 0 || port > 65535 {
+		port = DefaultTelnetPort
+	}
+	return []string{"telnet", "127.0.0.1", fmt.Sprintf("%d", port)}
+}
+
+// startSession runs command on a PTY in a new terminal for the validated options.
 func (m *Manager) startSession(opts CreateSessionOptions, command []string) (*models.TerminalSessionInfo, error) {
+	return m.startBackendSession(opts, startPTYBackend(command))
+}
+
+// startBackendSession starts a backend in a new terminal for the validated options.
+func (m *Manager) startBackendSession(opts CreateSessionOptions, start backendStarter) (*models.TerminalSessionInfo, error) {
 	cols, rows := sanitizeTerminalSize(opts.Cols, opts.Rows)
 	username := strings.TrimSpace(opts.Username)
 	if err := m.reserveUserSessionCapacity(username); err != nil {
@@ -295,28 +368,19 @@ func (m *Manager) startSession(opts CreateSessionOptions, command []string) (*mo
 		doneCh:       make(chan struct{}),
 	}
 
-	cmd := exec.CommandContext(context.Background(), command[0], command[1:]...)
-	cmd.Env = minimalCommandEnv()
-	cmd.Dir = "/"
-
-	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{
-		Cols: uint16(cols),
-		Rows: uint16(rows),
-	})
+	backend, err := start(cols, rows)
 	if err != nil {
 		m.releaseUserSessionCapacity(username)
 		return nil, fmt.Errorf("failed to start terminal session: %w", err)
 	}
-
-	session.cmd = cmd
-	session.ptyFile = ptmx
+	session.backend = backend
 
 	m.mu.Lock()
 	m.releaseUserSessionCapacityLocked(session.username)
 	m.sessions[session.id] = session
 	m.mu.Unlock()
 
-	go session.pump(ptmx)
+	go session.pump(backend)
 	go session.waitForProcess()
 
 	log.Infof(
@@ -522,7 +586,7 @@ func (s *Session) endAttachmentLocked(attachment *Attachment, reason string) boo
 
 // pump reads the terminal for the whole session, also while no client is
 // attached, so the process never blocks on a full terminal.
-func (s *Session) pump(file *os.File) {
+func (s *Session) pump(file io.Reader) {
 	defer close(s.pumpDone)
 	buffer := make([]byte, 32*1024)
 	for {
@@ -553,30 +617,33 @@ func (s *Session) pump(file *os.File) {
 }
 
 func (s *Session) WriteInput(input string) error {
-	s.mu.RLock()
-	file := s.ptyFile
-	s.mu.RUnlock()
-	if file == nil {
+	backend := s.liveBackend()
+	if backend == nil {
 		return io.EOF
 	}
 	s.markActivity()
-	_, err := file.WriteString(input)
+	_, err := backend.Write([]byte(input))
 	return err
 }
 
 func (s *Session) Resize(cols, rows int) error {
-	s.mu.RLock()
-	file := s.ptyFile
-	s.mu.RUnlock()
-	if file == nil {
+	backend := s.liveBackend()
+	if backend == nil {
 		return io.EOF
 	}
 	s.markActivity()
 	sanitizedCols, sanitizedRows := sanitizeTerminalSize(cols, rows)
-	return pty.Setsize(file, &pty.Winsize{
-		Cols: uint16(sanitizedCols),
-		Rows: uint16(sanitizedRows),
-	})
+	return backend.Resize(sanitizedCols, sanitizedRows)
+}
+
+// liveBackend returns the backend while it runs, nil once the session closed.
+func (s *Session) liveBackend() sessionBackend {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.state == "closed" {
+		return nil
+	}
+	return s.backend
 }
 
 func (s *Session) markActivity() {
@@ -608,18 +675,7 @@ func (s *Session) Snapshot() models.TerminalSessionInfo {
 func (s *Session) waitForProcess() {
 	defer close(s.doneCh)
 
-	err := s.cmd.Wait()
-	exitCode := 0
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			exitCode = exitErr.ExitCode()
-		} else {
-			exitCode = -1
-		}
-	} else if s.cmd.ProcessState != nil {
-		exitCode = s.cmd.ProcessState.ExitCode()
-	}
+	exitCode, err := s.backend.Wait()
 
 	// Let the pump read the last output. A child that still holds the terminal
 	// keeps it open, so stop waiting after a moment.
@@ -638,12 +694,11 @@ func (s *Session) waitForProcess() {
 	s.state = "closed"
 	s.lastActivity = time.Now().UTC()
 	s.endAttachmentLocked(s.attachment, DetachReasonExited)
-	file := s.ptyFile
-	s.ptyFile = nil
+	backend := s.backend
 	s.mu.Unlock()
 
-	if file != nil {
-		_ = file.Close()
+	if backend != nil {
+		_ = backend.Close()
 	}
 
 	log.Infof(
@@ -676,18 +731,11 @@ func (s *Session) Terminate(reason string) {
 	s.state = "closing"
 	s.lastError = reason
 	s.lastActivity = time.Now().UTC()
-	file := s.ptyFile
-	proc := s.cmd.Process
+	backend := s.backend
 	s.mu.Unlock()
 
-	if file != nil {
-		_ = file.Close()
-	}
-	if proc != nil {
-		_ = proc.Signal(syscall.SIGHUP)
-		time.AfterFunc(750*time.Millisecond, func() {
-			_ = proc.Kill()
-		})
+	if backend != nil {
+		backend.Hangup()
 	}
 }
 
@@ -736,19 +784,7 @@ func resolveLaunchCommand(protocol models.TerminalProtocol, opts CreateSessionOp
 		command := resolveShellCommand(opts.ContainerKind)
 		return append([]string{resolveRuntime(opts.Runtime), "exec", "-it", opts.ContainerID}, command...), nil
 	case models.TerminalProtocolTelnet:
-		port := opts.TelnetPort
-		if port <= 0 || port > 65535 {
-			port = DefaultTelnetPort
-		}
-		return []string{
-			resolveRuntime(opts.Runtime),
-			"exec",
-			"-it",
-			opts.ContainerID,
-			"telnet",
-			"127.0.0.1",
-			fmt.Sprintf("%d", port),
-		}, nil
+		return append([]string{resolveRuntime(opts.Runtime), "exec", "-it", opts.ContainerID}, telnetCommand(opts.TelnetPort)...), nil
 	default:
 		return nil, fmt.Errorf("unsupported terminal protocol %q", protocol)
 	}

@@ -201,7 +201,7 @@ func listCaptureLabContainers(
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	containers, err := svc.ListContainers(ctx, clab.ListOptions{LabName: labName})
+	containers, err := svc.ListContainers(ctx, clab.ListOptions{Username: c.GetString("username"), LabName: labName})
 	if err != nil {
 		errMsg := strings.ToLower(err.Error())
 		if strings.Contains(errMsg, "no containerlab labs found") || strings.Contains(errMsg, "no containers found") {

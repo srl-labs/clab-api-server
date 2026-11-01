@@ -143,7 +143,7 @@ func handleNodeLifecycle(c *gin.Context, action clab.NodeLifecycleAction) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	containerInfo, err := resolveLabNodeContainer(ctx, svc, labName, nodeName)
+	containerInfo, err := resolveLabNodeContainer(ctx, svc, username, labName, nodeName)
 	if err != nil {
 		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
 		return
@@ -275,7 +275,7 @@ func handleLabNodeLifecycle(c *gin.Context, action clab.NodeLifecycleAction) {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Containerlab service not initialized"})
 		return
 	}
-	if !verifyLifecycleNodesExist(c, svc, labName, nodeNames) {
+	if !verifyLifecycleNodesExist(c, svc, username, labName, nodeNames) {
 		return
 	}
 
@@ -367,13 +367,17 @@ func GetNodeBrowserPortsHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	containerInfo, err := resolveLabNodeContainer(ctx, svc, labName, nodeName)
+	containerInfo, err := resolveLabNodeContainer(ctx, svc, username, labName, nodeName)
 	if err != nil {
 		c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
 		return
 	}
 
 	ports := make([]models.NodeBrowserPort, 0)
+	if clab.IsLabRuntime() {
+		info := clab.ContainerToClabContainerInfo(*containerInfo)
+		ports = labRuntimeBrowserPorts(labName, resolveTopologyNodeName(labName, containerInfo), &info)
+	}
 	seen := map[string]struct{}{}
 	for _, port := range containerInfo.Ports {
 		if port.HostPort <= 0 {
@@ -393,7 +397,7 @@ func GetNodeBrowserPortsHandler(c *gin.Context) {
 		})
 	}
 
-	sort.Slice(ports, func(i, j int) bool {
+	sort.SliceStable(ports, func(i, j int) bool {
 		if ports[i].HostPort != ports[j].HostPort {
 			return ports[i].HostPort < ports[j].HostPort
 		}
@@ -857,7 +861,7 @@ func resolveTopologyNodeName(labName string, containerInfo *clabruntime.GenericC
 func resolveLabNodeContainer(
 	ctx context.Context,
 	svc *clab.Service,
-	labName, nodeName string,
+	username, labName, nodeName string,
 ) (*clabruntime.GenericContainer, error) {
 	target := strings.TrimSpace(nodeName)
 	if target == "" {
@@ -866,6 +870,7 @@ func resolveLabNodeContainer(
 
 	// Try explicit node name resolution first.
 	if containers, err := svc.ListContainers(ctx, clab.ListOptions{
+		Username: username,
 		LabName:  labName,
 		NodeName: target,
 	}); err == nil && len(containers) > 0 {
@@ -874,13 +879,14 @@ func resolveLabNodeContainer(
 
 	// Then try direct container-name match.
 	if containers, err := svc.ListContainers(ctx, clab.ListOptions{
+		Username:      username,
 		LabName:       labName,
 		ContainerName: target,
 	}); err == nil && len(containers) > 0 {
 		return &containers[0], nil
 	}
 
-	containers, err := svc.ListContainers(ctx, clab.ListOptions{LabName: labName})
+	containers, err := svc.ListContainers(ctx, clab.ListOptions{Username: username, LabName: labName})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list lab containers: %w", err)
 	}

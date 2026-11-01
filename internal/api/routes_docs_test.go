@@ -91,5 +91,9 @@ func isNonAPIDocumentationRoute(method, path string) bool {
 }
 
 func isProxyImplementationDetail(method, path string) bool {
-	return method != "get" && path == "/api/v1/capture/wireshark-vnc-sessions/{sessionId}/vnc/{proxyPath}"
+	if method == "get" {
+		return false
+	}
+	return path == "/api/v1/capture/wireshark-vnc-sessions/{sessionId}/vnc/{proxyPath}" ||
+		path == "/api/v1/labs/{labName}/nodes/{nodeName}/ports/{port}/proxy/{proxyPath}"
 }

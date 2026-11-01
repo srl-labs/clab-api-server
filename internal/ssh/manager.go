@@ -81,9 +81,25 @@ func NewSSHManager(basePort, maxPort int, cleanupTick, defaultDuration time.Dura
 	return m
 }
 
-// CreateSession creates a new SSH proxy session for the specified lab node
+// DialFunc opens a connection to the node's SSH port for one proxied client.
+type DialFunc func(ctx context.Context) (net.Conn, error)
+
+// CreateSession creates a new SSH proxy session for the specified lab node, proxying to
+// its management IP.
 func (m *SSHManager) CreateSession(apiUsername, labName, nodeName, sshUsername string,
 	containerIP string, containerPort int, duration time.Duration) (*SSHSession, error) {
+	remoteAddr := net.JoinHostPort(containerIP, fmt.Sprint(containerPort))
+	return m.CreateSessionWithDialer(apiUsername, labName, nodeName, sshUsername,
+		func(ctx context.Context) (net.Conn, error) {
+			var dialer net.Dialer
+			return dialer.DialContext(ctx, "tcp", remoteAddr)
+		}, duration)
+}
+
+// CreateSessionWithDialer creates a new SSH proxy session whose connections come from
+// dial, such as a port-forward to a node on a lab runtime.
+func (m *SSHManager) CreateSessionWithDialer(apiUsername, labName, nodeName, sshUsername string,
+	dial DialFunc, duration time.Duration) (*SSHSession, error) {
 
 	if duration > MaxSSHSessionDuration {
 		duration = MaxSSHSessionDuration
@@ -111,10 +127,10 @@ func (m *SSHManager) CreateSession(apiUsername, labName, nodeName, sshUsername s
 	}
 
 	// Start proxy
-	err = m.startProxy(session, containerIP, containerPort)
+	err = m.startProxy(session, dial)
 	if err != nil {
 		// Free the port if proxy fails to start
-		m.sessions[port] = nil
+		delete(m.sessions, port)
 		return nil, fmt.Errorf("failed to start SSH proxy: %w", err)
 	}
 
@@ -250,54 +266,47 @@ func (m *SSHManager) allocatePort() (int, error) {
 	return 0, fmt.Errorf("no available ports in range %d-%d", m.basePort, m.maxPort)
 }
 
-// startProxy starts a proxy process for the given session
-func (m *SSHManager) startProxy(session *SSHSession, containerIP string, containerPort int) error {
-	// We'll use a TCP proxy in Go instead of relying on external tools like socat
+// startProxy listens on the session's port and proxies every accepted connection to a
+// connection from dial, until the session is canceled or expires.
+func (m *SSHManager) startProxy(session *SSHSession, dial DialFunc) error {
+	localAddr := fmt.Sprintf("0.0.0.0:%d", session.Port)
+	listener, err := net.Listen("tcp", localAddr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on proxy port %d: %w", session.Port, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	session.cmdCancel = cancel
+
+	log.Debug("Starting TCP proxy", "localAddr", localAddr, "session", session.Port)
+
+	// Run the proxy until canceled or expired
 	go func() {
-		localAddr := fmt.Sprintf("0.0.0.0:%d", session.Port)
-		remoteAddr := fmt.Sprintf("%s:%d", containerIP, containerPort)
-
-		log.Debug("Starting TCP proxy",
-			"localAddr", localAddr,
-			"remoteAddr", remoteAddr,
-			"session", session.Port)
-
-		listener, err := net.Listen("tcp", localAddr)
-		if err != nil {
-			log.Error("Failed to listen on proxy port",
-				"port", session.Port,
-				"error", err)
-			return
+		timer := time.NewTimer(time.Until(session.Expiration))
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			_ = listener.Close()
+		case <-timer.C:
+			// Session expired
+			_ = listener.Close()
+			_ = m.TerminateSession(session.Port)
 		}
-		defer listener.Close()
+	}()
 
-		// Create a context with cancel function for termination
-		ctx, cancel := context.WithCancel(context.Background())
-		session.cmdCancel = cancel
-
-		// Run the proxy until canceled or expired
-		go func() {
-			select {
-			case <-ctx.Done():
-				listener.Close()
-			case <-time.After(session.Expiration.Sub(time.Now())):
-				// Session expired
-				listener.Close()
-				m.TerminateSession(session.Port)
-			}
-		}()
-
+	go func() {
+		defer func() { _ = listener.Close() }()
 		for {
 			client, err := listener.Accept()
 			if err != nil {
 				// Check if this is due to listener being closed
-				if ne, ok := err.(net.Error); ok && ne.Temporary() {
+				if ne, ok := err.(net.Error); ok && ne.Timeout() {
 					continue
 				}
 				return
 			}
 
-			go handleConnection(client, remoteAddr)
+			go handleConnection(ctx, client, dial)
 		}
 	}()
 
@@ -305,14 +314,12 @@ func (m *SSHManager) startProxy(session *SSHSession, containerIP string, contain
 }
 
 // handleConnection manages a single proxied connection
-func handleConnection(client net.Conn, remoteAddr string) {
+func handleConnection(ctx context.Context, client net.Conn, dial DialFunc) {
 	defer client.Close()
 
-	remote, err := net.Dial("tcp", remoteAddr)
+	remote, err := dial(ctx)
 	if err != nil {
-		log.Error("Failed to connect to remote address",
-			"remoteAddr", remoteAddr,
-			"error", err)
+		log.Error("Failed to connect to the node for SSH proxy", "error", err)
 		return
 	}
 	defer remote.Close()
@@ -332,8 +339,14 @@ func handleConnection(client net.Conn, remoteAddr string) {
 		errCh <- err
 	}()
 
-	// Wait for either direction to finish
-	<-errCh
+	// Wait for either direction to finish, or the session to end
+	select {
+	case err := <-errCh:
+		if err != nil {
+			log.Debug("SSH proxy connection ended", "error", err)
+		}
+	case <-ctx.Done():
+	}
 }
 
 // cleanupRoutine periodically removes expired sessions

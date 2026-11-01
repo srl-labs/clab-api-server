@@ -12,6 +12,11 @@ type HealthResponse struct {
 	// Features lists optional API features this server supports, so clients can
 	// hide what older servers do not provide.
 	Features []string `json:"features" example:"validate,exec-filters"`
+	// Runtime is the lab runtime the server runs labs with: docker, podman or c9s.
+	Runtime string `json:"runtime" example:"docker" enums:"docker,podman,c9s"`
+	// NamespaceMode is how c9s labs get namespaces: per-lab (one namespace per lab) or
+	// fixed (one namespace for every lab). It is only set for c9s.
+	NamespaceMode string `json:"namespaceMode,omitempty" example:"per-lab" enums:"per-lab,fixed"`
 }
 
 // MetricsResponse represents detailed system metrics with server info

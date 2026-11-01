@@ -15,8 +15,6 @@ import (
 	clabexec "github.com/srl-labs/containerlab/exec"
 	clabruntime "github.com/srl-labs/containerlab/runtime"
 	clabtypes "github.com/srl-labs/containerlab/types"
-
-	"github.com/srl-labs/clab-api-server/internal/config"
 )
 
 // ErrNoMatchingContainers is returned when exec filters match no container of the lab.
@@ -120,10 +118,13 @@ func (s *Service) ExecFiltered(ctx context.Context, opts ExecFilterOptions) (*cl
 		execCmds = append(execCmds, execCmd)
 	}
 
-	clab, err := newContainerLab(
+	if IsLabRuntime() {
+		return s.execFilteredWithLabRuntime(ctx, opts, execCmds)
+	}
+
+	clab, err := newContainerLab(append([]clabcore.ClabOption{
 		clabcore.WithTimeout(defaultTimeout),
-		clabcore.WithRuntime(config.AppConfig.ClabRuntime, &clabruntime.RuntimeConfig{Timeout: defaultTimeout}),
-	)
+	}, runtimeOptions(nil, defaultTimeout)...)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create containerlab instance: %w", err)
 	}
@@ -169,8 +170,8 @@ func (s *Service) ExecFiltered(ctx context.Context, opts ExecFilterOptions) (*cl
 
 // MissingLabNodes returns the requested topology node names that have no
 // container in the lab, in request order.
-func (s *Service) MissingLabNodes(ctx context.Context, labName string, nodeNames []string) ([]string, error) {
-	containers, err := s.ListContainers(ctx, ListOptions{LabName: labName})
+func (s *Service) MissingLabNodes(ctx context.Context, username, labName string, nodeNames []string) ([]string, error) {
+	containers, err := s.ListContainers(ctx, ListOptions{Username: username, LabName: labName})
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +208,7 @@ func (s *Service) InspectLabDetails(
 	if labName == "" {
 		return nil, fmt.Errorf("lab name is required")
 	}
-	containers, err := s.ListContainers(ctx, ListOptions{LabName: labName})
+	containers, err := s.ListContainers(ctx, ListOptions{Username: opts.Username, LabName: labName})
 	if err != nil {
 		return nil, err
 	}

@@ -51,6 +51,9 @@ type linkKey struct {
 // namespaces. Each veth pair is reported once; peers in the host namespace or
 // in namespaces outside the lab are reported as such.
 func (s *Service) ListLabLinks(ctx context.Context, containers []clabruntime.GenericContainer) (models.LabLinks, error) {
+	if err := RequireContainerRuntime("link inspection"); err != nil {
+		return nil, err
+	}
 	if hostNetNSErr != nil {
 		return nil, fmt.Errorf("failed to open host network namespace: %w", hostNetNSErr)
 	}

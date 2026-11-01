@@ -439,6 +439,7 @@ func ImportTopologyFromURLHandler(c *gin.Context) {
 // @Param ipv6Subnet query string false "Override the management network IPv6 subnet (like --ipv6-subnet)"
 // @Param restoreAll query string false "Restore nodes from <node>.tar snapshots in this directory (like --restore-all); relative to the topology directory or absolute, inside the workspace"
 // @Param restore query []string false "Restore one node from a snapshot file as node=path (like --restore); repeatable, overrides restoreAll" collectionFormat(multi)
+// @Param timeout query string false "containerlab timeout like --timeout, a Go duration such as 10m or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman"
 // @Success 200 {object} models.ClabInspectOutput "Deployed lab details"
 // @Failure 400 {object} models.ErrorResponse "Invalid input"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
@@ -483,6 +484,10 @@ func DeployTopologyHandler(c *gin.Context) {
 		return
 	}
 	restore, valid := parseRestoreQuery(c)
+	if !valid {
+		return
+	}
+	timeout, valid := parseLifecycleTimeoutQuery(c)
 	if !valid {
 		return
 	}
@@ -554,7 +559,7 @@ func DeployTopologyHandler(c *gin.Context) {
 		nodeFilterSlice = strings.Split(nodeFilter, ",")
 	}
 
-	deployCtx, deployCancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
+	deployCtx, deployCancel := context.WithTimeout(c.Request.Context(), lifecycleRequestTimeout(timeout, 1))
 	defer deployCancel()
 
 	targetOwner := username
@@ -572,12 +577,14 @@ func DeployTopologyHandler(c *gin.Context) {
 		TopoPath:       topologyPath,
 		LabName:        labName,
 		Username:       targetOwner,
+		Actor:          username,
 		Reconfigure:    reconfigure,
 		MaxWorkers:     uint(maxWorkers),
 		ExportTemplate: exportTemplate,
 		NodeFilter:     nodeFilterSlice,
 		SkipPostDeploy: skipPostDeploy,
 		SkipLabDirACLs: skipLabdirAcl,
+		Timeout:        timeout,
 		VarsFiles:      varsFiles,
 	}
 	mgmt.applyTo(&deployOptions)
@@ -660,6 +667,7 @@ func DeployTopologyHandler(c *gin.Context) {
 // @Param skipPostDeploy query boolean false "Skip post-deploy actions for added nodes"
 // @Param stream query boolean false "Stream lifecycle output as NDJSON events"
 // @Param includeLogs query boolean false "Include captured lifecycle logs in the JSON response"
+// @Param timeout query string false "containerlab timeout like --timeout, a Go duration such as 10m or 1h; at most 2h. Defaults to 10m on c9s and 5m with Docker and Podman"
 // @Success 200 {object} models.ApplyLabResponse "Apply result"
 // @Failure 400 {object} models.ErrorResponse "Invalid input"
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
@@ -690,6 +698,10 @@ func ApplyTopologyHandler(c *gin.Context) {
 	maxWorkers, err := strconv.Atoi(maxWorkersStr)
 	if err != nil || maxWorkers < 0 {
 		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid 'maxWorkers' query parameter."})
+		return
+	}
+	timeout, valid := parseLifecycleTimeoutQuery(c)
+	if !valid {
 		return
 	}
 
@@ -763,16 +775,19 @@ func ApplyTopologyHandler(c *gin.Context) {
 		return
 	}
 
-	applyCtx, applyCancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
+	applyCtx, applyCancel := context.WithTimeout(c.Request.Context(), lifecycleRequestTimeout(timeout, 1))
 	defer applyCancel()
 
 	applyOptions := clab.ApplyOptions{
 		TopoPath:       topologyPath,
+		LabName:        labName,
 		Username:       targetOwner,
+		Actor:          username,
 		DryRun:         dryRun,
 		MaxWorkers:     uint(maxWorkers),
 		ExportTemplate: exportTemplate,
 		SkipPostDeploy: skipPostDeploy,
+		Timeout:        timeout,
 	}
 
 	runApply := func() (models.ApplyLabResponse, error) {
@@ -780,7 +795,7 @@ func ApplyTopologyHandler(c *gin.Context) {
 		if applyErr != nil {
 			return models.ApplyLabResponse{}, fmt.Errorf("Failed to apply lab '%s': %s", labName, applyErr.Error())
 		}
-		return clab.ApplyResultToResponse(result), nil
+		return clab.ApplyOutcomeToResponse(result), nil
 	}
 
 	if streamLogs {
