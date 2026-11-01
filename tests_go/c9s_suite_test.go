@@ -5,13 +5,17 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +46,8 @@ type C9sSuite struct {
 	prefix                                  string
 	labName                                 string
 	namespace                               string
+	// labPath is the topology file inspect reports for the lab.
+	labPath string
 }
 
 func TestC9sSuite(t *testing.T) {
@@ -178,6 +184,73 @@ func (s *C9sSuite) TestC9sMultiUserLab() {
 		s.Require().NotEmpty(nodes[0].NodeUID)
 	})
 
+	s.Run("inspect reports Docker's states and the deployed topology file", func() {
+		s.Require().Eventually(func() bool {
+			nodes, status := s.inspect(s.userHeaders)
+			if status != http.StatusOK || len(nodes) != 2 {
+				return false
+			}
+			for _, node := range nodes {
+				if node.State != "running" || node.Status != "healthy" {
+					return false
+				}
+			}
+			return true
+		}, 3*time.Minute, 3*time.Second, "both nodes running and healthy")
+		nodes, _ := s.inspect(s.userHeaders)
+		s.labPath = nodes[0].AbsLabPath
+		s.Require().True(filepath.IsAbs(s.labPath), "a path on the server host, not k8s://: %q", s.labPath)
+		s.Require().True(strings.HasSuffix(s.labPath, "/"+s.labName+".clab.yml"), s.labPath)
+		s.Require().Contains(s.labPath, "/"+s.cfg.APIUserUser+"/", "in the user's workspace")
+		for _, node := range nodes {
+			s.Require().Equal(s.labPath, node.AbsLabPath)
+			s.Require().Equal(s.labPath, node.LabPath)
+			s.Require().Equal(s.cfg.APIUserUser, node.Owner)
+		}
+		annotation, err := s.kubectl("get", "topology.c9s.run", s.labName, "-n", s.namespace,
+			"-o", `jsonpath={.metadata.annotations.containerlab\.dev/topo-file}`)
+		s.Require().NoError(err, annotation)
+		s.Require().Equal(s.labPath, annotation, "the file the server deployed from, recorded on the Topology")
+	})
+
+	s.Run("the server does not take a topology file or owner the user wrote", func() {
+		// The lab editor role lets the user update the Topology.
+		patch := func(topoFile, owner string) {
+			s.T().Helper()
+			output, err := s.kubectl("--as", s.prefix+s.cfg.APIUserUser, "--as-group", s.prefix+"users",
+				"annotate", "--overwrite", "topology.c9s.run", s.labName, "-n", s.namespace, "containerlab.dev/topo-file="+topoFile)
+			s.Require().NoError(err, output)
+			output, err = s.kubectl("--as", s.prefix+s.cfg.APIUserUser, "--as-group", s.prefix+"users",
+				"label", "--overwrite", "topology.c9s.run", s.labName, "-n", s.namespace, "clab-owner="+owner)
+			s.Require().NoError(err, output)
+		}
+		patch("/etc/shadow", s.otherUser)
+		defer patch(s.labPath, s.cfg.APIUserUser)
+		nodes, status := s.inspect(s.userHeaders)
+		s.Require().Equal(http.StatusOK, status)
+		s.Require().Len(nodes, 2)
+		for _, node := range nodes {
+			s.Require().Equal(fmt.Sprintf("k8s://%s/topologies/%s", s.namespace, s.labName), node.AbsLabPath)
+			s.Require().Equal(s.cfg.APIUserUser, node.Owner, "the owner of the namespace")
+		}
+		_, status = s.inspect(s.otherHeaders)
+		s.Require().Equal(http.StatusNotFound, status, "the claimed owner gets nothing")
+
+		// The events stream reports what inspect reports, not what the Topology says.
+		stream := s.followEvents(s.userHeaders, "initialState=true")
+		defer stream.close()
+		seen := map[string]bool{}
+		stream.until(s.T(), time.Minute, "snapshots of both nodes", func(event c9sEvent) bool {
+			if event.Type != "container" {
+				return false
+			}
+			s.Require().Equal(fmt.Sprintf("k8s://%s/topologies/%s", s.namespace, s.labName), event.Attributes["clab-topo-file"], "%+v", event)
+			s.Require().Equal(s.cfg.APIUserUser, event.Attributes["clab-owner"], "%+v", event)
+			seen[event.Attributes["clab-node-name"]] = true
+			return seen["n1"] && seen["n2"]
+		})
+	})
+
 	s.Run("another user cannot see or touch the lab", func() {
 		_, status := s.inspect(s.otherHeaders)
 		s.Require().Equal(http.StatusNotFound, status)
@@ -278,30 +351,79 @@ func (s *C9sSuite) TestC9sMultiUserLab() {
 		s.Require().Contains(strings.ToLower(string(data)), "network multitool", "the node's own web page")
 	})
 
-	s.Run("events", func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, s.url("/api/v1/events?initialState=true"), nil)
-		s.Require().NoError(err)
-		request.Header = s.userHeaders.Clone()
-		response, err := http.DefaultClient.Do(request)
-		s.Require().NoError(err)
-		defer func() { _ = response.Body.Close() }()
-		s.Require().Equal(http.StatusOK, response.StatusCode)
-		scanner := bufio.NewScanner(response.Body)
-		var sawInterface bool
-		for scanner.Scan() {
-			line := scanner.Text()
-			if strings.TrimSpace(line) == "" {
-				continue
+	s.Run("events in Docker's terms", func() {
+		stream := s.followEvents(s.userHeaders, "initialState=true")
+		defer stream.close()
+		containers := map[string]c9sEvent{}
+		interfaces := map[string]map[string]string{} // node -> ifname -> state
+		stream.until(s.T(), time.Minute, "snapshots of both nodes and their eth1", func(event c9sEvent) bool {
+			lab := event.Attributes["containerlab"]
+			if lab == "" {
+				lab = event.Attributes["lab"]
 			}
-			s.Require().Contains(line, s.labName, "only the user's lab: %s", line)
-			if strings.Contains(line, `"type":"interface"`) {
-				sawInterface = true
-				break
+			s.Require().Equal(s.labName, lab, "only the user's lab: %+v", event)
+			switch event.Type {
+			case "container":
+				containers[event.Attributes["clab-node-name"]] = event
+			case "interface":
+				ifname := event.Attributes["ifname"]
+				s.Require().False(strings.HasPrefix(ifname, "c9s"), "no pod-internal interfaces: %+v", event)
+				s.Require().False(strings.HasPrefix(event.Attributes["alias"], "c9s:"), "no clabernetes aliases: %+v", event)
+				s.Require().Contains([]string{"eth0", "eth1", "lo"}, ifname, "%+v", event)
+				node := event.Attributes["node"]
+				if interfaces[node] == nil {
+					interfaces[node] = map[string]string{}
+				}
+				interfaces[node][ifname] = event.Attributes["state"]
 			}
+			return len(containers) == 2 && interfaces["n1"]["eth1"] != "" && interfaces["n2"]["eth1"] != ""
+		})
+		for _, node := range []string{"n1", "n2"} {
+			event := containers[node]
+			s.Require().Equal("running", event.Action, "the snapshot's action is the state")
+			for key, want := range map[string]string{
+				"containerlab": s.labName, "clab-node-name": node, "clab-node-longname": s.labName + "-" + node,
+				"clab-node-kind": "linux", "clab-owner": s.cfg.APIUserUser, "clab-topo-file": s.labPath,
+				"state": "running", "origin": "snapshot", "namespace": s.namespace,
+			} {
+				s.Require().Equal(want, event.Attributes[key], "%s: attribute %s", node, key)
+			}
+			for _, key := range []string{"image", "mgmt_ipv4", "id", "name"} {
+				s.Require().NotEmpty(event.Attributes[key], "%s: attribute %s", node, key)
+			}
+			s.Require().Equal("up", interfaces[node]["eth1"], "%s: the lab link is up", node)
 		}
-		s.Require().True(sawInterface, "interface state events of the lab arrive")
+	})
+
+	s.Run("interfaces", func() {
+		data, status := s.request(http.MethodGet, s.url("/api/v1/labs/%s/interfaces", s.labName), s.userHeaders, nil, 2*time.Minute)
+		s.Require().Equal(http.StatusOK, status, string(data))
+		var nodes []struct {
+			Name       string `json:"name"`
+			Interfaces []struct {
+				Name  string `json:"name"`
+				State string `json:"state"`
+				Mac   string `json:"mac"`
+				Mtu   int    `json:"mtu"`
+			} `json:"interfaces"`
+		}
+		s.Require().NoError(json.Unmarshal(data, &nodes), string(data))
+		s.Require().Len(nodes, 2, string(data))
+		for _, node := range nodes {
+			s.Require().Contains([]string{s.labName + "-n1", s.labName + "-n2"}, node.Name)
+			states := map[string]string{}
+			for _, iface := range node.Interfaces {
+				states[iface.Name] = iface.State
+				if iface.Name == "eth1" {
+					s.Require().NotEmpty(iface.Mac)
+					s.Require().Positive(iface.Mtu)
+				}
+			}
+			s.Require().ElementsMatch([]string{"eth0", "eth1", "lo"}, slices.Collect(maps.Keys(states)), "%s: %s", node.Name, string(data))
+			s.Require().Equal("up", states["eth1"], node.Name)
+		}
+		_, status = s.request(http.MethodGet, s.url("/api/v1/labs/%s/interfaces", s.labName), s.otherHeaders, nil, s.cfg.RequestTimeout)
+		s.Require().Equal(http.StatusNotFound, status)
 	})
 
 	s.Run("stats", func() {
@@ -336,16 +458,50 @@ func (s *C9sSuite) TestC9sMultiUserLab() {
 	})
 
 	s.Run("stop and start a node", func() {
+		stream := s.followEvents(s.userHeaders, "")
+		defer stream.close()
+		var actions []string
+		var n2Deleted bool
+		n2Actions := func(event c9sEvent) {
+			if event.Type == "container" && event.Attributes["clab-node-name"] == "n2" {
+				actions = append(actions, event.Action)
+			}
+			if event.Type == "interface" && event.Attributes["node"] == "n2" && event.Attributes["ifname"] == "eth1" && event.Action == "delete" {
+				n2Deleted = true
+			}
+		}
+
 		data, status := s.request(http.MethodPost, s.url("/api/v1/labs/%s/stop?nodeFilter=n2", s.labName), s.userHeaders, nil, 5*time.Minute)
 		s.Require().Equal(http.StatusOK, status, string(data))
 		runState, err := s.kubectl("get", "nodes.c9s.run", "n2", "-n", s.namespace, "-o", "jsonpath={.spec.runState}")
 		s.Require().NoError(err, runState)
 		s.Require().Equal("Stopped", runState)
+		stream.until(s.T(), 3*time.Minute, "n2 dies and its eth1 is deleted", func(event c9sEvent) bool {
+			n2Actions(event)
+			return slices.Contains(actions, "die") && n2Deleted
+		})
+		s.Require().True(isSubsequence([]string{"kill", "stop", "die"}, actions), "Docker's stop actions: %v", actions)
+		s.Require().Eventually(func() bool {
+			nodes, _ := s.inspect(s.userHeaders)
+			for _, node := range nodes {
+				if node.NodeName == "n2" || strings.HasSuffix(node.Name, "-n2") {
+					return node.State == "exited" && node.Status == "Exited"
+				}
+			}
+			return false
+		}, time.Minute, 2*time.Second, "inspect shows n2 exited")
+
+		actions = nil
 		data, status = s.request(http.MethodPost, s.url("/api/v1/labs/%s/start?nodeFilter=n2", s.labName), s.userHeaders, nil, 5*time.Minute)
 		s.Require().Equal(http.StatusOK, status, string(data))
 		runState, err = s.kubectl("get", "nodes.c9s.run", "n2", "-n", s.namespace, "-o", "jsonpath={.spec.runState}")
 		s.Require().NoError(err, runState)
 		s.Require().Equal("Running", runState)
+		stream.until(s.T(), 3*time.Minute, "n2 starts and becomes healthy", func(event c9sEvent) bool {
+			n2Actions(event)
+			return slices.Contains(actions, "health_status: healthy")
+		})
+		s.Require().True(isSubsequence([]string{"start", "health_status: healthy"}, actions), "Docker's start actions: %v", actions)
 	})
 
 	s.Run("lab names are unique per user", func() {
@@ -410,6 +566,7 @@ func (s *C9sSuite) terminalStream(sessionID string) *websocket.Conn {
 	streamURL := strings.Replace(s.url("/api/v1/terminal-sessions/%s/stream", sessionID), "http", "ws", 1)
 	dialer := *websocket.DefaultDialer
 	dialer.HandshakeTimeout = s.cfg.RequestTimeout
+	dialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // Test client accepts local self-signed certificates.
 	conn, response, err := dialer.Dial(streamURL, s.userHeaders)
 	if response != nil && response.Body != nil {
 		_ = response.Body.Close()
@@ -439,4 +596,86 @@ func (s *C9sSuite) readTerminalUntil(conn *websocket.Conn, want string) string {
 		}
 	}
 	return output.String()
+}
+
+// c9sEvent is one event of the server's events stream.
+type c9sEvent struct {
+	Type       string            `json:"type"`
+	Action     string            `json:"action"`
+	ActorID    string            `json:"actor_id"`
+	ActorName  string            `json:"actor_name"`
+	Attributes map[string]string `json:"attributes"`
+}
+
+// c9sEventStream follows the events stream of a user.
+type c9sEventStream struct {
+	events chan c9sEvent
+	close  func()
+}
+
+func (s *C9sSuite) followEvents(headers http.Header, query string) *c9sEventStream {
+	s.T().Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, s.url("/api/v1/events?%s", query), nil)
+	s.Require().NoError(err)
+	request.Header = headers.Clone()
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}} //nolint:gosec // Test client accepts local self-signed certificates.
+	response, err := client.Do(request)
+	s.Require().NoError(err)
+	s.Require().Equal(http.StatusOK, response.StatusCode)
+	stream := &c9sEventStream{events: make(chan c9sEvent, 1024)}
+	done := make(chan struct{})
+	stream.close = func() {
+		cancel()
+		_ = response.Body.Close()
+		<-done
+	}
+	go func() {
+		defer close(done)
+		defer close(stream.events)
+		scanner := bufio.NewScanner(response.Body)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			var event c9sEvent
+			if strings.TrimSpace(scanner.Text()) == "" || json.Unmarshal(scanner.Bytes(), &event) != nil || event.Type == "" {
+				continue
+			}
+			select {
+			case stream.events <- event:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return stream
+}
+
+// until reads events until done reports true.
+func (st *c9sEventStream) until(t *testing.T, timeout time.Duration, what string, done func(c9sEvent) bool) {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		select {
+		case event, ok := <-st.events:
+			if !ok {
+				t.Fatalf("the events stream ended while waiting for %s", what)
+			}
+			if done(event) {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("no events within %s: %s", timeout, what)
+		}
+	}
+}
+
+// isSubsequence reports whether want appears in got in order, with other entries between.
+func isSubsequence(want, got []string) bool {
+	idx := 0
+	for _, entry := range got {
+		if idx < len(want) && entry == want[idx] {
+			idx++
+		}
+	}
+	return idx == len(want)
 }

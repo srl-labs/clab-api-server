@@ -20,10 +20,12 @@ import (
 	"github.com/gin-gonic/gin"
 	clablabruntime "github.com/srl-labs/containerlab/labruntime"
 	"github.com/stretchr/testify/require"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/srl-labs/clab-api-server/internal/auth"
 	"github.com/srl-labs/clab-api-server/internal/clab"
 	"github.com/srl-labs/clab-api-server/internal/config"
+	"github.com/srl-labs/clab-api-server/internal/kube"
 	"github.com/srl-labs/clab-api-server/internal/models"
 	"github.com/srl-labs/clab-api-server/internal/testsupport/fakec9s"
 )
@@ -45,6 +47,7 @@ func newC9sAPI(t *testing.T) *c9sAPI {
 	previousService := GetClabService()
 	previousTerminals, previousSSH := terminalManager, sshManager
 	previousStats := nodeStatsAvailable
+	previousVnc := wiresharkVncProbe
 	t.Cleanup(func() {
 		config.AppConfig = previous
 		SetClabService(previousService)
@@ -52,7 +55,10 @@ func newC9sAPI(t *testing.T) *c9sAPI {
 		ShutdownSSHManager()
 		terminalManager, sshManager = previousTerminals, previousSSH
 		nodeStatsAvailable = previousStats
+		wiresharkVncProbe = previousVnc
 	})
+	// No Docker for Wireshark VNC unless a test provides it.
+	wiresharkVncProbe = func() bool { return false }
 	config.AppConfig.ClabRuntime = config.RuntimeC9s
 	config.AppConfig.JWTSecret = "test-secret"
 	config.AppConfig.SuperuserGroup = ""
@@ -123,6 +129,10 @@ func TestHealthReportsTheRuntimeAndItsFeatures(t *testing.T) {
 		nodeStatsAvailable = previousStats
 	})
 
+	previousVnc := wiresharkVncProbe
+	t.Cleanup(func() { wiresharkVncProbe = previousVnc })
+	wiresharkVncProbe = func() bool { return false }
+
 	config.AppConfig.ClabRuntime = "docker"
 	nodeStatsAvailable = nil
 	docker := healthResponse(t)
@@ -131,6 +141,8 @@ func TestHealthReportsTheRuntimeAndItsFeatures(t *testing.T) {
 	require.Subset(t, docker.Features, []string{"snapshot-save", "deploy-restore", "sshx-readers", "gotty-options",
 		"node-stats", "node-logs-runtime", "interface-state", "terminal-resume", "lab-lifecycle-timeout"})
 	require.NotContains(t, docker.Features, "c9s-runtime")
+	require.NotContains(t, docker.Features, "capture-stream", "Docker captures go through Edgeshark")
+	require.Contains(t, docker.Features, "wireshark-vnc")
 
 	config.AppConfig.ClabRuntime = "c9s"
 	config.AppConfig.ClabKubeNamespace = ""
@@ -144,6 +156,10 @@ func TestHealthReportsTheRuntimeAndItsFeatures(t *testing.T) {
 	for _, feature := range []string{"snapshot-save", "deploy-restore", "sshx-readers", "gotty-options"} {
 		require.NotContains(t, c9s.Features, feature)
 	}
+	require.Contains(t, c9s.Features, "capture-stream")
+	require.NotContains(t, c9s.Features, "wireshark-vnc", "no Docker on the server host")
+	wiresharkVncProbe = func() bool { return true }
+	require.Contains(t, healthResponse(t).Features, "wireshark-vnc", "Docker on the server host")
 
 	SetNodeStatsAvailability(func() bool { return false })
 	withoutMetrics := healthResponse(t)
@@ -159,7 +175,6 @@ func TestContainerRuntimeRoutesAnswer501OnC9s(t *testing.T) {
 		{http.MethodGet, "/api/v1/images"},
 		{http.MethodPost, "/api/v1/images/pull"},
 		{http.MethodDelete, "/api/v1/images"},
-		{http.MethodGet, "/api/v1/labs/lab1/interfaces"},
 		{http.MethodGet, "/api/v1/labs/lab1/links"},
 		{http.MethodPost, "/api/v1/labs/lab1/snapshots"},
 		{http.MethodPost, "/api/v1/labs/lab1/capture/packetflix"},
@@ -211,6 +226,8 @@ func TestInspectListAndLifecycleOnC9s(t *testing.T) {
 	require.Equal(t, "c9s-lab1", nodes[0].Namespace)
 	require.Equal(t, "c9s-lab1/lab1/n1", nodes[0].ContainerID)
 	require.Equal(t, "lab1-n1-pod", nodes[0].Pod)
+	require.Equal(t, "running", nodes[0].State, "Docker's state vocabulary")
+	require.Equal(t, "healthy", nodes[0].Status)
 
 	recorder = api.do(http.MethodGet, "/api/v1/labs", nil)
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
@@ -513,21 +530,45 @@ func TestEventsOnC9s(t *testing.T) {
 	require.Equal(t, http.StatusOK, response.StatusCode)
 	body, _ := io.ReadAll(response.Body) // ends at the deadline
 
-	var labs []string
+	type event struct {
+		Type       string            `json:"type"`
+		Action     string            `json:"action"`
+		ActorID    string            `json:"actor_id"`
+		Attributes map[string]string `json:"attributes"`
+	}
+	var events []event
 	for _, line := range strings.Split(string(body), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		var event struct {
-			Type       string            `json:"type"`
-			Action     string            `json:"action"`
-			Attributes map[string]string `json:"attributes"`
-		}
-		require.NoError(t, json.Unmarshal([]byte(line), &event), line)
-		require.Equal(t, "interface", event.Type)
-		labs = append(labs, event.Attributes["lab"])
+		var parsed event
+		require.NoError(t, json.Unmarshal([]byte(line), &parsed), line)
+		require.Equal(t, "c9s-lab1", parsed.Attributes["namespace"], "events of other users' labs are filtered: %s", line)
+		events = append(events, parsed)
 	}
-	require.Equal(t, []string{"lab1"}, labs, "events of other users' labs are filtered")
+	require.Len(t, events, 2)
+
+	// containerlab describes c9s nodes with the attributes of Docker events, so the server's
+	// own ownership check reads the same labels as for Docker.
+	container := events[0]
+	require.Equal(t, "container", container.Type)
+	require.Equal(t, "start", container.Action)
+	require.Equal(t, "c9s-lab1/lab1/n1", container.ActorID)
+	for key, value := range map[string]string{
+		"containerlab": "lab1", "clab-node-name": "n1", "clab-node-longname": "lab1-n1", "clab-node-kind": "linux",
+		"clab-owner": api.username, "clab-topo-file": "k8s://c9s-lab1/topologies/lab1", "image": "alpine",
+		"mgmt_ipv4": "10.0.0.1/32", "state": "running",
+	} {
+		require.Equal(t, value, container.Attributes[key], "attribute %s", key)
+	}
+	iface := events[1]
+	require.Equal(t, "interface", iface.Type)
+	require.Equal(t, "create", iface.Action)
+	for key, value := range map[string]string{
+		"lab": "lab1", "ifname": "eth1", "state": "up", "type": "veth", "mtu": "9500", "mac": "aa:c1:ab:00:00:01",
+	} {
+		require.Equal(t, value, iface.Attributes[key], "attribute %s", key)
+	}
 }
 
 func TestKubeUsersInWorkspace(t *testing.T) {
@@ -549,4 +590,73 @@ func TestKubeUsersInWorkspace(t *testing.T) {
 	require.False(t, users.InWorkspace(current.Username, "demo/demo.clab.yml"), "a relative path")
 	require.False(t, users.InWorkspace(current.Username, "/etc/passwd"))
 	require.False(t, users.InWorkspace("no-such-user-c9s", filepath.Join(workspace, "demo", "demo.clab.yml")))
+}
+
+// TestEventsAndInspectAgreeOnc9s runs the events stream and inspect with the c9s scoper after
+// the user edited the Topology's owner label and topology file annotation: both report the
+// server's records, never the edited values.
+func TestEventsAndInspectAgreeOnc9s(t *testing.T) {
+	api := newC9sAPI(t)
+	labsRoot := t.TempDir()
+	setTestClabLabsRoot(t, labsRoot)
+	topology := filepath.Join(labsRoot, api.username, "lab1", "lab1.clab.yml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(topology), 0o755))
+	require.NoError(t, os.WriteFile(topology, []byte("name: lab1\n"), 0o644))
+	provisioner := kube.NewProvisioner(k8sfake.NewClientset(), nil, kube.Settings{
+		UserPrefix: "clab:", NamespaceTemplate: kube.DefaultNamespaceTemplate,
+	})
+	scoper := kube.NewScoper(provisioner, KubeUsers())
+	scope, err := scoper.PrepareDeploy(context.Background(), api.username, "lab1", topology)
+	require.NoError(t, err)
+	api.svc.SetLabScoper(scoper)
+	api.fake.AddLab(scope.Namespace, "lab1", api.username, topology, "n1")
+
+	streamed := func() map[string]string {
+		t.Helper()
+		server := httptest.NewServer(api.router)
+		defer server.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		defer cancel()
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/api/v1/events", nil)
+		require.NoError(t, err)
+		request.Header.Set("Authorization", "Bearer "+api.token)
+		response, err := http.DefaultClient.Do(request)
+		require.NoError(t, err)
+		defer func() { _ = response.Body.Close() }()
+		body, _ := io.ReadAll(response.Body)
+		for _, line := range strings.Split(string(body), "\n") {
+			var event struct {
+				Type       string            `json:"type"`
+				Attributes map[string]string `json:"attributes"`
+			}
+			if json.Unmarshal([]byte(line), &event) == nil && event.Type == "container" {
+				return event.Attributes
+			}
+		}
+		t.Fatalf("no container event in %q", body)
+		return nil
+	}
+	inspected := func() models.ClabContainerInfo {
+		t.Helper()
+		recorder := api.do(http.MethodGet, "/api/v1/labs/lab1", nil)
+		require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+		var nodes []models.ClabContainerInfo
+		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &nodes))
+		require.Len(t, nodes, 1)
+		return nodes[0]
+	}
+
+	attributes, node := streamed(), inspected()
+	require.Equal(t, topology, attributes["clab-topo-file"])
+	require.Equal(t, api.username, attributes["clab-owner"])
+	require.Equal(t, node.AbsLabPath, attributes["clab-topo-file"])
+	require.Equal(t, node.Owner, attributes["clab-owner"])
+
+	state := api.fake.Lab(scope.Namespace, "lab1")
+	state.Owner, state.TopologyPath = "mallory", "/etc/shadow"
+	attributes, node = streamed(), inspected()
+	require.Equal(t, "k8s://"+scope.Namespace+"/topologies/lab1", attributes["clab-topo-file"])
+	require.Equal(t, api.username, attributes["clab-owner"])
+	require.Equal(t, node.AbsLabPath, attributes["clab-topo-file"], "events and inspect agree")
+	require.Equal(t, node.Owner, attributes["clab-owner"])
 }

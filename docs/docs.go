@@ -590,7 +590,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns the runtime the server runs labs with and, on c9s, the Kubernetes cluster and deploy defaults the signed-in user's labs get.\n\n**Notes**\n- ` + "`" + `c9s` + "`" + ` is only set when ` + "`" + `runtime` + "`" + ` is ` + "`" + `c9s` + "`" + `. It names the kubeconfig context and cluster (` + "`" + `in-cluster` + "`" + ` with the Pod's ServiceAccount) but never the cluster's address, credentials or file paths.\n- ` + "`" + `namespacePattern` + "`" + ` is the server's namespace template rendered for the signed-in user, with ` + "`" + `{lab}` + "`" + ` left in. ` + "`" + `sharedNamespacePattern` + "`" + ` is the namespace of labs in the shared workspace.\n- ` + "`" + `metrics` + "`" + ` reports whether the cluster serves ` + "`" + `metrics.k8s.io` + "`" + `, which node stats need.\n- ` + "`" + `defaultTimeout` + "`" + ` is containerlab's timeout of a deploy, redeploy, apply or destroy without ` + "`" + `timeout` + "`" + ` (with every runtime).\n- ` + "`" + `capture` + "`" + ` is how the server captures packets, with every runtime: whether it runs Wireshark VNC sessions (` + "`" + `wiresharkVnc` + "`" + `), their image and pull policy and, with Docker and Podman, Edgeshark's packetflix port and the names (not values) of its extra environment variables.\n- ` + "`" + `c9s.noTopologyCR` + "`" + ` is false: the server deploys every lab with clabernetes' Topology resource.\n- The server must list ` + "`" + `lab-host-info` + "`" + ` in the ` + "`" + `features` + "`" + ` of ` + "`" + `/health` + "`" + `.",
+                "description": "Returns the runtime the server runs labs with and, on c9s, the Kubernetes cluster and deploy defaults the signed-in user's labs get.\n\n**Notes**\n- ` + "`" + `c9s` + "`" + ` is only set when ` + "`" + `runtime` + "`" + ` is ` + "`" + `c9s` + "`" + `. It names the kubeconfig context and cluster (` + "`" + `in-cluster` + "`" + ` with the Pod's ServiceAccount) but never the cluster's address, credentials or file paths.\n- ` + "`" + `namespacePattern` + "`" + ` is the server's namespace template rendered for the signed-in user, with ` + "`" + `{lab}` + "`" + ` left in. ` + "`" + `sharedNamespacePattern` + "`" + ` is the namespace of labs in the shared workspace.\n- ` + "`" + `metrics` + "`" + ` reports whether the cluster serves ` + "`" + `metrics.k8s.io` + "`" + `, which node stats need.\n- ` + "`" + `defaultTimeout` + "`" + ` is containerlab's timeout of a deploy, redeploy, apply or destroy without ` + "`" + `timeout` + "`" + ` (with every runtime).\n- ` + "`" + `capture` + "`" + ` is how the server captures packets, with every runtime: whether it runs Wireshark VNC sessions (` + "`" + `wiresharkVnc` + "`" + `; on c9s only while Docker answers on the server host), their image and pull policy and, with Docker and Podman, Edgeshark's packetflix port and the names (not values) of its extra environment variables.\n- ` + "`" + `c9s.noTopologyCR` + "`" + ` is false: the server deploys every lab with clabernetes' Topology resource.\n- The server must list ` + "`" + `lab-host-info` + "`" + ` in the ` + "`" + `features` + "`" + ` of ` + "`" + `/health` + "`" + `.",
                 "produces": [
                     "application/json"
                 ],
@@ -1887,6 +1887,79 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/v1/labs/{labName}/capture/interfaces": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Lists the lab link interfaces of the lab's running nodes that packet capture accepts, with the far end of each link. Lab runtime c9s only; the management interface is not capturable. Runs as the signed-in user.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Capture"
+                ],
+                "summary": "List capturable interfaces",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Lab name",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Capturable interfaces, ordered by node and interface",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.CaptureInterfaceInfo"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid lab name",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden by Kubernetes RBAC",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Lab not found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "The server's runtime is not c9s",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/labs/{labName}/capture/packetflix": {
             "post": {
                 "security": [
@@ -1969,6 +2042,121 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/v1/labs/{labName}/capture/stream": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Captures lab link interfaces of a lab runtime (c9s) lab, as the signed-in user, and streams one pcapng section as it is produced: chunked, flushed per block. The section has one interface per target, named \u003cnode\u003e:\u003cinterface\u003e, before any packet; packets are in timestamp order. The stream ends when the duration passed, the packet limit was reached, or the client disconnects, which stops the capture in the lab. Errors before the first byte are JSON; later ones end the stream. Captures longer than clabwire's 1 h limit are chained by containerlab without duplicates.",
+                "produces": [
+                    "application/x-pcapng",
+                    "application/json"
+                ],
+                "tags": [
+                    "Capture"
+                ],
+                "summary": "Stream a packet capture",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Lab name",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "multi",
+                        "description": "Interface to capture, \u003cnode\u003e:\u003cinterface\u003e (the interface name or its alias); repeat for several",
+                        "name": "target",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Capture duration (Go duration, e.g. 30s); default: until the client disconnects",
+                        "name": "duration",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Stop after this many packets across all targets",
+                        "name": "packetLimit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Bytes kept per packet, 64 to 1048576 (default 262144)",
+                        "name": "snapLength",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "1"
+                        ],
+                        "type": "string",
+                        "description": "1: send Content-Disposition: attachment; filename=\u003clab\u003e-\u003ctimestamp\u003e.pcapng",
+                        "name": "download",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "pcapng stream",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid target, duration or limit",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden by Kubernetes RBAC",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Lab not found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "A target node is not running",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "The server's runtime is not c9s",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/labs/{labName}/capture/wireshark-vnc-sessions": {
             "post": {
                 "security": [
@@ -1976,7 +2164,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Creates one or more Wireshark noVNC capture sessions for the specified lab interface targets.",
+                "description": "Creates one or more Wireshark noVNC capture sessions for the specified lab interface targets, one per container. With Docker and Podman the sessions capture through Edgeshark. With lab runtime c9s, containerName is the node's inspect name (\u003clab\u003e-\u003cnode\u003e) and interfaceName a capturable interface (or its alias); the server captures the session's interfaces as the signed-in user, in one pcapng stream, and writes it into a named pipe the session's Wireshark reads, without Edgeshark. That needs Docker on the server host (otherwise 501, and /health leaves out wireshark-vnc) and a Wireshark VNC image with the CLABWIRE_CAPTURE_PIPE mode of wireshark-vnc-docker. The capture ends with the session; when it fails, the session's container stops and its ready and VNC routes answer 500 with the reason.",
                 "consumes": [
                     "application/json"
                 ],
@@ -2036,8 +2224,20 @@ const docTemplate = `{
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
                     },
+                    "409": {
+                        "description": "A target node is not running (c9s)",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
                     "500": {
                         "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "No Docker on the server host (c9s)",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -2683,7 +2883,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns interface details for nodes in a lab.",
+                "description": "Returns interface details for nodes in a lab.\n\nWith the lab runtime c9s the interfaces of the running nodes come from containerlab's c9s runtime, as the signed-in user: the lab link interfaces (with their aliases), eth0 and lo, with MAC, index, MTU, type and state; nodes are named \u003clab\u003e-\u003cnode\u003e.",
                 "produces": [
                     "application/json"
                 ],
@@ -7093,6 +7293,36 @@ const docTemplate = `{
                 }
             }
         },
+        "models.CaptureInterfaceInfo": {
+            "type": "object",
+            "properties": {
+                "alias": {
+                    "description": "Alias is the topology's name for the interface when the node kind maps it.",
+                    "type": "string",
+                    "example": "ethernet-1/1"
+                },
+                "interface": {
+                    "description": "Interface is the interface name in the node; capture output names it \u003cnode\u003e:\u003cinterface\u003e.",
+                    "type": "string",
+                    "example": "e1-1"
+                },
+                "node": {
+                    "description": "Node is the node name as the topology spells it.",
+                    "type": "string",
+                    "example": "srl1"
+                },
+                "peerInterface": {
+                    "description": "PeerInterface is the peer's interface as the topology wrote it.",
+                    "type": "string",
+                    "example": "e1-1"
+                },
+                "peerNode": {
+                    "description": "PeerNode is the node at the other end of the link, \"host\" for a host endpoint.",
+                    "type": "string",
+                    "example": "srl2"
+                }
+            }
+        },
         "models.CaptureLabHost": {
             "type": "object",
             "properties": {
@@ -7120,7 +7350,7 @@ const docTemplate = `{
                     "example": "always"
                 },
                 "wiresharkVnc": {
-                    "description": "WiresharkVnc reports whether the server runs Wireshark VNC sessions (Wireshark in a\nbrowser window) for the user's labs.",
+                    "description": "WiresharkVnc reports whether the server runs Wireshark VNC sessions (Wireshark in a\nbrowser window) for the user's labs; on c9s only while Docker answers on the server\nhost.",
                     "type": "boolean",
                     "example": true
                 }

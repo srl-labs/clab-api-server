@@ -58,3 +58,18 @@ type EdgeSharkStatusResponse struct {
 	PacketflixPort int    `json:"packetflixPort"`
 	Runtime        string `json:"runtime"`
 }
+
+// CaptureInterfaceInfo is a lab link interface a lab runtime (c9s) captures, with the far end
+// of its link.
+type CaptureInterfaceInfo struct {
+	// Node is the node name as the topology spells it.
+	Node string `json:"node" example:"srl1"`
+	// Interface is the interface name in the node; capture output names it <node>:<interface>.
+	Interface string `json:"interface" example:"e1-1"`
+	// Alias is the topology's name for the interface when the node kind maps it.
+	Alias string `json:"alias,omitempty" example:"ethernet-1/1"`
+	// PeerNode is the node at the other end of the link, "host" for a host endpoint.
+	PeerNode string `json:"peerNode" example:"srl2"`
+	// PeerInterface is the peer's interface as the topology wrote it.
+	PeerInterface string `json:"peerInterface" example:"e1-1"`
+}

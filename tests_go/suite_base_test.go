@@ -662,10 +662,13 @@ type ClabContainerInfo struct {
 	Image       string `json:"image"`
 	Kind        string `json:"kind"`
 	State       string `json:"state"`
+	Status      string `json:"status"`
 	IPv4Address string `json:"ipv4_address"`
 	IPv6Address string `json:"ipv6_address"`
 	LabName     string `json:"lab_name"`
 	NodeName    string `json:"nodeName"`
+	LabPath     string `json:"labPath"`
+	AbsLabPath  string `json:"absLabPath"`
 	Owner       string `json:"owner"`
 	Group       string `json:"group"`
 	MgmtNetwork string `json:"mgmt_network"`

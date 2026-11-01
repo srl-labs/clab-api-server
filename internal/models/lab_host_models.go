@@ -51,7 +51,8 @@ type C9sLabHost struct {
 // and, with Docker and Podman, Edgeshark. Values as the server uses them, defaults applied.
 type CaptureLabHost struct {
 	// WiresharkVnc reports whether the server runs Wireshark VNC sessions (Wireshark in a
-	// browser window) for the user's labs.
+	// browser window) for the user's labs; on c9s only while Docker answers on the server
+	// host.
 	WiresharkVnc bool `json:"wiresharkVnc" example:"true"`
 	// WiresharkImage is the container image of a Wireshark VNC session
 	// (CAPTURE_WIRESHARK_DOCKER_IMAGE).

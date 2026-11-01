@@ -135,6 +135,13 @@ func TestLabHostOnC9sDescribesTheClusterForTheUser(t *testing.T) {
 	require.NotContains(t, other.C9s.NamespacePattern, "{user}")
 	require.True(t, strings.Contains(other.C9s.NamespacePattern, "{lab}"))
 
+	// Wireshark VNC runs for c9s labs while Docker answers on the server host.
+	wiresharkVncProbe = func() bool { return true }
+	require.NoError(t, json.Unmarshal(getLabHost(t, api.router, "alice"), &other))
+	require.True(t, other.Capture.WiresharkVnc)
+	require.Nil(t, other.Capture.Edgeshark)
+	wiresharkVncProbe = func() bool { return false }
+
 	// In a Pod, without a pull secret, quota or metrics API.
 	SetLabHostCluster("", "in-cluster")
 	SetNodeStatsAvailability(func() bool { return false })
