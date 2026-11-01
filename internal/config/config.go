@@ -44,12 +44,15 @@ type Config struct {
 	TerminalIdleTimeout          time.Duration `mapstructure:"TERMINAL_IDLE_TIMEOUT"`
 
 	// Kubernetes (clabernetes, CLAB_RUNTIME=c9s) settings.
-	ClabKubeconfig         string `mapstructure:"CLAB_KUBECONFIG"`            // kubeconfig file; empty uses KUBECONFIG, ~/.kube/config or the in-cluster ServiceAccount
-	ClabKubeContext        string `mapstructure:"CLAB_KUBE_CONTEXT"`          // kubeconfig context; empty uses the current context
-	ClabKubeNamespace      string `mapstructure:"CLAB_KUBE_NAMESPACE"`        // one namespace for every lab (fixed namespace mode); empty gives every lab its own namespace
-	ClabC9sExposeType      string `mapstructure:"CLAB_C9S_EXPOSE_TYPE"`       // Service type of lab nodes: None, ClusterIP, Headless or LoadBalancer
-	ClabC9sPersistence     bool   `mapstructure:"CLAB_C9S_PERSISTENCE"`       // keep node storage (saved configuration) across Pod replacement and destroy
-	ClabC9sImagePullSecret string `mapstructure:"CLAB_C9S_IMAGE_PULL_SECRET"` // image pull secret device Pods reference
+	ClabKubeconfig            string `mapstructure:"CLAB_KUBECONFIG"`              // kubeconfig file; empty uses KUBECONFIG, ~/.kube/config or the in-cluster ServiceAccount
+	ClabKubeContext           string `mapstructure:"CLAB_KUBE_CONTEXT"`            // kubeconfig context; empty uses the current context
+	ClabKubeNamespace         string `mapstructure:"CLAB_KUBE_NAMESPACE"`          // refused with c9s: every lab gets its own namespace
+	ClabKubeUserPrefix        string `mapstructure:"CLAB_KUBE_USER_PREFIX"`        // prefix of Kubernetes user and group names, e.g. clab:alice
+	ClabKubeNamespaceTemplate string `mapstructure:"CLAB_KUBE_NAMESPACE_TEMPLATE"` // namespace of a user's lab
+	ClabKubeLabQuota          string `mapstructure:"CLAB_KUBE_LAB_QUOTA"`          // ResourceQuota manifest created in every lab namespace
+	ClabC9sExposeType         string `mapstructure:"CLAB_C9S_EXPOSE_TYPE"`         // Service type of lab nodes: None, ClusterIP, Headless or LoadBalancer
+	ClabC9sPersistence        bool   `mapstructure:"CLAB_C9S_PERSISTENCE"`         // keep node storage (saved configuration) across Pod replacement and destroy
+	ClabC9sImagePullSecret    string `mapstructure:"CLAB_C9S_IMAGE_PULL_SECRET"`   // image pull secret device Pods reference
 }
 
 var AppConfig Config
@@ -93,6 +96,9 @@ func LoadConfig(envFilePath string) error {
 	viper.SetDefault("CLAB_KUBECONFIG", "")
 	viper.SetDefault("CLAB_KUBE_CONTEXT", "")
 	viper.SetDefault("CLAB_KUBE_NAMESPACE", "")
+	viper.SetDefault("CLAB_KUBE_USER_PREFIX", "clab:")
+	viper.SetDefault("CLAB_KUBE_NAMESPACE_TEMPLATE", "c9s-{user}-{lab}")
+	viper.SetDefault("CLAB_KUBE_LAB_QUOTA", "")
 	viper.SetDefault("CLAB_C9S_EXPOSE_TYPE", "None")
 	viper.SetDefault("CLAB_C9S_PERSISTENCE", true)
 	viper.SetDefault("CLAB_C9S_IMAGE_PULL_SECRET", "")

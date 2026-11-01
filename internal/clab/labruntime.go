@@ -88,6 +88,27 @@ type LabScoper interface {
 	AfterDestroy(ctx context.Context, scope LabScope, cleanup bool) error
 }
 
+// LabRecordVerifier is a LabScoper whose labs carry records their users can edit: on c9s
+// the lab's owner label and its topology file annotation live on the Topology, which the
+// lab's user may update. The service lets it check every listed lab node, so the server
+// only acts on an owner and a topology file it can vouch for.
+type LabRecordVerifier interface {
+	// VerifyLabRecords corrects the labels of listed lab nodes in place: the owner the
+	// server recorded for the lab, and the topology file only when it is one the lab's
+	// owner could deploy from on this host.
+	VerifyLabRecords(ctx context.Context, containers []clabruntime.GenericContainer) error
+}
+
+// VerifyLabRecords lets the scoper correct what lab records say about their labs (see
+// LabRecordVerifier). Scopers that do not verify leave the records as they are.
+func (s *Service) VerifyLabRecords(ctx context.Context, containers []clabruntime.GenericContainer) error {
+	verifier, ok := s.labScoper().(LabRecordVerifier)
+	if !ok || len(containers) == 0 {
+		return nil
+	}
+	return verifier.VerifyLabRecords(ctx, containers)
+}
+
 // serverScoper runs every lab runtime call with the server's own credentials and lets
 // containerlab choose the namespaces.
 type serverScoper struct{}
@@ -149,6 +170,10 @@ func runtimeOptions(scope *LabScope, timeout time.Duration) []clabcore.ClabOptio
 	return append([]clabcore.ClabOption{clabcore.WithRuntime(RuntimeKind(), rtConfig)}, opts...)
 }
 
+// LabRuntimeNoTopologyCR is whether c9s labs deploy without clabernetes' Topology resource:
+// never, as the server keeps a lab's owner and topology file on its Topology.
+const LabRuntimeNoTopologyCR = false
+
 // labRuntimeDeployOptions applies the server's c9s deploy settings.
 func labRuntimeDeployOptions(deployOpts *clabcore.DeployOptions) {
 	if !IsLabRuntime() || deployOpts == nil {
@@ -156,7 +181,8 @@ func labRuntimeDeployOptions(deployOpts *clabcore.DeployOptions) {
 	}
 	deployOpts.SetExposeType(config.AppConfig.ClabC9sExposeType).
 		SetNoPersistence(!config.AppConfig.ClabC9sPersistence).
-		SetImagePullSecret(config.AppConfig.ClabC9sImagePullSecret)
+		SetImagePullSecret(config.AppConfig.PullSecretName()).
+		SetNoTopologyCR(LabRuntimeNoTopologyCR)
 }
 
 // labRuntimeLabOption selects a lab by name for a lab runtime: the topology file when it

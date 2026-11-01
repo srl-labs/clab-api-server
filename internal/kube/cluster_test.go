@@ -33,24 +33,31 @@ func allowOnly(allow func(*authorizationv1.ResourceAttributes) bool) *fake.Clien
 
 func TestCheckPermissionsListsEveryDenial(t *testing.T) {
 	ctx := context.Background()
-	permissions := ServerIdentityPermissions("")
+	permissions := ProvisionerPermissions("clab:", nil)
 	require.NoError(t, CheckPermissions(ctx, allowOnly(func(*authorizationv1.ResourceAttributes) bool { return true }), permissions))
 
 	err := CheckPermissions(ctx, allowOnly(func(attrs *authorizationv1.ResourceAttributes) bool {
-		return attrs.Subresource != "exec" && attrs.Resource != "namespaces"
+		return attrs.Resource != "namespaces"
 	}), permissions)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "create pods/exec cluster-wide (exec and terminals)")
-	require.Contains(t, err.Error(), "create namespaces cluster-wide")
+	require.Contains(t, err.Error(), "create namespaces cluster-wide (create lab namespaces)")
 	require.Contains(t, err.Error(), "delete namespaces cluster-wide")
-	require.NotContains(t, err.Error(), "portforward")
+	require.Contains(t, err.Error(), "list namespaces cluster-wide")
+	require.NotContains(t, err.Error(), "rolebindings")
 }
 
-func TestServerIdentityPermissionsInFixedNamespace(t *testing.T) {
-	for _, permission := range ServerIdentityPermissions("labs") {
-		require.NotEqual(t, "namespaces", permission.Resource, "a fixed namespace needs no namespace rights")
-		require.Equal(t, "labs", permission.Namespace, permission.String())
+func TestProvisionerPermissionsCoverThePullSecret(t *testing.T) {
+	without := ProvisionerPermissions("clab:", nil)
+	with := ProvisionerPermissions("clab:", &SecretRef{Namespace: "clab-api-server", Name: "regcred"})
+	require.Len(t, with, len(without)+2)
+	require.Contains(t, with, Permission{Verb: "get", Resource: "secrets", Name: "regcred", Namespace: "clab-api-server", Why: "read the image pull secret"})
+	for _, permission := range without {
+		require.NotEqual(t, "secrets", permission.Resource)
+		if permission.Verb == "bind" {
+			require.Equal(t, EditorRole, permission.Name, "binding is limited to the lab editor role")
+		}
 	}
+	require.Contains(t, without, Permission{Verb: "impersonate", Resource: "groups", Name: "clab:admins", Why: "act as a superuser"})
 }
 
 func TestCheckStartup(t *testing.T) {
@@ -60,15 +67,15 @@ func TestCheckStartup(t *testing.T) {
 	tooOld := func(context.Context) error {
 		return fmt.Errorf("%w: nodes.c9s.run has no spec.runState", clablabruntime.ErrUnsupportedRuntimeVersion)
 	}
-	require.NoError(t, CheckStartup(ctx, &Clients{Kube: allowAll}, ServerIdentityPermissions(""), supported))
+	require.NoError(t, CheckStartup(ctx, &Clients{Kube: allowAll}, ProvisionerPermissions("clab:", nil), supported))
 
-	err := CheckStartup(ctx, &Clients{Kube: allowAll}, ServerIdentityPermissions(""), tooOld)
+	err := CheckStartup(ctx, &Clients{Kube: allowAll}, ProvisionerPermissions("clab:", nil), tooOld)
 	require.ErrorIs(t, err, ErrStartup)
 	require.ErrorIs(t, err, clablabruntime.ErrUnsupportedRuntimeVersion)
 
 	denyAll := allowOnly(func(*authorizationv1.ResourceAttributes) bool { return false })
 	checked := false
-	err = CheckStartup(ctx, &Clients{Kube: denyAll}, ServerIdentityPermissions(""), func(context.Context) error {
+	err = CheckStartup(ctx, &Clients{Kube: denyAll}, ProvisionerPermissions("clab:", nil), func(context.Context) error {
 		checked = true
 		return nil
 	})
@@ -126,4 +133,51 @@ current-context: one
 
 	_, err = RestConfig(ConnectionSettings{Kubeconfig: kubeconfig, Context: "missing"})
 	require.Error(t, err)
+}
+
+func TestClusterNamesNameTheContextAndItsCluster(t *testing.T) {
+	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
+	require.NoError(t, os.WriteFile(kubeconfig, []byte(`apiVersion: v1
+kind: Config
+current-context: admin
+clusters:
+- name: c9s
+  cluster:
+    server: https://10.0.0.1:6443
+- name: other
+  cluster:
+    server: https://10.0.0.2:6443
+contexts:
+- name: admin
+  context:
+    cluster: other
+    user: admin
+- name: c9s-provisioner
+  context:
+    cluster: c9s
+    user: provisioner
+users:
+- name: admin
+  user:
+    token: admin-token
+- name: provisioner
+  user:
+    token: provisioner-token
+`), 0o600))
+
+	contextName, cluster := ClusterNames(ConnectionSettings{Kubeconfig: kubeconfig, Context: "c9s-provisioner"})
+	require.Equal(t, "c9s-provisioner", contextName)
+	require.Equal(t, "c9s", cluster)
+
+	contextName, cluster = ClusterNames(ConnectionSettings{Kubeconfig: kubeconfig})
+	require.Equal(t, "admin", contextName, "the current context without CLAB_KUBE_CONTEXT")
+	require.Equal(t, "other", cluster)
+}
+
+func TestClusterNamesReportTheServiceAccountInCluster(t *testing.T) {
+	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "missing"))
+	t.Setenv("HOME", t.TempDir())
+	contextName, cluster := ClusterNames(ConnectionSettings{})
+	require.Empty(t, contextName)
+	require.Equal(t, InClusterName, cluster)
 }

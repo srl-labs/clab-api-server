@@ -305,16 +305,17 @@ func main() {
 // labRuntimeStartupTimeout bounds the c9s startup checks.
 const labRuntimeStartupTimeout = time.Minute
 
-// initLabRuntime connects to the cluster of CLAB_RUNTIME=c9s, checks that the server may do
-// what it needs and that clabernetes is recent enough, and hands the cluster settings to
-// containerlab.
-func initLabRuntime(_ *clab.Service) error {
+// initLabRuntime connects to the cluster of CLAB_RUNTIME=c9s, checks that the server may
+// provision lab namespaces and act as users and that clabernetes is recent enough, and makes
+// every lab call act as the signed-in user in the lab's own namespace.
+func initLabRuntime(svc *clab.Service) error {
 	config.ExportLabRuntimeEnv(config.AppConfig)
 
-	restConfig, err := kube.RestConfig(kube.ConnectionSettings{
+	connection := kube.ConnectionSettings{
 		Kubeconfig: config.AppConfig.ClabKubeconfig,
 		Context:    config.AppConfig.ClabKubeContext,
-	})
+	}
+	restConfig, err := kube.RestConfig(connection)
 	if err != nil {
 		return err
 	}
@@ -323,15 +324,37 @@ func initLabRuntime(_ *clab.Service) error {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), labRuntimeStartupTimeout)
-	defer cancel()
-	if err := kube.CheckStartup(ctx, clients, kube.ServerIdentityPermissions(config.AppConfig.ClabKubeNamespace), kube.CheckLabRuntimeSupport); err != nil {
+	pullSecret, err := kube.ParseSecretRef(config.AppConfig.ClabC9sImagePullSecret, kube.DefaultNamespace(connection))
+	if err != nil {
 		return err
 	}
+	quota, err := kube.LoadQuota(config.AppConfig.ClabKubeLabQuota)
+	if err != nil {
+		return err
+	}
+	settings := kube.Settings{
+		UserPrefix:        config.AppConfig.ClabKubeUserPrefix,
+		NamespaceTemplate: config.AppConfig.ClabKubeNamespaceTemplate,
+		Quota:             quota,
+		PullSecret:        pullSecret,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), labRuntimeStartupTimeout)
+	defer cancel()
+	if err := kube.CheckStartup(ctx, clients, kube.ProvisionerPermissions(settings.UserPrefix, pullSecret), kube.CheckLabRuntimeSupport); err != nil {
+		return err
+	}
+	if err := kube.CheckRoles(ctx, clients.Kube); err != nil {
+		return fmt.Errorf("%w: %w", kube.ErrStartup, err)
+	}
+
+	provisioner := kube.NewProvisioner(clients.Kube, restConfig, settings)
+	svc.SetLabScoper(kube.NewScoper(provisioner, api.KubeUsers()))
 
 	metrics := kube.NewMetricsProbe(clients.Discovery, time.Minute)
 	api.SetNodeStatsAvailability(metrics.Available)
-	log.Infof("Kubernetes cluster %s ready for c9s labs (namespace mode %s, node stats %t)",
-		restConfig.Host, config.AppConfig.NamespaceMode(), metrics.Available())
+	api.SetLabHostCluster(kube.ClusterNames(connection))
+	log.Infof("Kubernetes cluster %s ready for c9s labs: namespaces %s, users %s<user>, node stats %t",
+		restConfig.Host, settings.NamespaceTemplate, settings.UserPrefix, metrics.Available())
 	return nil
 }

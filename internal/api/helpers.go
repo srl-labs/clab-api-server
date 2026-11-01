@@ -27,6 +27,7 @@ import (
 	"github.com/srl-labs/clab-api-server/internal/auth"
 	"github.com/srl-labs/clab-api-server/internal/clab"
 	"github.com/srl-labs/clab-api-server/internal/config"
+	"github.com/srl-labs/clab-api-server/internal/kube"
 	"github.com/srl-labs/clab-api-server/internal/models"
 )
 
@@ -296,7 +297,11 @@ func verifyLabOwnership(c *gin.Context, username, labName string) (string, error
 	if err != nil {
 		// getLabInfo already logged the error
 		errResp := fmt.Errorf("failed to check lab '%s' status: %w", labName, err)
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: errResp.Error()})
+		status := http.StatusInternalServerError
+		if errors.Is(err, kube.ErrAmbiguousLab) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, models.ErrorResponse{Error: errResp.Error()})
 		return "", errResp
 	}
 
@@ -783,6 +788,8 @@ func deployErrorStatus(err error) int {
 	switch {
 	case errors.Is(err, clab.ErrMgmtOverrideUnsupported), errors.Is(err, clab.ErrInvalidLabName):
 		return http.StatusBadRequest
+	case errors.Is(err, kube.ErrNamespaceTaken), errors.Is(err, kube.ErrNotProvisioned), errors.Is(err, kube.ErrAmbiguousLab):
+		return http.StatusConflict
 	case isUnsupportedByLabRuntime(err):
 		return http.StatusNotImplemented
 	}

@@ -145,22 +145,53 @@ type Manager struct {
 	doneCh chan struct{}
 }
 
-func NewManager(cfg ManagerConfig) *Manager {
+// Defaults of a ManagerConfig field left empty or invalid.
+const (
+	DefaultPacketflixPort       = 5001
+	DefaultWiresharkDockerImage = "ghcr.io/srl-labs/wireshark-vnc-docker:latest"
+	DefaultWiresharkPullPolicy  = string(pullPolicyAlways)
+	defaultWiresharkSessionTTL  = 2 * time.Hour
+)
+
+// NormalizeConfig returns cfg as the manager uses it: defaults for a missing packetflix
+// port, Wireshark image or session TTL, and the pull policy in lower case, `always` when
+// it is none of always, missing or never.
+func NormalizeConfig(cfg ManagerConfig) ManagerConfig {
 	normalized := cfg
 	if normalized.PacketflixPort <= 0 {
-		normalized.PacketflixPort = 5001
+		normalized.PacketflixPort = DefaultPacketflixPort
 	}
+	normalized.WiresharkDockerImage = strings.TrimSpace(normalized.WiresharkDockerImage)
 	if normalized.WiresharkDockerImage == "" {
-		normalized.WiresharkDockerImage = "ghcr.io/srl-labs/wireshark-vnc-docker:latest"
+		normalized.WiresharkDockerImage = DefaultWiresharkDockerImage
 	}
 	if normalized.WiresharkSessionTTL <= 0 {
-		normalized.WiresharkSessionTTL = 2 * time.Hour
+		normalized.WiresharkSessionTTL = defaultWiresharkSessionTTL
 	}
-	switch pullPolicy(strings.ToLower(strings.TrimSpace(normalized.WiresharkPullPolicy))) {
+	policy := pullPolicy(strings.ToLower(strings.TrimSpace(normalized.WiresharkPullPolicy)))
+	switch policy {
 	case pullPolicyAlways, pullPolicyMissing, pullPolicyNever:
+		normalized.WiresharkPullPolicy = string(policy)
 	default:
-		normalized.WiresharkPullPolicy = string(pullPolicyAlways)
+		normalized.WiresharkPullPolicy = DefaultWiresharkPullPolicy
 	}
+	return normalized
+}
+
+// ExtraEnvVarNames returns the variable names of CAPTURE_EDGESHARK_EXTRA_ENV_VARS, sorted,
+// without their values.
+func ExtraEnvVarNames(raw string) []string {
+	vars := parseExtraEnvVars(raw)
+	names := make([]string, 0, len(vars))
+	for name := range vars {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func NewManager(cfg ManagerConfig) *Manager {
+	normalized := NormalizeConfig(cfg)
 
 	m := &Manager{
 		cfg:      normalized,

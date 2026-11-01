@@ -30,30 +30,44 @@ func TestLoadConfigLabRuntimeDefaults(t *testing.T) {
 	require.True(t, AppConfig.ClabC9sPersistence)
 	require.Empty(t, AppConfig.ClabC9sImagePullSecret)
 	require.Equal(t, "per-lab", AppConfig.NamespaceMode())
+	require.Equal(t, "clab:", AppConfig.ClabKubeUserPrefix)
+	require.Equal(t, "c9s-{user}-{lab}", AppConfig.ClabKubeNamespaceTemplate)
 }
 
 func TestLoadConfigLabRuntimeSettings(t *testing.T) {
 	require.NoError(t, loadTestEnv(t, `CLAB_RUNTIME=c9s
 CLAB_KUBECONFIG=/etc/clab/kubeconfig
 CLAB_KUBE_CONTEXT=lab
-CLAB_KUBE_NAMESPACE=labs
+CLAB_KUBE_USER_PREFIX=lab-users:
+CLAB_KUBE_NAMESPACE_TEMPLATE=lab-{user}-{lab}
+CLAB_KUBE_LAB_QUOTA=/etc/clab/quota.yaml
 CLAB_C9S_EXPOSE_TYPE=loadbalancer
 CLAB_C9S_PERSISTENCE=false
-CLAB_C9S_IMAGE_PULL_SECRET=regcred
+CLAB_C9S_IMAGE_PULL_SECRET=clab-api-server/regcred
 `))
+	require.Equal(t, "lab-users:", AppConfig.ClabKubeUserPrefix)
+	require.Equal(t, "lab-{user}-{lab}", AppConfig.ClabKubeNamespaceTemplate)
+	require.Equal(t, "/etc/clab/quota.yaml", AppConfig.ClabKubeLabQuota)
+	require.Equal(t, "regcred", AppConfig.PullSecretName())
 	require.Equal(t, "/etc/clab/kubeconfig", AppConfig.ClabKubeconfig)
 	require.Equal(t, "lab", AppConfig.ClabKubeContext)
 	require.Equal(t, "LoadBalancer", AppConfig.ClabC9sExposeType)
 	require.False(t, AppConfig.ClabC9sPersistence)
-	require.Equal(t, "regcred", AppConfig.ClabC9sImagePullSecret)
-	require.Equal(t, "fixed", AppConfig.NamespaceMode())
+	require.Equal(t, "clab-api-server/regcred", AppConfig.ClabC9sImagePullSecret)
+	require.Equal(t, "per-lab", AppConfig.NamespaceMode())
 }
 
 func TestLoadConfigRejectsInvalidRuntimeSettings(t *testing.T) {
 	for name, env := range map[string]string{
 		"runtime":     "CLAB_RUNTIME=kubernetes\n",
 		"kubeconfig":  "CLAB_RUNTIME=c9s\nCLAB_KUBECONFIG=relative/kubeconfig\n",
-		"namespace":   "CLAB_RUNTIME=c9s\nCLAB_KUBE_NAMESPACE=Not_A_Namespace\n",
+		"namespace":   "CLAB_RUNTIME=c9s\nCLAB_KUBE_NAMESPACE=labs\n",
+		"prefix":      "CLAB_RUNTIME=c9s\nCLAB_KUBE_USER_PREFIX=\" \"\n",
+		"no user":     "CLAB_RUNTIME=c9s\nCLAB_KUBE_NAMESPACE_TEMPLATE=c9s-{lab}\n",
+		"no lab":      "CLAB_RUNTIME=c9s\nCLAB_KUBE_NAMESPACE_TEMPLATE=c9s-{user}\n",
+		"bad chars":   "CLAB_RUNTIME=c9s\nCLAB_KUBE_NAMESPACE_TEMPLATE=C9S_{user}-{lab}\n",
+		"quota path":  "CLAB_RUNTIME=c9s\nCLAB_KUBE_LAB_QUOTA=quota.yaml\n",
+		"secret ns":   "CLAB_RUNTIME=c9s\nCLAB_C9S_IMAGE_PULL_SECRET=Bad_NS/regcred\n",
 		"expose type": "CLAB_RUNTIME=c9s\nCLAB_C9S_EXPOSE_TYPE=NodePort\n",
 		"pull secret": "CLAB_RUNTIME=c9s\nCLAB_C9S_IMAGE_PULL_SECRET=Bad Secret\n",
 	} {
@@ -64,7 +78,7 @@ func TestLoadConfigRejectsInvalidRuntimeSettings(t *testing.T) {
 }
 
 func TestDockerHasNoNamespaceMode(t *testing.T) {
-	require.NoError(t, loadTestEnv(t, "CLAB_RUNTIME=docker\nCLAB_KUBE_NAMESPACE=labs\n"))
+	require.NoError(t, loadTestEnv(t, "CLAB_RUNTIME=docker\nCLAB_KUBE_NAMESPACE=labs\nCLAB_KUBE_NAMESPACE_TEMPLATE=x\n"))
 	require.False(t, AppConfig.IsLabRuntime())
 	require.Empty(t, AppConfig.NamespaceMode())
 }
