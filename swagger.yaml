@@ -45,6 +45,69 @@ definitions:
           type: string
         type: array
     type: object
+  models.C9sLabHost:
+    properties:
+      cluster:
+        description: Cluster is the cluster name of that context; "in-cluster" for
+          the Pod's ServiceAccount.
+        example: c9s
+        type: string
+      context:
+        description: |-
+          Context is the kubeconfig context the server uses; empty with the in-cluster
+          ServiceAccount.
+        example: c9s-provisioner
+        type: string
+      exposeType:
+        description: ExposeType is the Service type of lab nodes (CLAB_C9S_EXPOSE_TYPE).
+        enum:
+        - None
+        - ClusterIP
+        - Headless
+        - LoadBalancer
+        example: None
+        type: string
+      imagePullSecret:
+        description: |-
+          ImagePullSecret is the name of the image pull secret device Pods reference
+          (CLAB_C9S_IMAGE_PULL_SECRET); empty when unset.
+        example: regcred
+        type: string
+      labQuota:
+        description: LabQuota reports whether every lab namespace gets a ResourceQuota
+          (CLAB_KUBE_LAB_QUOTA).
+        example: false
+        type: boolean
+      metrics:
+        description: |-
+          Metrics reports whether the cluster serves the resource metrics API (metrics.k8s.io)
+          node stats come from.
+        example: true
+        type: boolean
+      namespacePattern:
+        description: |-
+          NamespacePattern is the namespace of the signed-in user's labs, with {lab} left in
+          (CLAB_KUBE_NAMESPACE_TEMPLATE). Names too long for a namespace are cut and get a hash.
+        example: c9s-alice-{lab}
+        type: string
+      noTopologyCR:
+        description: |-
+          NoTopologyCR reports whether labs deploy without clabernetes' Topology resource
+          (containerlab's --no-topology-cr). The server always deploys with one: false.
+        example: false
+        type: boolean
+      persistence:
+        description: |-
+          Persistence reports whether node storage outlives Pod replacement and destroy
+          (CLAB_C9S_PERSISTENCE).
+        example: true
+        type: boolean
+      sharedNamespacePattern:
+        description: SharedNamespacePattern is the namespace of labs in the shared
+          workspace, with {lab} left in.
+        example: c9s-shared-{lab}
+        type: string
+    type: object
   models.CACreateRequest:
     properties:
       commonName:
@@ -103,6 +166,36 @@ definitions:
         type: integer
       message:
         type: string
+    type: object
+  models.CaptureLabHost:
+    properties:
+      edgeshark:
+        allOf:
+        - $ref: '#/definitions/models.EdgesharkLabHost'
+        description: Edgeshark is Edgeshark on the server host; only set for Docker
+          and Podman.
+      wiresharkImage:
+        description: |-
+          WiresharkImage is the container image of a Wireshark VNC session
+          (CAPTURE_WIRESHARK_DOCKER_IMAGE).
+        example: ghcr.io/srl-labs/wireshark-vnc-docker:latest
+        type: string
+      wiresharkPullPolicy:
+        description: |-
+          WiresharkPullPolicy is when the server pulls that image before a session
+          (CAPTURE_WIRESHARK_PULL_POLICY).
+        enum:
+        - always
+        - missing
+        - never
+        example: always
+        type: string
+      wiresharkVnc:
+        description: |-
+          WiresharkVnc reports whether the server runs Wireshark VNC sessions (Wireshark in a
+          browser window) for the user's labs.
+        example: true
+        type: boolean
     type: object
   models.CapturePacketflixRequest:
     properties:
@@ -508,6 +601,25 @@ definitions:
       version:
         type: string
     type: object
+  models.EdgesharkLabHost:
+    properties:
+      extraEnvVars:
+        description: |-
+          ExtraEnvVars names the variables the Edgeshark containers get
+          (CAPTURE_EDGESHARK_EXTRA_ENV_VARS), sorted; their values are not reported.
+        example:
+        - HTTP_PROXY
+        - NO_PROXY
+        items:
+          type: string
+        type: array
+      packetflixPort:
+        description: |-
+          PacketflixPort is the port of Edgeshark's packetflix endpoint on the server host
+          (CAPTURE_PACKETFLIX_PORT).
+        example: 5001
+        type: integer
+    type: object
   models.ErrorResponse:
     properties:
       error:
@@ -748,8 +860,8 @@ definitions:
         type: array
       namespaceMode:
         description: |-
-          NamespaceMode is how c9s labs get namespaces: per-lab (one namespace per lab) or
-          fixed (one namespace for every lab). It is only set for c9s.
+          NamespaceMode is how c9s labs get namespaces: per-lab (one namespace per lab of each
+          user). It is only set for c9s.
         enum:
         - per-lab
         - fixed
@@ -854,6 +966,34 @@ definitions:
         type: string
       type:
         description: Interface type (e.g., "veth", "device", "dummy")
+        type: string
+    type: object
+  models.LabHostResponse:
+    properties:
+      c9s:
+        allOf:
+        - $ref: '#/definitions/models.C9sLabHost'
+        description: C9s describes the Kubernetes cluster and deploy defaults; only
+          set for c9s.
+      capture:
+        allOf:
+        - $ref: '#/definitions/models.CaptureLabHost'
+        description: |-
+          Capture is how the server captures packets of the user's labs: Wireshark VNC and, with
+          Docker and Podman, Edgeshark.
+      defaultTimeout:
+        description: |-
+          DefaultTimeout is containerlab's timeout of a deploy, redeploy, apply or destroy that
+          passes no `timeout`, as a Go duration: 10m on c9s, 5m with Docker and Podman.
+        example: 10m
+        type: string
+      runtime:
+        description: 'Runtime is the lab runtime: docker, podman or c9s.'
+        enum:
+        - docker
+        - podman
+        - c9s
+        example: c9s
         type: string
     type: object
   models.LabLink:
@@ -2254,6 +2394,35 @@ paths:
       summary: Pull a runtime image
       tags:
       - Images
+  /api/v1/lab-host:
+    get:
+      description: |-
+        Returns the runtime the server runs labs with and, on c9s, the Kubernetes cluster and deploy defaults the signed-in user's labs get.
+
+        **Notes**
+        - `c9s` is only set when `runtime` is `c9s`. It names the kubeconfig context and cluster (`in-cluster` with the Pod's ServiceAccount) but never the cluster's address, credentials or file paths.
+        - `namespacePattern` is the server's namespace template rendered for the signed-in user, with `{lab}` left in. `sharedNamespacePattern` is the namespace of labs in the shared workspace.
+        - `metrics` reports whether the cluster serves `metrics.k8s.io`, which node stats need.
+        - `defaultTimeout` is containerlab's timeout of a deploy, redeploy, apply or destroy without `timeout` (with every runtime).
+        - `capture` is how the server captures packets, with every runtime: whether it runs Wireshark VNC sessions (`wiresharkVnc`), their image and pull policy and, with Docker and Podman, Edgeshark's packetflix port and the names (not values) of its extra environment variables.
+        - `c9s.noTopologyCR` is false: the server deploys every lab with clabernetes' Topology resource.
+        - The server must list `lab-host-info` in the `features` of `/health`.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Lab runtime and, on c9s, the cluster and deploy defaults
+          schema:
+            $ref: '#/definitions/models.LabHostResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get the lab host
+      tags:
+      - Health
   /api/v1/labs:
     get:
       description: |-
@@ -6547,7 +6716,7 @@ paths:
         **Notes**
         - `features` lists optional API capabilities (for example `exec-filters` or `snapshot-save`) so clients can detect what this server supports. Features the configured runtime cannot serve are left out.
         - `runtime` is the lab runtime the server runs labs with: `docker`, `podman` or `c9s` (Kubernetes through clabernetes).
-        - `namespaceMode` is set for `c9s`: `per-lab` when every lab gets its own namespace, `fixed` when all labs share one.
+        - `namespaceMode` is set for `c9s`: `per-lab`, every lab of every user in its own namespace.
       produces:
       - application/json
       responses:
