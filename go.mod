@@ -14,7 +14,7 @@ require (
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/joho/godotenv v1.5.1
 	github.com/msteinert/pam v1.2.0
-	github.com/shirou/gopsutil/v4 v4.26.9
+	github.com/shirou/gopsutil/v4 v4.26.10
 	github.com/spf13/viper v1.21.0
 	github.com/srl-labs/containerlab v0.82.1-0.20261101094455-8f5b5cab3957
 	github.com/stretchr/testify v1.12.1
