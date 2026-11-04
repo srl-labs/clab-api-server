@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/log"
@@ -348,6 +349,16 @@ func setUserPassword(username, password string) error {
 	}
 
 	return nil
+}
+
+// HasLoginShell reports whether the account may run a shell. An administrator who gave
+// it nologin or false meant it not to, even if its groups let it use the API.
+func HasLoginShell(username string) bool {
+	switch filepath.Base(strings.TrimSpace(getLoginShell(username))) {
+	case "", ".", "nologin", "false":
+		return false
+	}
+	return true
 }
 
 // Helper function to get a user's login shell

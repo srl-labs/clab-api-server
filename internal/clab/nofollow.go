@@ -200,29 +200,40 @@ func (r FileReader) canRead(st *unix.Stat_t) bool {
 // must own it or be allowed to read it. The returned file pins the inode that
 // was checked, so later changes to the path do not change what is read.
 func OpenSnapshotFile(path string, reader FileReader) (*os.File, error) {
+	return openFileAs(path, reader, "snapshot")
+}
+
+// OpenScriptFile opens a symlink-resolved script path for reading, under the same
+// rules as OpenSnapshotFile: this server runs as root, so what it reads for a user
+// must be what that user may read.
+func OpenScriptFile(path string, reader FileReader) (*os.File, error) {
+	return openFileAs(path, reader, "script")
+}
+
+func openFileAs(path string, reader FileReader, what string) (*os.File, error) {
 	fd, err := walkNoFollow(path, unix.O_RDONLY|unix.O_NONBLOCK, nil, nil)
 	if err != nil {
 		if errors.Is(err, unix.ENOENT) {
-			return nil, fmt.Errorf("snapshot file does not exist: %w", fs.ErrNotExist)
+			return nil, fmt.Errorf("%s file does not exist: %w", what, fs.ErrNotExist)
 		}
-		return nil, fmt.Errorf("failed to open snapshot file: %w", err)
+		return nil, fmt.Errorf("failed to open %s file: %w", what, err)
 	}
 	var st unix.Stat_t
 	if err := unix.Fstat(fd, &st); err != nil {
 		_ = unix.Close(fd)
-		return nil, fmt.Errorf("failed to inspect snapshot file: %w", err)
+		return nil, fmt.Errorf("failed to inspect %s file: %w", what, err)
 	}
 	if st.Mode&unix.S_IFMT != unix.S_IFREG {
 		_ = unix.Close(fd)
-		return nil, fmt.Errorf("snapshot is not a regular file")
+		return nil, fmt.Errorf("%s is not a regular file", what)
 	}
 	if !reader.canRead(&st) {
 		_ = unix.Close(fd)
-		return nil, fmt.Errorf("snapshot file is not readable by you")
+		return nil, fmt.Errorf("%s file is not readable by you", what)
 	}
 	if err := unix.SetNonblock(fd, false); err != nil {
 		_ = unix.Close(fd)
-		return nil, fmt.Errorf("failed to open snapshot file: %w", err)
+		return nil, fmt.Errorf("failed to open %s file: %w", what, err)
 	}
 	return os.NewFile(uintptr(fd), filepath.Clean(path)), nil
 }

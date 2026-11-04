@@ -139,6 +139,11 @@ func SetupRoutes(router *gin.Engine) {
 				labSpecific.POST("/sshx/:action", requireContainerRuntime("SSHX sharing"), LabSSHXShareHandler)    // POST /api/v1/labs/{labName}/sshx/{action}
 				labSpecific.POST("/gotty/:action", requireContainerRuntime("GoTTY sharing"), LabGoTTYShareHandler) // POST /api/v1/labs/{labName}/gotty/{action}
 				labSpecific.POST("/fcli", requireContainerRuntime("fcli"), RunLabFcliHandler)                      // POST /api/v1/labs/{labName}/fcli
+
+				// Script buttons, off unless API_HOST_SCRIPTS=true
+				labSpecific.POST("/host-script/describe", requireHostScripts(), DescribeHostScriptHandler) // POST /api/v1/labs/{labName}/host-script/describe
+				labSpecific.POST("/host-script/stream", requireHostScripts(), StreamHostScriptHandler)     // POST /api/v1/labs/{labName}/host-script/stream
+
 				labSpecific.POST("/graph/drawio", GenerateLabDrawioHandler)
 				labSpecific.POST("/graph/mermaid", GenerateLabMermaidHandler)
 				labSpecific.POST("/graph/dot", GenerateLabDotHandler)

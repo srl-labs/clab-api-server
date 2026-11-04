@@ -2876,6 +2876,170 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/v1/labs/{labName}/host-script/describe": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Says what a script is right now, as the signed-in user can read it, for the confirmation before it runs. Needs API_HOST_SCRIPTS=true; not available with lab runtime c9s.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Labs"
+                ],
+                "summary": "Describe a script button's script",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Lab name",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Topology file of a lab that is not deployed, from the topology listing",
+                        "name": "path",
+                        "in": "query"
+                    },
+                    {
+                        "description": "The script",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.HostScriptSourceRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.HostScriptDescription"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid input",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "The account cannot run scripts or read this one",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Lab or script not found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "Turned off, or a lab runtime",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/labs/{labName}/host-script/stream": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Runs a script with bash on this host, from the lab's topology folder, as the signed-in user, and answers with NDJSON events: output as it comes, then the exit. Blank lines keep the connection open. Closing the connection stops the script and what it started. Needs API_HOST_SCRIPTS=true; not available with lab runtime c9s.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/x-ndjson"
+                ],
+                "tags": [
+                    "Labs"
+                ],
+                "summary": "Run a script button's script",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Lab name",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Topology file of a lab that is not deployed, from the topology listing",
+                        "name": "path",
+                        "in": "query"
+                    },
+                    {
+                        "description": "The script",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.HostScriptRunRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.HostScriptEvent"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid input",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "The account cannot run scripts or read this one",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Lab or script not found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "The script is not the one that was confirmed",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too many running scripts",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "Turned off, or a lab runtime",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/labs/{labName}/interfaces": {
             "get": {
                 "security": [
@@ -8282,6 +8446,110 @@ const docTemplate = `{
                 },
                 "version": {
                     "description": "API server version",
+                    "type": "string"
+                }
+            }
+        },
+        "models.HostScriptDescription": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "description": "The start of the script.",
+                    "type": "string"
+                },
+                "foreign": {
+                    "description": "Foreign means the user may not have written this: another user's file or lab, or a\nshared folder.",
+                    "type": "boolean"
+                },
+                "kind": {
+                    "description": "file or inline",
+                    "type": "string",
+                    "example": "file"
+                },
+                "owner": {
+                    "type": "string"
+                },
+                "resolvedPath": {
+                    "type": "string"
+                },
+                "sha256": {
+                    "type": "string"
+                },
+                "size": {
+                    "type": "integer"
+                },
+                "truncated": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "models.HostScriptEvent": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                },
+                "result": {
+                    "$ref": "#/definitions/models.HostScriptResult"
+                },
+                "stream": {
+                    "description": "stdout or stderr",
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                },
+                "type": {
+                    "description": "output, exit or error",
+                    "type": "string",
+                    "example": "output"
+                }
+            }
+        },
+        "models.HostScriptResult": {
+            "type": "object",
+            "properties": {
+                "cancelled": {
+                    "type": "boolean"
+                },
+                "durationMs": {
+                    "type": "integer"
+                },
+                "exitCode": {
+                    "description": "ExitCode is null when a signal stopped the script.",
+                    "type": "integer"
+                },
+                "timedOut": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "models.HostScriptRunRequest": {
+            "type": "object",
+            "properties": {
+                "expectedSha256": {
+                    "description": "ExpectedSha256 is the hash of the description the user agreed to. Anything else\nis refused with 409.",
+                    "type": "string"
+                },
+                "script": {
+                    "type": "string"
+                },
+                "scriptPath": {
+                    "type": "string"
+                },
+                "timeoutSeconds": {
+                    "description": "TimeoutSeconds stops the script after this long; at most, and by default, one day.",
+                    "type": "number"
+                }
+            }
+        },
+        "models.HostScriptSourceRequest": {
+            "type": "object",
+            "properties": {
+                "script": {
+                    "type": "string"
+                },
+                "scriptPath": {
                     "type": "string"
                 }
             }
