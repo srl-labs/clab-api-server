@@ -16,6 +16,12 @@ To run specific tests:
 go test -v ./tests_go -run TestLoginSuperuser
 ```
 
+Script button tests need a server started with `API_HOST_SCRIPTS=true`, and run with `GOTEST_HOST_SCRIPTS=true`. They check as whom scripts run, so run the server as root, as CI does, and with an API user that is not a superuser, or the test for a regular user on another user's lab is skipped:
+
+```bash
+GOTEST_HOST_SCRIPTS=true go test -v ./tests_go -run TestHostScriptSuite
+```
+
 ### Using gotestsum for Better Output and Reporting
 
 For more detailed output and JSON reporting:

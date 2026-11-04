@@ -64,6 +64,9 @@ var serverFeatures = []string{
 	// lab-lifecycle-timeout: deploy, redeploy, apply and destroy take a `timeout` (like
 	// containerlab's --timeout).
 	"lab-lifecycle-timeout",
+	// host-scripts: script buttons run scripts on this host as the signed-in user (only with
+	// API_HOST_SCRIPTS=true, and never with a lab runtime).
+	"host-scripts",
 }
 
 // containerRuntimeOnlyFeatures need Docker or Podman on the server host.
@@ -72,6 +75,7 @@ var containerRuntimeOnlyFeatures = map[string]bool{
 	"gotty-options":  true,
 	"snapshot-save":  true,
 	"deploy-restore": true,
+	"host-scripts":   true,
 }
 
 // labRuntimeOnlyFeatures need a lab runtime (c9s).
@@ -100,6 +104,8 @@ func healthFeatures() []string {
 		case !labRuntime && labRuntimeOnlyFeatures[feature]:
 			continue
 		case feature == "wireshark-vnc" && labRuntime && !wiresharkVncProbe():
+			continue
+		case feature == "host-scripts" && !config.AppConfig.APIHostScripts:
 			continue
 		case feature == "node-stats" && nodeStatsAvailable != nil && !nodeStatsAvailable():
 			continue

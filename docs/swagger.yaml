@@ -916,6 +916,82 @@ definitions:
         description: API server version
         type: string
     type: object
+  models.HostScriptDescription:
+    properties:
+      content:
+        description: The start of the script.
+        type: string
+      foreign:
+        description: |-
+          Foreign means the user may not have written this: another user's file or lab, or a
+          shared folder.
+        type: boolean
+      kind:
+        description: file or inline
+        example: file
+        type: string
+      owner:
+        type: string
+      resolvedPath:
+        type: string
+      sha256:
+        type: string
+      size:
+        type: integer
+      truncated:
+        type: boolean
+    type: object
+  models.HostScriptEvent:
+    properties:
+      error:
+        type: string
+      result:
+        $ref: '#/definitions/models.HostScriptResult'
+      stream:
+        description: stdout or stderr
+        type: string
+      text:
+        type: string
+      type:
+        description: output, exit or error
+        example: output
+        type: string
+    type: object
+  models.HostScriptResult:
+    properties:
+      cancelled:
+        type: boolean
+      durationMs:
+        type: integer
+      exitCode:
+        description: ExitCode is null when a signal stopped the script.
+        type: integer
+      timedOut:
+        type: boolean
+    type: object
+  models.HostScriptRunRequest:
+    properties:
+      expectedSha256:
+        description: |-
+          ExpectedSha256 is the hash of the description the user agreed to. Anything else
+          is refused with 409.
+        type: string
+      script:
+        type: string
+      scriptPath:
+        type: string
+      timeoutSeconds:
+        description: TimeoutSeconds stops the script after this long; at most, and
+          by default, one day.
+        type: number
+    type: object
+  models.HostScriptSourceRequest:
+    properties:
+      script:
+        type: string
+      scriptPath:
+        type: string
+    type: object
   models.IconListResponse:
     properties:
       icons:
@@ -3613,6 +3689,120 @@ paths:
       summary: Generate mermaid graph
       tags:
       - Labs - Graph
+  /api/v1/labs/{labName}/host-script/describe:
+    post:
+      consumes:
+      - application/json
+      description: Says what a script is right now, as the signed-in user can read
+        it, for the confirmation before it runs. Needs API_HOST_SCRIPTS=true; not
+        available with lab runtime c9s.
+      parameters:
+      - description: Lab name
+        in: path
+        name: labName
+        required: true
+        type: string
+      - description: Topology file of a lab that is not deployed, from the topology
+          listing
+        in: query
+        name: path
+        type: string
+      - description: The script
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.HostScriptSourceRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.HostScriptDescription'
+        "400":
+          description: Invalid input
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: The account cannot run scripts or read this one
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Lab or script not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "501":
+          description: Turned off, or a lab runtime
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Describe a script button's script
+      tags:
+      - Labs
+  /api/v1/labs/{labName}/host-script/stream:
+    post:
+      consumes:
+      - application/json
+      description: 'Runs a script with bash on this host, from the lab''s topology
+        folder, as the signed-in user, and answers with NDJSON events: output as it
+        comes, then the exit. Blank lines keep the connection open. Closing the connection
+        stops the script and what it started. Needs API_HOST_SCRIPTS=true; not available
+        with lab runtime c9s.'
+      parameters:
+      - description: Lab name
+        in: path
+        name: labName
+        required: true
+        type: string
+      - description: Topology file of a lab that is not deployed, from the topology
+          listing
+        in: query
+        name: path
+        type: string
+      - description: The script
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.HostScriptRunRequest'
+      produces:
+      - application/x-ndjson
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.HostScriptEvent'
+        "400":
+          description: Invalid input
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: The account cannot run scripts or read this one
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Lab or script not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "409":
+          description: The script is not the one that was confirmed
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "429":
+          description: Too many running scripts
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "501":
+          description: Turned off, or a lab runtime
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Run a script button's script
+      tags:
+      - Labs
   /api/v1/labs/{labName}/interfaces:
     get:
       description: |-

@@ -43,6 +43,9 @@ func TestLoadConfigDefaultsEnableTLSAutoCert(t *testing.T) {
 			AppConfig.TerminalMaxSessionsPerUser,
 		)
 	}
+	if AppConfig.APIHostScripts {
+		t.Fatalf("expected API_HOST_SCRIPTS to default to false")
+	}
 	if AppConfig.ClabLabsRoot != "" {
 		t.Fatalf("expected CLAB_LABS_ROOT default to be empty, got %q", AppConfig.ClabLabsRoot)
 	}
