@@ -2520,7 +2520,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Runs an fcli command against the selected lab topology.",
+                "description": "Deprecated: use POST /api/v1/labs/{labName}/fcling. Runs the same fcling report.",
                 "consumes": [
                     "application/json"
                 ],
@@ -2530,7 +2530,8 @@ const docTemplate = `{
                 "tags": [
                     "Labs - Tools"
                 ],
-                "summary": "Run fcli command",
+                "summary": "Run fcling report (old path)",
+                "deprecated": true,
                 "parameters": [
                     {
                         "type": "string",
@@ -2540,12 +2541,12 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "fcli command request",
+                        "description": "fcling command request",
                         "name": "fcli_request",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/models.FcliCommandRequest"
+                            "$ref": "#/definitions/models.FclingCommandRequest"
                         }
                     }
                 ],
@@ -2553,7 +2554,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/models.FcliCommandResponse"
+                            "$ref": "#/definitions/models.FclingCommandResponse"
                         }
                     },
                     "400": {
@@ -2576,6 +2577,533 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "Not supported by the configured lab runtime",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/labs/{labName}/fcling": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Runs an fcling report once against the selected lab topology and returns its output.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Labs - Tools"
+                ],
+                "summary": "Run fcling report",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Lab Name",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "fcling command request",
+                        "name": "fcling_request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.FclingCommandRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.FclingCommandResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "Not supported by the configured lab runtime",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/labs/{labName}/fcling/api/{proxyPath}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Passes a request to the HTTP API of the lab's running fcling engine, with the engine's own token, and streams its answer. Only these reach it. GET: status, reports, reports/{name}, checks, incidents, acks, history, drift, configs, configs/diff, baselines, lenses, lenses/{name}, topology, events. POST: acks, baselines. DELETE: acks, baselines/{name}. Anything else is refused with 403. A lab without a running engine answers 409.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json",
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "Labs - Tools"
+                ],
+                "summary": "Proxy fcling engine API",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Lab Name",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Path below the engine's /api, e.g. reports/bgp-peers",
+                        "name": "proxyPath",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "The engine's answer",
+                        "schema": {
+                            "type": "object"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Not part of the fabric API",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "The engine is not running",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "Not supported by the configured lab runtime",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "502": {
+                        "description": "The engine is not reachable",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Passes a request to the HTTP API of the lab's running fcling engine, with the engine's own token, and streams its answer. Only these reach it. GET: status, reports, reports/{name}, checks, incidents, acks, history, drift, configs, configs/diff, baselines, lenses, lenses/{name}, topology, events. POST: acks, baselines. DELETE: acks, baselines/{name}. Anything else is refused with 403. A lab without a running engine answers 409.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json",
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "Labs - Tools"
+                ],
+                "summary": "Proxy fcling engine API",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Lab Name",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Path below the engine's /api, e.g. reports/bgp-peers",
+                        "name": "proxyPath",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "The engine's answer",
+                        "schema": {
+                            "type": "object"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Not part of the fabric API",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "The engine is not running",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "Not supported by the configured lab runtime",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "502": {
+                        "description": "The engine is not reachable",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Passes a request to the HTTP API of the lab's running fcling engine, with the engine's own token, and streams its answer. Only these reach it. GET: status, reports, reports/{name}, checks, incidents, acks, history, drift, configs, configs/diff, baselines, lenses, lenses/{name}, topology, events. POST: acks, baselines. DELETE: acks, baselines/{name}. Anything else is refused with 403. A lab without a running engine answers 409.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json",
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "Labs - Tools"
+                ],
+                "summary": "Proxy fcling engine API",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Lab Name",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Path below the engine's /api, e.g. reports/bgp-peers",
+                        "name": "proxyPath",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "The engine's answer",
+                        "schema": {
+                            "type": "object"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Not part of the fabric API",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "The engine is not running",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "Not supported by the configured lab runtime",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "502": {
+                        "description": "The engine is not reachable",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/labs/{labName}/fcling/engine": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Tells how the lab's fcling engine is doing: ` + "`" + `stopped` + "`" + ` without one, ` + "`" + `starting` + "`" + ` until it answers, ` + "`" + `ready` + "`" + ` then, ` + "`" + `failed` + "`" + ` once its container has exited, with the end of its log.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Labs - Tools"
+                ],
+                "summary": "Get fcling engine status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Lab Name",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.FclingEngineStatus"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "Not supported by the configured lab runtime",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Starts the lab's fcling engine, which streams its SR Linux nodes and keeps a history of what changes. An engine that runs is left alone. The first start can take a while, since it pulls the image; poll the status until it says ` + "`" + `ready` + "`" + `.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Labs - Tools"
+                ],
+                "summary": "Start fcling engine",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Lab Name",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.FclingEngineStatus"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "Not supported by the configured lab runtime",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Stops the lab's fcling engine. Its history is kept for the next start, and goes when the lab is destroyed.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Labs - Tools"
+                ],
+                "summary": "Stop fcling engine",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Lab Name",
+                        "name": "labName",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.FclingEngineStatus"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "Not supported by the configured lab runtime",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -8192,18 +8720,19 @@ const docTemplate = `{
                 }
             }
         },
-        "models.FcliCommandRequest": {
+        "models.FclingCommandRequest": {
             "type": "object",
             "required": [
                 "command"
             ],
             "properties": {
                 "command": {
-                    "type": "string"
+                    "type": "string",
+                    "example": "bgp-peers"
                 }
             }
         },
-        "models.FcliCommandResponse": {
+        "models.FclingCommandResponse": {
             "type": "object",
             "properties": {
                 "command": {
@@ -8211,6 +8740,38 @@ const docTemplate = `{
                 },
                 "output": {
                     "type": "string"
+                }
+            }
+        },
+        "models.FclingEngineStatus": {
+            "type": "object",
+            "properties": {
+                "containerName": {
+                    "type": "string",
+                    "example": "clab-lab01-fcling"
+                },
+                "error": {
+                    "description": "Error is the end of the engine's log, when it failed.",
+                    "type": "string"
+                },
+                "image": {
+                    "type": "string",
+                    "example": "ghcr.io/srl-labs/fcling:0.9.0"
+                },
+                "startedAt": {
+                    "type": "string",
+                    "example": "2026-11-05T14:08:47Z"
+                },
+                "state": {
+                    "description": "State is stopped without an engine, starting until it answers, ready then, and failed\nonce its container has exited.",
+                    "type": "string",
+                    "enum": [
+                        "stopped",
+                        "starting",
+                        "ready",
+                        "failed"
+                    ],
+                    "example": "ready"
                 }
             }
         },

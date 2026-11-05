@@ -142,15 +142,17 @@ func (s *EndpointCoverageSuite) TestGracefulTimeoutValidation() {
 	s.assertJSONError(bodyBytes, "Invalid 'gracefulTimeout'")
 }
 
-func (s *EndpointCoverageSuite) TestFcliAndDrawioRoutesValidateInput() {
-	fcliURL := fmt.Sprintf("%s/api/v1/labs/%s/fcli", s.cfg.APIURL, s.labName)
-	bodyBytes, statusCode, err := s.doRequest("POST", fcliURL, s.apiUserHeaders, bytes.NewBuffer(s.mustMarshal(map[string]string{"command": ""})), s.cfg.RequestTimeout)
-	s.Require().NoError(err)
-	s.Require().Equal(http.StatusBadRequest, statusCode, "Expected 400 for empty fcli command. Body: %s", string(bodyBytes))
-	s.assertJSONError(bodyBytes, "Invalid request body")
+func (s *EndpointCoverageSuite) TestFclingAndDrawioRoutesValidateInput() {
+	for _, route := range []string{"fcling", "fcli"} {
+		url := fmt.Sprintf("%s/api/v1/labs/%s/%s", s.cfg.APIURL, s.labName, route)
+		bodyBytes, statusCode, err := s.doRequest("POST", url, s.apiUserHeaders, bytes.NewBuffer(s.mustMarshal(map[string]string{"command": ""})), s.cfg.RequestTimeout)
+		s.Require().NoError(err)
+		s.Require().Equal(http.StatusBadRequest, statusCode, "Expected 400 for empty %s command. Body: %s", route, string(bodyBytes))
+		s.assertJSONError(bodyBytes, "Invalid request body")
+	}
 
 	drawioURL := fmt.Sprintf("%s/api/v1/labs/%s/graph/drawio", s.cfg.APIURL, s.labName)
-	bodyBytes, statusCode, err = s.doRequest("POST", drawioURL, s.apiUserHeaders, bytes.NewBuffer(s.mustMarshal(map[string]string{"layout": "diagonal"})), s.cfg.RequestTimeout)
+	bodyBytes, statusCode, err := s.doRequest("POST", drawioURL, s.apiUserHeaders, bytes.NewBuffer(s.mustMarshal(map[string]string{"layout": "diagonal"})), s.cfg.RequestTimeout)
 	s.Require().NoError(err)
 	s.Require().Equal(http.StatusBadRequest, statusCode, "Expected 400 for invalid drawio layout. Body: %s", string(bodyBytes))
 	s.assertJSONError(bodyBytes, "Invalid layout")

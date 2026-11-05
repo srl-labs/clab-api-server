@@ -301,6 +301,9 @@ func DeployLabHandler(c *gin.Context) {
 		return
 	}
 
+	if reconfigure {
+		stopFclingEngine(effectiveLabName)
+	}
 	log.Infof("DeployLab user '%s': Deploying lab '%s'...", username, effectiveLabName)
 	containers, err := svc.Deploy(ctx, deployOpts)
 	if err != nil {
@@ -526,6 +529,9 @@ func DeployLabArchiveHandler(c *gin.Context) {
 		return
 	}
 
+	if reconfigure {
+		stopFclingEngine(labName)
+	}
 	log.Infof("DeployLab (Archive) user '%s': Deploying lab '%s'...", username, labName)
 	containers, err := svc.Deploy(ctx, deployOpts)
 	if err != nil {
@@ -649,12 +655,17 @@ func DestroyLabHandler(c *gin.Context) {
 	log.Infof("DestroyLab user '%s': Destroying lab '%s' (cleanup=%t, purgeLabDir=%t)...", username, labName, cleanup, purgeLabDir)
 
 	runDestroy := func() error {
+		// A partial destroy leaves the lab, and the engine watching the rest of it.
+		if len(nodeFilterSlice) == 0 {
+			stopFclingEngine(labName)
+		}
 		if err := svc.Destroy(ctx, destroyOpts); err != nil {
 			return fmt.Errorf("failed to destroy lab '%s': %w", labName, err)
 		}
 		if err := ensureLabDestroyed(ctx, svc, username, labName); err != nil {
 			return err
 		}
+		removeFclingEngine(labName)
 		return nil
 	}
 
@@ -889,6 +900,7 @@ func RedeployLabHandler(c *gin.Context) {
 	}
 
 	runRedeploy := func() (models.ClabInspectOutput, error) {
+		stopFclingEngine(labName)
 		log.Infof("RedeployLab user '%s': Destroying lab '%s'...", username, labName)
 		if err := svc.Destroy(ctx, destroyOpts); err != nil {
 			return nil, fmt.Errorf("Failed to destroy lab '%s': %s", labName, err.Error())

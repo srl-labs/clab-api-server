@@ -231,6 +231,8 @@ settings and what is not supported there.
 | `API_USER_GROUP` | `clab_api` | Linux group for API access |
 | `SUPERUSER_GROUP` | `clab_admins` | Linux group for elevated privileges |
 | `CLAB_RUNTIME` | `docker` | Container runtime used by Containerlab |
+| `FCLING_DOCKER_IMAGE` | `ghcr.io/srl-labs/fcling:0.9.0` | Image of fcling reports and of each lab's fabric engine (`/api/v1/labs/{labName}/fcling`). Docker and Podman only. |
+| `FCLING_PULL_POLICY` | `missing` | When the fcling image is pulled: `always`, `missing` or `never`. |
 | `CLAB_LABS_ROOT` | unset | Optional absolute root for managed lab workspaces. When set, users store labs under `$CLAB_LABS_ROOT/<username>/`; otherwise labs use `<home>/.clab/`. |
 | `CLAB_SHARED_LABS_ROOT` | unset | Optional absolute folder shared by all authenticated API users, exposed as `@shared/` in workspace and topology file paths. |
 | `CLAB_HOSTS_FILE` | unset | Optional absolute host-visible hosts file to synchronize. The container entrypoint detects `/proc/1/root/etc/hosts` automatically when running with host PID mode. |
