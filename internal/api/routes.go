@@ -136,9 +136,14 @@ func SetupRoutes(router *gin.Engine) {
 				labSpecific.GET("/capture/stream", requireLabRuntimeCapture(), StreamCaptureHandler)             // GET /api/v1/labs/{labName}/capture/stream
 
 				// Sharing + tools
-				labSpecific.POST("/sshx/:action", requireContainerRuntime("SSHX sharing"), LabSSHXShareHandler)    // POST /api/v1/labs/{labName}/sshx/{action}
-				labSpecific.POST("/gotty/:action", requireContainerRuntime("GoTTY sharing"), LabGoTTYShareHandler) // POST /api/v1/labs/{labName}/gotty/{action}
-				labSpecific.POST("/fcli", requireContainerRuntime("fcli"), RunLabFcliHandler)                      // POST /api/v1/labs/{labName}/fcli
+				labSpecific.POST("/sshx/:action", requireContainerRuntime("SSHX sharing"), LabSSHXShareHandler)     // POST /api/v1/labs/{labName}/sshx/{action}
+				labSpecific.POST("/gotty/:action", requireContainerRuntime("GoTTY sharing"), LabGoTTYShareHandler)  // POST /api/v1/labs/{labName}/gotty/{action}
+				labSpecific.POST("/fcling", requireContainerRuntime("fcling"), RunLabFclingHandler)                 // POST /api/v1/labs/{labName}/fcling
+				labSpecific.POST("/fcli", requireContainerRuntime("fcling"), RunLabFcliHandler)                     // POST /api/v1/labs/{labName}/fcli (deprecated alias)
+				labSpecific.GET("/fcling/engine", requireContainerRuntime("fcling"), GetFclingEngineHandler)        // GET /api/v1/labs/{labName}/fcling/engine
+				labSpecific.POST("/fcling/engine", requireContainerRuntime("fcling"), StartFclingEngineHandler)     // POST /api/v1/labs/{labName}/fcling/engine
+				labSpecific.DELETE("/fcling/engine", requireContainerRuntime("fcling"), StopFclingEngineHandler)    // DELETE /api/v1/labs/{labName}/fcling/engine
+				labSpecific.Any("/fcling/api/*proxyPath", requireContainerRuntime("fcling"), ProxyFclingAPIHandler) // ANY /api/v1/labs/{labName}/fcling/api/{proxyPath}
 
 				// Script buttons, off unless API_HOST_SCRIPTS=true
 				labSpecific.POST("/host-script/describe", requireHostScripts(), DescribeHostScriptHandler) // POST /api/v1/labs/{labName}/host-script/describe

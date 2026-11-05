@@ -44,13 +44,27 @@ type GoTTYShareRequest struct {
 	Shell    string `json:"shell,omitempty" example:"bash"`
 }
 
-type FcliCommandRequest struct {
-	Command string `json:"command" binding:"required"`
+// FclingCommandRequest is one fcling report to run, as on fcling's command line.
+type FclingCommandRequest struct {
+	Command string `json:"command" binding:"required" example:"bgp-peers"`
 }
 
-type FcliCommandResponse struct {
+// FclingCommandResponse is a report's output.
+type FclingCommandResponse struct {
 	Command string `json:"command"`
 	Output  string `json:"output"`
+}
+
+// FclingEngineStatus is how a lab's fcling engine is doing.
+type FclingEngineStatus struct {
+	// State is stopped without an engine, starting until it answers, ready then, and failed
+	// once its container has exited.
+	State         string `json:"state" enums:"stopped,starting,ready,failed" example:"ready"`
+	Image         string `json:"image,omitempty" example:"ghcr.io/srl-labs/fcling:latest"`
+	ContainerName string `json:"containerName,omitempty" example:"clab-lab01-fcling"`
+	StartedAt     string `json:"startedAt,omitempty" example:"2026-11-05T14:08:47Z"`
+	// Error is the end of the engine's log, when it failed.
+	Error string `json:"error,omitempty"`
 }
 
 type DrawioGenerateRequest struct {

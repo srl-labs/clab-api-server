@@ -143,6 +143,7 @@ func TestHealthReportsTheRuntimeAndItsFeatures(t *testing.T) {
 	require.NotContains(t, docker.Features, "c9s-runtime")
 	require.NotContains(t, docker.Features, "capture-stream", "Docker captures go through Edgeshark")
 	require.Contains(t, docker.Features, "wireshark-vnc")
+	require.Contains(t, docker.Features, "fcling")
 
 	config.AppConfig.ClabRuntime = "c9s"
 	config.AppConfig.ClabKubeNamespace = ""
@@ -153,7 +154,7 @@ func TestHealthReportsTheRuntimeAndItsFeatures(t *testing.T) {
 	require.Subset(t, c9s.Features, []string{"c9s-runtime", "node-logs-runtime", "interface-state", "node-stats",
 		"terminal-resume", "log-stream", "validate", "graph-mermaid", "graph-dot", "exec-filters", "save-copy",
 		"lab-lifecycle-timeout"})
-	for _, feature := range []string{"snapshot-save", "deploy-restore", "sshx-readers", "gotty-options"} {
+	for _, feature := range []string{"fcling", "snapshot-save", "deploy-restore", "sshx-readers", "gotty-options"} {
 		require.NotContains(t, c9s.Features, feature)
 	}
 	require.Contains(t, c9s.Features, "capture-stream")
@@ -182,6 +183,11 @@ func TestContainerRuntimeRoutesAnswer501OnC9s(t *testing.T) {
 		{http.MethodPost, "/api/v1/labs/lab1/sshx/attach"},
 		{http.MethodPost, "/api/v1/labs/lab1/gotty/attach"},
 		{http.MethodPost, "/api/v1/labs/lab1/fcli"},
+		{http.MethodPost, "/api/v1/labs/lab1/fcling"},
+		{http.MethodGet, "/api/v1/labs/lab1/fcling/engine"},
+		{http.MethodPost, "/api/v1/labs/lab1/fcling/engine"},
+		{http.MethodDelete, "/api/v1/labs/lab1/fcling/engine"},
+		{http.MethodGet, "/api/v1/labs/lab1/fcling/api/status"},
 		{http.MethodGet, "/api/v1/labs/lab1/tailscale"},
 		{http.MethodPost, "/api/v1/labs/lab1/nodes/n1/pause"},
 		{http.MethodPost, "/api/v1/labs/lab1/nodes/n1/unpause"},

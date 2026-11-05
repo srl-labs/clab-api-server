@@ -591,6 +591,9 @@ func DeployTopologyHandler(c *gin.Context) {
 	if !applyRestoreQuery(c, username, topologyPath, labName, restore, &deployOptions) {
 		return
 	}
+	if reconfigure {
+		stopFclingEngine(labName)
+	}
 
 	if streamLogs {
 		var inspectResult models.ClabInspectOutput
@@ -795,7 +798,12 @@ func ApplyTopologyHandler(c *gin.Context) {
 		if applyErr != nil {
 			return models.ApplyLabResponse{}, fmt.Errorf("Failed to apply lab '%s': %s", labName, applyErr.Error())
 		}
-		return clab.ApplyOutcomeToResponse(result), nil
+		response := clab.ApplyOutcomeToResponse(result)
+		// fcling reads the lab's nodes at start, so its engine would miss the new ones.
+		if !dryRun && (len(response.AddedNodes) > 0 || len(response.DeletedNodes) > 0) {
+			stopFclingEngine(labName)
+		}
+		return response, nil
 	}
 
 	if streamLogs {

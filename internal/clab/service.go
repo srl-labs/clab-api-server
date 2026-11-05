@@ -38,6 +38,7 @@ import (
 	"gopkg.in/yaml.v2"
 
 	"github.com/srl-labs/clab-api-server/internal/config"
+	"github.com/srl-labs/clab-api-server/internal/fcling"
 )
 
 const (
@@ -445,7 +446,7 @@ type DrawioGenerateResult struct {
 	Output string
 }
 
-type FcliRunOptions struct {
+type FclingRunOptions struct {
 	Runtime      string
 	TopologyPath string
 	CommandArgs  []string
@@ -1405,8 +1406,8 @@ func (s *Service) RemoveRuntimeImage(ctx context.Context, reference string, forc
 	return s.runCommand(ctx, configuredRuntimeName(), args)
 }
 
-func (s *Service) RunFcliCommand(ctx context.Context, opts FcliRunOptions) (string, error) {
-	if err := RequireContainerRuntime("fcli"); err != nil {
+func (s *Service) RunFclingCommand(ctx context.Context, opts FclingRunOptions) (string, error) {
+	if err := RequireContainerRuntime("fcling"); err != nil {
 		return "", err
 	}
 	ctx, cancel := s.ensureTimeout(ctx)
@@ -1418,7 +1419,7 @@ func (s *Service) RunFcliCommand(ctx context.Context, opts FcliRunOptions) (stri
 	}
 
 	if len(opts.CommandArgs) == 0 {
-		return "", fmt.Errorf("fcli command is required")
+		return "", fmt.Errorf("fcling command is required")
 	}
 
 	runtimeName := strings.TrimSpace(opts.Runtime)
@@ -1429,33 +1430,24 @@ func (s *Service) RunFcliCommand(ctx context.Context, opts FcliRunOptions) (stri
 		runtimeName = "docker"
 	}
 
-	networkArgs, err := s.fcliNetworkArgs(ctx, topologyPath)
+	networkArgs, err := s.FclingNetworkArgs(ctx, topologyPath)
 	if err != nil {
 		return "", err
 	}
 
-	args := []string{
-		"run",
-		"--pull", "always",
-		"--rm",
-	}
-	args = append(args, networkArgs...)
-	args = append(args,
-		"-v", "/etc/hosts:/etc/hosts:ro",
-		"-v", fmt.Sprintf("%s:/topo.yml", topologyPath),
-		"ghcr.io/srl-labs/nornir-srl:latest",
-		"-t", "/topo.yml",
-	)
-	args = append(args, opts.CommandArgs...)
+	args := fcling.ReportArgs(fcling.Config{
+		Image:      config.AppConfig.FclingDockerImage,
+		PullPolicy: config.AppConfig.FclingPullPolicy,
+	}, networkArgs, topologyPath, opts.CommandArgs)
 
 	return s.runCommand(ctx, runtimeName, args)
 }
 
-// fcliNetworkArgs attaches the fcli container to the lab's default management
+// FclingNetworkArgs attaches an fcling container to the lab's default management
 // network. Unless the network uses runtime IPAM, containerlab allocates the
 // container address, as it does for its own tool containers, so the address
 // cannot clash with addresses containerlab assigns to lab nodes.
-func (s *Service) fcliNetworkArgs(ctx context.Context, topologyPath string) ([]string, error) {
+func (s *Service) FclingNetworkArgs(ctx context.Context, topologyPath string) ([]string, error) {
 	lab, err := newContainerLab(
 		clabcore.WithTimeout(defaultTimeout),
 		clabcore.WithTopoPath(topologyPath, nil),
@@ -1466,9 +1458,9 @@ func (s *Service) fcliNetworkArgs(ctx context.Context, topologyPath string) ([]s
 	}
 
 	network := lab.Config.Mgmt.Network
-	cfg := &clabtypes.NodeConfig{ShortName: "fcli", LongName: "fcli", MgmtNet: network}
+	cfg := &clabtypes.NodeConfig{ShortName: "fcling", LongName: "fcling", MgmtNet: network}
 	if err := lab.AllocateToolManagementIPs(ctx, cfg); err != nil {
-		return nil, fmt.Errorf("failed to allocate fcli management address: %w", err)
+		return nil, fmt.Errorf("failed to allocate fcling management address: %w", err)
 	}
 
 	args := []string{"--network", network}

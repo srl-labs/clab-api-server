@@ -138,6 +138,9 @@ func main() {
 	log.Info("Initializing Capture Manager...")
 	api.InitCaptureManager()
 
+	// --- Initialize fcling Manager ---
+	api.InitFclingManager()
+
 	// --- Initialize Authentication ---
 	log.Info("Initializing authentication...")
 	auth.InitAuth() // Initialize auth with server start time
@@ -293,6 +296,7 @@ func main() {
 	go api.ShutdownSSHManager() // No need to wait for this specifically unless it's critical
 	go api.ShutdownTerminalManager()
 	go api.ShutdownCaptureManager()
+	go api.ShutdownFclingManager()
 
 	// Attempt graceful shutdown of the HTTP server
 	if err := srv.Shutdown(ctx); err != nil {

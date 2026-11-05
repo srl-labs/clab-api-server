@@ -29,6 +29,8 @@ type Config struct {
 	CaptureWiresharkPullPolicy   string        `mapstructure:"CAPTURE_WIRESHARK_PULL_POLICY"`
 	CaptureWiresharkSessionTTL   time.Duration `mapstructure:"CAPTURE_WIRESHARK_SESSION_TTL"`
 	CaptureEdgesharkExtraEnvVars string        `mapstructure:"CAPTURE_EDGESHARK_EXTRA_ENV_VARS"`
+	FclingDockerImage            string        `mapstructure:"FCLING_DOCKER_IMAGE"`
+	FclingPullPolicy             string        `mapstructure:"FCLING_PULL_POLICY"`
 	LogLevel                     string        `mapstructure:"LOG_LEVEL"`
 	CORSAllowedOrigins           string        `mapstructure:"CORS_ALLOWED_ORIGINS"` // Comma-separated list of allowed browser origins
 	TLSEnable                    bool          `mapstructure:"TLS_ENABLE"`
@@ -81,6 +83,8 @@ func LoadConfig(envFilePath string) error {
 	viper.SetDefault("CAPTURE_WIRESHARK_PULL_POLICY", "always")
 	viper.SetDefault("CAPTURE_WIRESHARK_SESSION_TTL", "2h")
 	viper.SetDefault("CAPTURE_EDGESHARK_EXTRA_ENV_VARS", "")
+	viper.SetDefault("FCLING_DOCKER_IMAGE", "ghcr.io/srl-labs/fcling:latest")
+	viper.SetDefault("FCLING_PULL_POLICY", "always")
 	viper.SetDefault("LOG_LEVEL", "info")
 	viper.SetDefault("CORS_ALLOWED_ORIGINS", "")
 	viper.SetDefault("TLS_ENABLE", true)

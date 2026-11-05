@@ -721,18 +721,45 @@ definitions:
         $ref: '#/definitions/models.ClabExecInternalResult'
       type: array
     type: object
-  models.FcliCommandRequest:
+  models.FclingCommandRequest:
     properties:
       command:
+        example: bgp-peers
         type: string
     required:
     - command
     type: object
-  models.FcliCommandResponse:
+  models.FclingCommandResponse:
     properties:
       command:
         type: string
       output:
+        type: string
+    type: object
+  models.FclingEngineStatus:
+    properties:
+      containerName:
+        example: clab-lab01-fcling
+        type: string
+      error:
+        description: Error is the end of the engine's log, when it failed.
+        type: string
+      image:
+        example: ghcr.io/srl-labs/fcling:latest
+        type: string
+      startedAt:
+        example: "2026-11-05T14:08:47Z"
+        type: string
+      state:
+        description: |-
+          State is stopped without an engine, starting until it answers, ready then, and failed
+          once its container has exited.
+        enum:
+        - stopped
+        - starting
+        - ready
+        - failed
+        example: ready
         type: string
     type: object
   models.GenerateNodeTier:
@@ -3437,26 +3464,28 @@ paths:
     post:
       consumes:
       - application/json
-      description: Runs an fcli command against the selected lab topology.
+      deprecated: true
+      description: 'Deprecated: use POST /api/v1/labs/{labName}/fcling. Runs the same
+        fcling report.'
       parameters:
       - description: Lab Name
         in: path
         name: labName
         required: true
         type: string
-      - description: fcli command request
+      - description: fcling command request
         in: body
         name: fcli_request
         required: true
         schema:
-          $ref: '#/definitions/models.FcliCommandRequest'
+          $ref: '#/definitions/models.FclingCommandRequest'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/models.FcliCommandResponse'
+            $ref: '#/definitions/models.FclingCommandResponse'
         "400":
           description: Bad Request
           schema:
@@ -3473,9 +3502,374 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/models.ErrorResponse'
+        "501":
+          description: Not supported by the configured lab runtime
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
       security:
       - BearerAuth: []
-      summary: Run fcli command
+      summary: Run fcling report (old path)
+      tags:
+      - Labs - Tools
+  /api/v1/labs/{labName}/fcling:
+    post:
+      consumes:
+      - application/json
+      description: Runs an fcling report once against the selected lab topology and
+        returns its output.
+      parameters:
+      - description: Lab Name
+        in: path
+        name: labName
+        required: true
+        type: string
+      - description: fcling command request
+        in: body
+        name: fcling_request
+        required: true
+        schema:
+          $ref: '#/definitions/models.FclingCommandRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.FclingCommandResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "501":
+          description: Not supported by the configured lab runtime
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Run fcling report
+      tags:
+      - Labs - Tools
+  /api/v1/labs/{labName}/fcling/api/{proxyPath}:
+    delete:
+      consumes:
+      - application/json
+      description: 'Passes a request to the HTTP API of the lab''s running fcling
+        engine, with the engine''s own token, and streams its answer. Only these reach
+        it. GET: status, reports, reports/{name}, checks, incidents, acks, history,
+        drift, configs, configs/diff, baselines, lenses, lenses/{name}, topology,
+        events. POST: acks, baselines. DELETE: acks, baselines/{name}. Anything else
+        is refused with 403. A lab without a running engine answers 409.'
+      parameters:
+      - description: Lab Name
+        in: path
+        name: labName
+        required: true
+        type: string
+      - description: Path below the engine's /api, e.g. reports/bgp-peers
+        in: path
+        name: proxyPath
+        required: true
+        type: string
+      produces:
+      - application/json
+      - text/event-stream
+      responses:
+        "200":
+          description: The engine's answer
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Not part of the fabric API
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "409":
+          description: The engine is not running
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "501":
+          description: Not supported by the configured lab runtime
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "502":
+          description: The engine is not reachable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Proxy fcling engine API
+      tags:
+      - Labs - Tools
+    get:
+      consumes:
+      - application/json
+      description: 'Passes a request to the HTTP API of the lab''s running fcling
+        engine, with the engine''s own token, and streams its answer. Only these reach
+        it. GET: status, reports, reports/{name}, checks, incidents, acks, history,
+        drift, configs, configs/diff, baselines, lenses, lenses/{name}, topology,
+        events. POST: acks, baselines. DELETE: acks, baselines/{name}. Anything else
+        is refused with 403. A lab without a running engine answers 409.'
+      parameters:
+      - description: Lab Name
+        in: path
+        name: labName
+        required: true
+        type: string
+      - description: Path below the engine's /api, e.g. reports/bgp-peers
+        in: path
+        name: proxyPath
+        required: true
+        type: string
+      produces:
+      - application/json
+      - text/event-stream
+      responses:
+        "200":
+          description: The engine's answer
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Not part of the fabric API
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "409":
+          description: The engine is not running
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "501":
+          description: Not supported by the configured lab runtime
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "502":
+          description: The engine is not reachable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Proxy fcling engine API
+      tags:
+      - Labs - Tools
+    post:
+      consumes:
+      - application/json
+      description: 'Passes a request to the HTTP API of the lab''s running fcling
+        engine, with the engine''s own token, and streams its answer. Only these reach
+        it. GET: status, reports, reports/{name}, checks, incidents, acks, history,
+        drift, configs, configs/diff, baselines, lenses, lenses/{name}, topology,
+        events. POST: acks, baselines. DELETE: acks, baselines/{name}. Anything else
+        is refused with 403. A lab without a running engine answers 409.'
+      parameters:
+      - description: Lab Name
+        in: path
+        name: labName
+        required: true
+        type: string
+      - description: Path below the engine's /api, e.g. reports/bgp-peers
+        in: path
+        name: proxyPath
+        required: true
+        type: string
+      produces:
+      - application/json
+      - text/event-stream
+      responses:
+        "200":
+          description: The engine's answer
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: Not part of the fabric API
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "409":
+          description: The engine is not running
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "501":
+          description: Not supported by the configured lab runtime
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "502":
+          description: The engine is not reachable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Proxy fcling engine API
+      tags:
+      - Labs - Tools
+  /api/v1/labs/{labName}/fcling/engine:
+    delete:
+      description: Stops the lab's fcling engine. Its history is kept for the next
+        start, and goes when the lab is destroyed.
+      parameters:
+      - description: Lab Name
+        in: path
+        name: labName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.FclingEngineStatus'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "501":
+          description: Not supported by the configured lab runtime
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Stop fcling engine
+      tags:
+      - Labs - Tools
+    get:
+      description: 'Tells how the lab''s fcling engine is doing: `stopped` without
+        one, `starting` until it answers, `ready` then, `failed` once its container
+        has exited, with the end of its log.'
+      parameters:
+      - description: Lab Name
+        in: path
+        name: labName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.FclingEngineStatus'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "501":
+          description: Not supported by the configured lab runtime
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get fcling engine status
+      tags:
+      - Labs - Tools
+    post:
+      description: Starts the lab's fcling engine, which streams its SR Linux nodes
+        and keeps a history of what changes. An engine that runs is left alone. The
+        first start can take a while, since it pulls the image; poll the status until
+        it says `ready`.
+      parameters:
+      - description: Lab Name
+        in: path
+        name: labName
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.FclingEngineStatus'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "501":
+          description: Not supported by the configured lab runtime
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Start fcling engine
       tags:
       - Labs - Tools
   /api/v1/labs/{labName}/gotty/{action}:

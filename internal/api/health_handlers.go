@@ -67,6 +67,9 @@ var serverFeatures = []string{
 	// host-scripts: script buttons run scripts on this host as the signed-in user (only with
 	// API_HOST_SCRIPTS=true, and never with a lab runtime).
 	"host-scripts",
+	// fcling: fcling reports and a fabric engine per lab (POST /fcling, /fcling/engine and
+	// /fcling/api). With Docker and Podman only.
+	"fcling",
 }
 
 // containerRuntimeOnlyFeatures need Docker or Podman on the server host.
@@ -76,6 +79,7 @@ var containerRuntimeOnlyFeatures = map[string]bool{
 	"snapshot-save":  true,
 	"deploy-restore": true,
 	"host-scripts":   true,
+	"fcling":         true,
 }
 
 // labRuntimeOnlyFeatures need a lab runtime (c9s).

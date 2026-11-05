@@ -114,7 +114,7 @@ func TestContainerRuntimeOnlyServiceCallsRefuseLabRuntime(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotSupportedByLabRuntime)
 	_, err = svc.PullRuntimeImage(ctx, "alpine")
 	require.ErrorIs(t, err, ErrNotSupportedByLabRuntime)
-	_, err = svc.RunFcliCommand(ctx, FcliRunOptions{})
+	_, err = svc.RunFclingCommand(ctx, FclingRunOptions{})
 	require.ErrorIs(t, err, ErrNotSupportedByLabRuntime)
 	_, err = svc.SaveSnapshots(ctx, SnapshotSaveOptions{LabName: "lab1"})
 	require.ErrorIs(t, err, ErrNotSupportedByLabRuntime)

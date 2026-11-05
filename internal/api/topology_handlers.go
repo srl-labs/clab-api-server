@@ -237,6 +237,7 @@ func GenerateTopologyHandler(c *gin.Context) {
 		// --- Execute deployment ---
 		log.Infof("GenerateTopology user '%s': Deploying generated topology '%s' from '%s'...", username, req.Name, targetFilePath)
 
+		stopFclingEngine(req.Name)
 		containers, deployErr := svc.Deploy(ctx, clab.DeployOptions{
 			TopoPath:    targetFilePath,
 			LabName:     req.Name,

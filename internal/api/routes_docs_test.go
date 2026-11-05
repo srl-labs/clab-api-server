@@ -95,5 +95,6 @@ func isProxyImplementationDetail(method, path string) bool {
 		return false
 	}
 	return path == "/api/v1/capture/wireshark-vnc-sessions/{sessionId}/vnc/{proxyPath}" ||
-		path == "/api/v1/labs/{labName}/nodes/{nodeName}/ports/{port}/proxy/{proxyPath}"
+		path == "/api/v1/labs/{labName}/nodes/{nodeName}/ports/{port}/proxy/{proxyPath}" ||
+		path == "/api/v1/labs/{labName}/fcling/api/{proxyPath}"
 }
