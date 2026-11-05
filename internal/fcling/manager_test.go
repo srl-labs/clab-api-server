@@ -110,7 +110,7 @@ func engineAt(t *testing.T, token string) string {
 func TestReportArgsGiveTablesAWidth(t *testing.T) {
 	args := ReportArgs(Config{}, []string{"--network", "clab"}, "/labs/lab1.clab.yml", []string{"bgp-peers", "-d"})
 	require.Equal(t, []string{
-		"run", "--pull", "always", "--rm", "-e", "COLUMNS=400",
+		"run", "--pull", "missing", "--rm", "-e", "COLUMNS=400",
 		"--network", "clab",
 		"-v", "/etc/hosts:/etc/hosts:ro",
 		"-v", "/labs/lab1.clab.yml:/topo.yml",
@@ -124,7 +124,11 @@ func TestReportArgsGiveTablesAWidth(t *testing.T) {
 	require.Contains(t, args, "example/fcling:1")
 
 	args = ReportArgs(Config{PullPolicy: "sometimes"}, nil, "/t.yml", []string{"lldp"})
-	require.Contains(t, strings.Join(args, " "), "--pull always", "an unknown policy falls back to the default")
+	require.Contains(t, strings.Join(args, " "), "--pull missing", "an unknown policy falls back to the default")
+}
+
+func TestDefaultImageIsPinned(t *testing.T) {
+	require.Regexp(t, `:\d+\.\d+\.\d+$`, DefaultImage, "clients read the fields of its API: bump it on purpose")
 }
 
 func TestContainerNamesAndLabs(t *testing.T) {

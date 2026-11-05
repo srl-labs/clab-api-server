@@ -8756,7 +8756,7 @@ const docTemplate = `{
                 },
                 "image": {
                     "type": "string",
-                    "example": "ghcr.io/srl-labs/fcling:latest"
+                    "example": "ghcr.io/srl-labs/fcling:0.9.0"
                 },
                 "startedAt": {
                     "type": "string",

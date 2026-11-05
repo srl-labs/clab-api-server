@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+
+	"github.com/srl-labs/clab-api-server/internal/fcling"
 )
 
 type Config struct {
@@ -83,8 +85,8 @@ func LoadConfig(envFilePath string) error {
 	viper.SetDefault("CAPTURE_WIRESHARK_PULL_POLICY", "always")
 	viper.SetDefault("CAPTURE_WIRESHARK_SESSION_TTL", "2h")
 	viper.SetDefault("CAPTURE_EDGESHARK_EXTRA_ENV_VARS", "")
-	viper.SetDefault("FCLING_DOCKER_IMAGE", "ghcr.io/srl-labs/fcling:latest")
-	viper.SetDefault("FCLING_PULL_POLICY", "always")
+	viper.SetDefault("FCLING_DOCKER_IMAGE", fcling.DefaultImage)
+	viper.SetDefault("FCLING_PULL_POLICY", fcling.DefaultPullPolicy)
 	viper.SetDefault("LOG_LEVEL", "info")
 	viper.SetDefault("CORS_ALLOWED_ORIGINS", "")
 	viper.SetDefault("TLS_ENABLE", true)

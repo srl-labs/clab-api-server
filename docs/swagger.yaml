@@ -745,7 +745,7 @@ definitions:
         description: Error is the end of the engine's log, when it failed.
         type: string
       image:
-        example: ghcr.io/srl-labs/fcling:latest
+        example: ghcr.io/srl-labs/fcling:0.9.0
         type: string
       startedAt:
         example: "2026-11-05T14:08:47Z"

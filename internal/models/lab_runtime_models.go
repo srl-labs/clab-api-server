@@ -60,7 +60,7 @@ type FclingEngineStatus struct {
 	// State is stopped without an engine, starting until it answers, ready then, and failed
 	// once its container has exited.
 	State         string `json:"state" enums:"stopped,starting,ready,failed" example:"ready"`
-	Image         string `json:"image,omitempty" example:"ghcr.io/srl-labs/fcling:latest"`
+	Image         string `json:"image,omitempty" example:"ghcr.io/srl-labs/fcling:0.9.0"`
 	ContainerName string `json:"containerName,omitempty" example:"clab-lab01-fcling"`
 	StartedAt     string `json:"startedAt,omitempty" example:"2026-11-05T14:08:47Z"`
 	// Error is the end of the engine's log, when it failed.

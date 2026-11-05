@@ -25,9 +25,12 @@ import (
 
 const (
 	// DefaultImage is the image of the reports and the engine (FCLING_DOCKER_IMAGE).
-	DefaultImage = "ghcr.io/srl-labs/fcling:latest"
-	// DefaultPullPolicy is when that image is pulled (FCLING_PULL_POLICY).
-	DefaultPullPolicy = "always"
+	// Pinned: clients read the fields of its API, so a new release is a change to test and
+	// bump here, with containerlab-app's FCLING_IMAGE.
+	DefaultImage = "ghcr.io/srl-labs/fcling:0.9.0"
+	// DefaultPullPolicy is when that image is pulled (FCLING_PULL_POLICY). The image is
+	// pinned, so the one at hand is the right one, also offline.
+	DefaultPullPolicy = "missing"
 
 	// LabLabel names an engine's lab. It is not containerlab's own label on purpose:
 	// `containerlab inspect` would list the engine as a node of the lab.
