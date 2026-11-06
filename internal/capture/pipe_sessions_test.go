@@ -349,3 +349,22 @@ func TestContainerRuntimeAvailableIsCached(t *testing.T) {
 	runner.responses[commandKey("docker", []string{"version", "--format", "{{.Server.Version}}"})] = "29.0.0"
 	require.True(t, manager.ContainerRuntimeAvailable(context.Background()))
 }
+
+func TestPipeSessionMountsTheLabDirectory(t *testing.T) {
+	manager, runner, _ := newPipeTestManager(t)
+	capture := &fakeCapture{ended: make(chan error, 1)}
+	sessions, err := manager.CreatePipeWiresharkSessions(context.Background(), CreatePipeWiresharkSessionsOptions{
+		Username: "alice",
+		LabName:  "lab1",
+		Specs: []WiresharkPipeSpec{{
+			ContainerName:  "clab-lab1-n1",
+			InterfaceNames: []string{"eth1"},
+			LabDirectory:   "/home/alice/labs",
+			Capture:        capture.run,
+		}},
+	})
+	require.NoError(t, err)
+	require.Contains(t, strings.Join(runner.commandArgsContaining("run", "example/wireshark:test"), " "),
+		"-v /home/alice/labs:/pcaps", "Wireshark saves captures next to the lab")
+	require.NoError(t, manager.CloseSession(context.Background(), sessions[0].SessionID, "alice", false))
+}

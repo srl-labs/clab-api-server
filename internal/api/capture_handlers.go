@@ -45,7 +45,7 @@ func mapCaptureSessionError(c *gin.Context, err error) bool {
 func mapCaptureOperationError(c *gin.Context, err error) {
 	if errors.Is(err, capture.ErrEdgeSharkNotRunning) {
 		c.JSON(http.StatusServiceUnavailable, models.ErrorResponse{
-			Error: "Edgeshark is not running. Start it from settings before launching capture.",
+			Error: "Edgeshark is not running. Start it from settings to capture this way; without it, lab link interfaces can be captured, but not the management interface.",
 		})
 		return
 	}
@@ -527,11 +527,11 @@ func CreateWiresharkVncSessionsHandler(c *gin.Context) {
 		return
 	}
 
-	if clab.IsLabRuntime() {
-		createLabRuntimeWiresharkSessions(c, manager, username, labName, req)
+	if createPipeWiresharkSessions(c, manager, username, labName, req) {
 		return
 	}
 
+	// With Docker and Podman, what a capture stream cannot capture goes through Edgeshark.
 	specs, ok := buildCaptureSpecs(c, username, labName, req.Targets)
 	if !ok {
 		return

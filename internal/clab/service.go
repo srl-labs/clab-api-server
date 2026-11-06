@@ -66,6 +66,8 @@ type Service struct {
 	// scoper places lab runtime calls in namespaces and identities; nil uses the
 	// server's own credentials.
 	scoper LabScoper
+	// localCaptureLab opens Docker and Podman labs for capture; nil loads them with containerlab.
+	localCaptureLab func(labName string) (LocalCaptureLab, error)
 }
 
 // NewService creates a new containerlab service.

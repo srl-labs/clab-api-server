@@ -132,8 +132,8 @@ func SetupRoutes(router *gin.Engine) {
 				labSpecific.POST("/capture/packetflix", requireContainerRuntime("Edgeshark packet capture"), BuildPacketflixCaptureHandler) // POST /api/v1/labs/{labName}/capture/packetflix
 				labSpecific.POST("/capture/wireshark-vnc-sessions", requireWiresharkVnc(), CreateWiresharkVncSessionsHandler)               // POST /api/v1/labs/{labName}/capture/wireshark-vnc-sessions
 				// Lab runtime (c9s) capture through clabwire
-				labSpecific.GET("/capture/interfaces", requireLabRuntimeCapture(), ListCaptureInterfacesHandler) // GET /api/v1/labs/{labName}/capture/interfaces
-				labSpecific.GET("/capture/stream", requireLabRuntimeCapture(), StreamCaptureHandler)             // GET /api/v1/labs/{labName}/capture/stream
+				labSpecific.GET("/capture/interfaces", ListCaptureInterfacesHandler) // GET /api/v1/labs/{labName}/capture/interfaces
+				labSpecific.GET("/capture/stream", StreamCaptureHandler)             // GET /api/v1/labs/{labName}/capture/stream
 
 				// Sharing + tools
 				labSpecific.POST("/sshx/:action", requireContainerRuntime("SSHX sharing"), LabSSHXShareHandler)     // POST /api/v1/labs/{labName}/sshx/{action}
