@@ -33,6 +33,8 @@ type Config struct {
 	CaptureEdgesharkExtraEnvVars string        `mapstructure:"CAPTURE_EDGESHARK_EXTRA_ENV_VARS"`
 	FclingDockerImage            string        `mapstructure:"FCLING_DOCKER_IMAGE"`
 	FclingPullPolicy             string        `mapstructure:"FCLING_PULL_POLICY"`
+	FclingGnmiPort               int           `mapstructure:"FCLING_GNMI_PORT"`
+	FclingStateDir               string        `mapstructure:"FCLING_STATE_DIR"`
 	LogLevel                     string        `mapstructure:"LOG_LEVEL"`
 	CORSAllowedOrigins           string        `mapstructure:"CORS_ALLOWED_ORIGINS"` // Comma-separated list of allowed browser origins
 	TLSEnable                    bool          `mapstructure:"TLS_ENABLE"`
@@ -62,6 +64,17 @@ type Config struct {
 
 var AppConfig Config
 
+// FclingConfig is how the server runs fcling.
+func FclingConfig() fcling.Config {
+	return fcling.Config{
+		Runtime:    AppConfig.ClabRuntime,
+		Image:      AppConfig.FclingDockerImage,
+		PullPolicy: AppConfig.FclingPullPolicy,
+		GnmiPort:   AppConfig.FclingGnmiPort,
+		StateDir:   AppConfig.FclingStateDir,
+	}
+}
+
 // LoadConfig loads configuration from the specified .env file path and environment variables.
 func LoadConfig(envFilePath string) error {
 	// Use the provided file path
@@ -87,6 +100,8 @@ func LoadConfig(envFilePath string) error {
 	viper.SetDefault("CAPTURE_EDGESHARK_EXTRA_ENV_VARS", "")
 	viper.SetDefault("FCLING_DOCKER_IMAGE", fcling.DefaultImage)
 	viper.SetDefault("FCLING_PULL_POLICY", fcling.DefaultPullPolicy)
+	viper.SetDefault("FCLING_GNMI_PORT", fcling.DefaultGnmiPort)
+	viper.SetDefault("FCLING_STATE_DIR", fcling.DefaultStateDir)
 	viper.SetDefault("LOG_LEVEL", "info")
 	viper.SetDefault("CORS_ALLOWED_ORIGINS", "")
 	viper.SetDefault("TLS_ENABLE", true)

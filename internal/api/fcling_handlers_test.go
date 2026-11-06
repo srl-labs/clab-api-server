@@ -49,7 +49,7 @@ exit 0
 
 	fclingManagerMu.Lock()
 	previous := fclingManager
-	fclingManager = fcling.NewManager(fcling.Config{Runtime: "docker"})
+	fclingManager = fcling.NewManager(fcling.Config{Runtime: "docker", StateDir: filepath.Join(dir, "state")})
 	fclingManagerMu.Unlock()
 	t.Cleanup(func() {
 		ShutdownFclingManager()
@@ -89,6 +89,7 @@ func fclingEngineRoutes(api *c9sAPI) *gin.Engine {
 	router := gin.New()
 	labs := router.Group("/labs/:labName", func(c *gin.Context) { c.Set("username", api.username) })
 	labs.GET("/fcling/engine", GetFclingEngineHandler)
+	labs.POST("/fcling/engine", StartFclingEngineHandler)
 	labs.DELETE("/fcling/engine", StopFclingEngineHandler)
 	labs.Any("/fcling/api/*proxyPath", ProxyFclingAPIHandler)
 	return router
@@ -115,7 +116,7 @@ func TestFclingEngineStatusThroughTheRoute(t *testing.T) {
 
 	recorder := fclingRequest(router, http.MethodGet, "/labs/lab1/fcling/engine")
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-	require.JSONEq(t, `{"state":"stopped"}`, recorder.Body.String(), "empty fields are left out")
+	require.JSONEq(t, `{"state":"stopped","gnmiPort":57400}`, recorder.Body.String(), "empty fields are left out")
 
 	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer engine-token" {
@@ -126,7 +127,7 @@ func TestFclingEngineStatusThroughTheRoute(t *testing.T) {
 	writeFclingContainer(t, dir, "running", true, portOf(t, engine), "engine-token")
 	recorder = fclingRequest(router, http.MethodGet, "/labs/lab1/fcling/engine")
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-	require.JSONEq(t, `{"state":"ready","image":"example/fcling:test","containerName":"clab-lab1-fcling","startedAt":"2026-11-05T14:08:47Z"}`, recorder.Body.String())
+	require.JSONEq(t, `{"state":"ready","image":"example/fcling:test","containerName":"clab-lab1-fcling","startedAt":"2026-11-05T14:08:47Z","gnmiPort":57400}`, recorder.Body.String())
 
 	writeFclingContainer(t, dir, "exited", false, "", "engine-token")
 	recorder = fclingRequest(router, http.MethodGet, "/labs/lab1/fcling/engine")
@@ -141,6 +142,27 @@ func TestFclingEngineStatusThroughTheRoute(t *testing.T) {
 	log := fclingDockerLog(t, dir)
 	require.Contains(t, log, "rm -f clab-lab1-fcling")
 	require.NotContains(t, log, "volume rm -f clab-lab1-fcling", "stopping keeps the history")
+}
+
+func TestFclingEngineStartRefusesWhatIsNotAGnmiPort(t *testing.T) {
+	api := newC9sAPI(t)
+	api.addLab("lab1", "n1")
+	dir := fclingDocker(t)
+	router := fclingEngineRoutes(api)
+
+	for body, want := range map[string]string{
+		`{"gnmiPort":70000}`:   "between 1 and 65535",
+		`{"gnmiPort":-1}`:      "between 1 and 65535",
+		`{"gnmiPort":"57410"}`: "Invalid request body",
+		`not json`:             "Invalid request body",
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/labs/lab1/fcling/engine", strings.NewReader(body))
+		router.ServeHTTP(recorder, request)
+		require.Equal(t, http.StatusBadRequest, recorder.Code, body)
+		require.Contains(t, recorder.Body.String(), want, body)
+	}
+	require.Empty(t, fclingDockerLog(t, dir), "nothing is started")
 }
 
 func TestFclingEngineRoutesCheckTheLab(t *testing.T) {

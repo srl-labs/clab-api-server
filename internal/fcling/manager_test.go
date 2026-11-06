@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -108,7 +110,7 @@ func engineAt(t *testing.T, token string) string {
 }
 
 func TestReportArgsGiveTablesAWidth(t *testing.T) {
-	args := ReportArgs(Config{}, []string{"--network", "clab"}, "/labs/lab1.clab.yml", []string{"bgp-peers", "-d"})
+	args := ReportArgs(Config{}, []string{"--network", "clab"}, "/labs/lab1.clab.yml", DefaultGnmiPort, []string{"bgp-peers", "-d"})
 	require.Equal(t, []string{
 		"run", "--pull", "missing", "--rm", "-e", "COLUMNS=400",
 		"--network", "clab",
@@ -119,11 +121,11 @@ func TestReportArgsGiveTablesAWidth(t *testing.T) {
 		"bgp-peers", "-d",
 	}, args)
 
-	args = ReportArgs(Config{Image: "example/fcling:1", PullPolicy: "Never"}, nil, "/t.yml", []string{"lldp"})
+	args = ReportArgs(Config{Image: "example/fcling:1", PullPolicy: "Never"}, nil, "/t.yml", 0, []string{"lldp"})
 	require.Contains(t, strings.Join(args, " "), "--pull never")
 	require.Contains(t, args, "example/fcling:1")
 
-	args = ReportArgs(Config{PullPolicy: "sometimes"}, nil, "/t.yml", []string{"lldp"})
+	args = ReportArgs(Config{PullPolicy: "sometimes"}, nil, "/t.yml", 0, []string{"lldp"})
 	require.Contains(t, strings.Join(args, " "), "--pull missing", "an unknown policy falls back to the default")
 }
 
@@ -172,6 +174,7 @@ func TestStartRunsTheEngine(t *testing.T) {
 		"--pull", "missing",
 		"--name", "clab-lab1-fcling",
 		"--label", "clab-fcling-lab=lab1",
+		"--label", "clab-fcling-gnmi-port=57400",
 		"--network", "mgmt1", "--ip", "172.20.20.9",
 		"-p", "127.0.0.1::8765",
 		"-v", "/labs/lab1.clab.yml:/topo.yml:ro",
@@ -191,6 +194,102 @@ func TestStartRunsTheEngine(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, token, 64)
 	require.NotContains(t, line, token, "the token stays out of the process list")
+}
+
+func TestReportsAndEnginesGoToTheLabsPort(t *testing.T) {
+	cfg := Config{StateDir: t.TempDir()}
+	require.Equal(t, DefaultGnmiPort, cfg.LabGnmiPort("lab1"))
+	require.Equal(t, 57411, Config{StateDir: cfg.StateDir, GnmiPort: 57411}.LabGnmiPort("lab1"), "the server's port")
+	require.Equal(t, DefaultGnmiPort, Config{StateDir: cfg.StateDir, GnmiPort: 70000}.LabGnmiPort("lab1"), "not a port")
+
+	require.NoError(t, cfg.normalized().saveGnmiPort("lab1", 57410))
+	require.Equal(t, 57410, Config{StateDir: cfg.StateDir, GnmiPort: 57411}.LabGnmiPort("lab1"), "the lab's own comes first")
+	require.Equal(t, DefaultGnmiPort, cfg.LabGnmiPort("lab2"), "only that lab's")
+
+	// A global option of fcling, so before the command.
+	args := strings.Join(ReportArgs(cfg, nil, "/t.yml", 57410, []string{"lldp"}), " ")
+	require.Contains(t, args, DefaultImage+" -p 57410 -t /topo.yml lldp")
+	args = strings.Join(ReportArgs(cfg, nil, "/t.yml", DefaultGnmiPort, []string{"lldp"}), " ")
+	require.NotContains(t, args, " -p ", "an image with a port of its own keeps it unless one is chosen")
+}
+
+func TestStartWithAPortKeepsItForTheNextEngine(t *testing.T) {
+	runner := &fakeRunner{failures: map[string]error{"container inspect": errNoContainer}}
+	m := newManager(Config{StateDir: filepath.Join(t.TempDir(), "not", "there", "yet")}, runner)
+
+	status, err := m.Start(context.Background(), StartOptions{LabName: "lab1", TopologyPath: "/t.yml", GnmiPort: 57410})
+	require.NoError(t, err)
+	require.Equal(t, 57410, status.GnmiPort)
+	line := strings.Join(runner.runOf("run ").args, " ")
+	require.Contains(t, line, "--label clab-fcling-gnmi-port=57410")
+	require.Contains(t, line, DefaultImage+" -p 57410 -t /topo.yml serve")
+
+	runner.runs = nil
+	_, err = m.Start(context.Background(), StartOptions{LabName: "lab1", TopologyPath: "/t.yml"})
+	require.NoError(t, err)
+	require.Contains(t, strings.Join(runner.runOf("run ").args, " "), "-p 57410", "a start that names no port keeps the lab's")
+}
+
+func TestStartReportsAPortThatCannotBeSaved(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "a-file")
+	require.NoError(t, os.WriteFile(file, nil, 0o600))
+	runner := &fakeRunner{failures: map[string]error{"container inspect": errNoContainer}}
+	m := newManager(Config{StateDir: file}, runner)
+
+	_, err := m.Start(context.Background(), StartOptions{LabName: "lab1", TopologyPath: "/t.yml", GnmiPort: 57410})
+	require.ErrorContains(t, err, "failed saving the gNMI port of lab 'lab1'")
+	require.Nil(t, runner.runOf("run "))
+}
+
+func TestStartOnAnotherPortReplacesARunningEngine(t *testing.T) {
+	const token = "engine-token"
+	inspected := func(port string) string {
+		var containers []map[string]any
+		require.NoError(t, json.Unmarshal([]byte(inspectJSON(t, "running", true, engineAt(t, token), token)), &containers))
+		containers[0]["Config"].(map[string]any)["Labels"] = map[string]string{GnmiPortLabel: port}
+		encoded, err := json.Marshal(containers)
+		require.NoError(t, err)
+		return string(encoded)
+	}
+	start := func(t *testing.T, running string, port int) (*fakeRunner, Status) {
+		t.Helper()
+		runner := &fakeRunner{responses: map[string]string{"container inspect": inspected(running)}}
+		m := newManager(Config{StateDir: t.TempDir()}, runner)
+		status, err := m.Start(context.Background(), StartOptions{LabName: "lab1", TopologyPath: "/t.yml", GnmiPort: port})
+		require.NoError(t, err)
+		return runner, status
+	}
+
+	t.Run("another port", func(t *testing.T) {
+		runner, _ := start(t, "57400", 57410)
+		lines := runner.lines()
+		stop := slices.Index(lines, "stop -t 5 clab-lab1-fcling")
+		remove := slices.Index(lines, "rm -f clab-lab1-fcling")
+		require.GreaterOrEqual(t, stop, 0, "a clean stop, for the history to close")
+		require.Greater(t, remove, stop)
+		require.Contains(t, strings.Join(runner.runOf("run ").args, " "), "-p 57410")
+		require.Nil(t, runner.runOf("volume "), "the history stays")
+	})
+
+	t.Run("an engine that does not say", func(t *testing.T) {
+		runner, _ := start(t, "", 57410)
+		require.Contains(t, strings.Join(runner.runOf("run ").args, " "), "-p 57410", "it may be on any port")
+	})
+
+	t.Run("the same port", func(t *testing.T) {
+		runner, status := start(t, "57410", 57410)
+		require.Equal(t, StateReady, status.State)
+		require.Equal(t, 57410, status.GnmiPort)
+		require.Nil(t, runner.runOf("run "))
+		require.Nil(t, runner.runOf("stop "))
+	})
+
+	t.Run("no port", func(t *testing.T) {
+		runner, status := start(t, "57410", 0)
+		require.Equal(t, 57410, status.GnmiPort, "what the running engine uses")
+		require.Nil(t, runner.runOf("run "))
+		require.Nil(t, runner.runOf("stop "))
+	})
 }
 
 func TestStartTwoLabsTokensDiffer(t *testing.T) {
@@ -272,7 +371,7 @@ func TestStatusStates(t *testing.T) {
 		m := newManager(Config{}, &fakeRunner{failures: map[string]error{"container inspect": errNoContainer}})
 		status, err := m.Status(context.Background(), "lab1")
 		require.NoError(t, err)
-		require.Equal(t, Status{State: StateStopped}, status)
+		require.Equal(t, Status{State: StateStopped, GnmiPort: DefaultGnmiPort}, status)
 	})
 
 	t.Run("an empty listing is stopped", func(t *testing.T) {
@@ -293,6 +392,7 @@ func TestStatusStates(t *testing.T) {
 			Image:         "example/fcling:test",
 			ContainerName: "clab-lab1-fcling",
 			StartedAt:     "2026-11-05T14:08:47.5Z",
+			GnmiPort:      DefaultGnmiPort,
 		}, status)
 	})
 

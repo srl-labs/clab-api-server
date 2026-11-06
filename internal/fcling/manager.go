@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -64,6 +65,10 @@ type Config struct {
 	Runtime    string
 	Image      string
 	PullPolicy string
+	// GnmiPort is the port of the nodes of labs without one of their own (FCLING_GNMI_PORT).
+	GnmiPort int
+	// StateDir is where the port chosen for each lab is kept.
+	StateDir string
 }
 
 func (c Config) normalized() Config {
@@ -77,6 +82,13 @@ func (c Config) normalized() Config {
 	default:
 		c.PullPolicy = DefaultPullPolicy
 	}
+	if !ValidGnmiPort(c.GnmiPort) {
+		c.GnmiPort = DefaultGnmiPort
+	}
+	c.StateDir = strings.TrimSpace(c.StateDir)
+	if c.StateDir == "" {
+		c.StateDir = DefaultStateDir
+	}
 	return c
 }
 
@@ -89,7 +101,7 @@ func (c Config) runtimeBinary() string {
 
 // ReportArgs is the runtime command line of a one-shot report. Without a terminal fcling
 // squeezes its tables into 80 columns, which leaves them unreadable, so it gets a width.
-func ReportArgs(cfg Config, networkArgs []string, topologyPath string, commandArgs []string) []string {
+func ReportArgs(cfg Config, networkArgs []string, topologyPath string, gnmiPort int, commandArgs []string) []string {
 	cfg = cfg.normalized()
 	args := []string{"run", "--pull", cfg.PullPolicy, "--rm", "-e", "COLUMNS=400"}
 	args = append(args, networkArgs...)
@@ -97,8 +109,9 @@ func ReportArgs(cfg Config, networkArgs []string, topologyPath string, commandAr
 		"-v", "/etc/hosts:/etc/hosts:ro",
 		"-v", topologyPath+":/topo.yml",
 		cfg.Image,
-		"-t", "/topo.yml",
 	)
+	args = append(args, gnmiPortArgs(gnmiPort)...)
+	args = append(args, "-t", "/topo.yml")
 	return append(args, commandArgs...)
 }
 
@@ -122,6 +135,8 @@ type Status struct {
 	Image         string
 	ContainerName string
 	StartedAt     string
+	// GnmiPort is the port the engine reaches the nodes on, or will when it starts.
+	GnmiPort int
 	// Error is the end of the engine's log, when it failed.
 	Error string
 }
@@ -130,6 +145,9 @@ type Status struct {
 type StartOptions struct {
 	LabName      string
 	TopologyPath string
+	// GnmiPort is a new port for the lab's nodes, which replaces an engine on another one and
+	// is kept for the next. Without it, the lab's port stays and a running engine is left alone.
+	GnmiPort int
 	// NetworkArgs attaches the engine to the lab's management network. It is called only
 	// when an engine is really started, since it can reserve an address.
 	NetworkArgs func(ctx context.Context) ([]string, error)
@@ -224,13 +242,14 @@ func (m *Manager) Status(ctx context.Context, labName string) (Status, error) {
 		return Status{}, err
 	}
 	if container == nil {
-		return Status{State: StateStopped}, nil
+		return Status{State: StateStopped, GnmiPort: m.cfg.LabGnmiPort(labName)}, nil
 	}
 
 	status := Status{
 		Image:         container.Config.Image,
 		ContainerName: ContainerName(labName),
 		StartedAt:     container.startedAt(),
+		GnmiPort:      m.engineGnmiPort(container, labName),
 	}
 	switch {
 	case container.State.Running:
@@ -247,20 +266,39 @@ func (m *Manager) Status(ctx context.Context, labName string) (Status, error) {
 	return status, nil
 }
 
+// engineGnmiPort is the port of an engine that runs, as it was started; what the next one
+// will use otherwise.
+func (m *Manager) engineGnmiPort(container *containerInspect, labName string) int {
+	if container.State.Running || container.isBeingStarted() {
+		if port := container.startedGnmiPort(); port != 0 {
+			return port
+		}
+	}
+	return m.cfg.LabGnmiPort(labName)
+}
+
 // Start starts a lab's engine and returns its status. An engine that runs is left alone, so
-// it keeps its history; one that has exited is replaced.
+// it keeps its history, unless it is on another port than the one asked for; one that has
+// exited is replaced. A replaced engine's history stays in its volume.
 func (m *Manager) Start(ctx context.Context, opts StartOptions) (Status, error) {
 	defer m.labLock(opts.LabName)()
+
+	if opts.GnmiPort != 0 {
+		if err := m.cfg.saveGnmiPort(opts.LabName, opts.GnmiPort); err != nil {
+			return Status{}, err
+		}
+	}
 
 	container, err := m.inspect(ctx, opts.LabName)
 	if err != nil {
 		return Status{}, err
 	}
 	if container != nil {
-		if container.State.Running || container.isBeingStarted() {
+		active := container.State.Running || container.isBeingStarted()
+		if active && (opts.GnmiPort == 0 || opts.GnmiPort == container.startedGnmiPort()) {
 			return m.Status(ctx, opts.LabName)
 		}
-		if err := m.removeContainer(ctx, opts.LabName); err != nil {
+		if err := m.stopContainer(ctx, opts.LabName); err != nil {
 			return Status{}, err
 		}
 	}
@@ -278,7 +316,7 @@ func (m *Manager) Start(ctx context.Context, opts StartOptions) (Status, error) 
 	// The token goes through the runtime CLI's environment, which other users on the host
 	// cannot read in a process listing.
 	env := []string{engineTokenEnv + "=" + token}
-	args := engineRunArgs(m.cfg, opts, networkArgs)
+	args := engineRunArgs(m.cfg, opts, networkArgs, m.cfg.LabGnmiPort(opts.LabName))
 	if _, err := m.runner.Run(ctx, m.cfg.runtimeBinary(), args, env); err != nil {
 		// A run that fails at the network or the port leaves its container created.
 		if cleanupErr := m.removeContainer(ctx, opts.LabName); cleanupErr != nil {
@@ -289,31 +327,36 @@ func (m *Manager) Start(ctx context.Context, opts StartOptions) (Status, error) 
 	return m.Status(ctx, opts.LabName)
 }
 
-func engineRunArgs(cfg Config, opts StartOptions, networkArgs []string) []string {
+func engineRunArgs(cfg Config, opts StartOptions, networkArgs []string, gnmiPort int) []string {
 	name := ContainerName(opts.LabName)
 	args := []string{
 		"run", "-d",
 		"--pull", cfg.PullPolicy,
 		"--name", name,
 		"--label", LabLabel + "=" + opts.LabName,
+		"--label", GnmiPortLabel + "=" + strconv.Itoa(gnmiPort),
 	}
 	args = append(args, networkArgs...)
-	return append(args,
+	args = append(args,
 		// The runtime picks the port; the server reads it back. Reachable from this host only.
 		"-p", "127.0.0.1::"+engineAPIPort,
 		"-v", opts.TopologyPath+":/topo.yml:ro",
 		"-v", name+":/state",
 		"-e", engineTokenEnv,
 		cfg.Image,
-		"-t", "/topo.yml",
-		"serve", "--host", "0.0.0.0", "--no-tls", "--persist-acks",
 	)
+	args = append(args, gnmiPortArgs(gnmiPort)...)
+	return append(args, "-t", "/topo.yml", "serve", "--host", "0.0.0.0", "--no-tls", "--persist-acks")
 }
 
 // Stop stops a lab's engine and keeps its history for the next one.
 func (m *Manager) Stop(ctx context.Context, labName string) error {
 	defer m.labLock(labName)()
+	return m.stopContainer(ctx, labName)
+}
 
+// stopContainer needs the lab's lock.
+func (m *Manager) stopContainer(ctx context.Context, labName string) error {
 	// A clean stop first, for the history to close; fcling stops within a second.
 	if _, err := m.run(ctx, "stop", "-t", stopGraceSecs, ContainerName(labName)); err != nil && !isNotFound(err) {
 		log.Debugf("fcling: stopping the engine of lab '%s': %v", labName, err)
@@ -364,8 +407,9 @@ type containerInspect struct {
 		StartedAt string `json:"StartedAt"`
 	} `json:"State"`
 	Config struct {
-		Image string   `json:"Image"`
-		Env   []string `json:"Env"`
+		Image  string            `json:"Image"`
+		Env    []string          `json:"Env"`
+		Labels map[string]string `json:"Labels"`
 	} `json:"Config"`
 	NetworkSettings struct {
 		Ports map[string][]struct {
@@ -380,6 +424,11 @@ func (c *containerInspect) isBeingStarted() bool {
 		return true
 	}
 	return false
+}
+
+// startedGnmiPort is the port the container was started with; 0 for one that does not say.
+func (c *containerInspect) startedGnmiPort() int {
+	return parseGnmiPort(c.Config.Labels[GnmiPortLabel])
 }
 
 func (c *containerInspect) startedAt() string {

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -87,6 +88,7 @@ func RunLabFclingHandler(c *gin.Context) {
 
 	output, runErr := svc.RunFclingCommand(ctx, clab.FclingRunOptions{
 		Runtime:      config.AppConfig.ClabRuntime,
+		LabName:      labName,
 		TopologyPath: topoPath,
 		CommandArgs:  commandArgs,
 	})
@@ -150,6 +152,7 @@ func fclingEngineStatusResponse(status fcling.Status) models.FclingEngineStatus 
 		Image:         status.Image,
 		ContainerName: status.ContainerName,
 		StartedAt:     status.StartedAt,
+		GnmiPort:      status.GnmiPort,
 		Error:         status.Error,
 	}
 }
@@ -183,11 +186,13 @@ func GetFclingEngineHandler(c *gin.Context) {
 }
 
 // @Summary Start fcling engine
-// @Description Starts the lab's fcling engine, which streams its SR Linux nodes and keeps a history of what changes. An engine that runs is left alone. The first start can take a while, since it pulls the image; poll the status until it says `ready`.
+// @Description Starts the lab's fcling engine, which streams its SR Linux nodes and keeps a history of what changes. An engine that runs is left alone, unless the request gives it another gNMI port: then it is replaced, and keeps its history. A port given is also used for the lab's reports and kept for the next start. The first start can take a while, since it pulls the image; poll the status until it says `ready`.
 // @Tags Labs - Tools
 // @Security BearerAuth
+// @Accept json
 // @Produce json
 // @Param labName path string true "Lab Name"
+// @Param fcling_engine_request body models.FclingEngineStartRequest false "How to start the engine"
 // @Success 200 {object} models.FclingEngineStatus
 // @Failure 400 {object} models.ErrorResponse
 // @Failure 401 {object} models.ErrorResponse
@@ -198,6 +203,15 @@ func GetFclingEngineHandler(c *gin.Context) {
 func StartFclingEngineHandler(c *gin.Context) {
 	manager, labName, topoPath, ok := fclingEngineRequest(c)
 	if !ok || !topologyPathForFcling(c, topoPath) {
+		return
+	}
+	var req models.FclingEngineStartRequest
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid request body: " + err.Error()})
+		return
+	}
+	if req.GnmiPort != 0 && !fcling.ValidGnmiPort(req.GnmiPort) {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "The gNMI port must be between 1 and 65535."})
 		return
 	}
 	svc := GetClabService()
@@ -212,6 +226,7 @@ func StartFclingEngineHandler(c *gin.Context) {
 	status, err := manager.Start(ctx, fcling.StartOptions{
 		LabName:      labName,
 		TopologyPath: topoPath,
+		GnmiPort:     req.GnmiPort,
 		NetworkArgs: func(ctx context.Context) ([]string, error) {
 			return svc.FclingNetworkArgs(ctx, topoPath)
 		},

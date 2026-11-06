@@ -151,11 +151,46 @@ func (s *EndpointCoverageSuite) TestFclingAndDrawioRoutesValidateInput() {
 		s.assertJSONError(bodyBytes, "Invalid request body")
 	}
 
+	engineURL := fmt.Sprintf("%s/api/v1/labs/%s/fcling/engine", s.cfg.APIURL, s.labName)
+	engineBody, engineStatus, err := s.doRequest("POST", engineURL, s.apiUserHeaders, bytes.NewBuffer(s.mustMarshal(map[string]int{"gnmiPort": 70000})), s.cfg.RequestTimeout)
+	s.Require().NoError(err)
+	s.Require().Equal(http.StatusBadRequest, engineStatus, "Expected 400 for a gNMI port out of range. Body: %s", string(engineBody))
+	s.assertJSONError(engineBody, "gNMI port")
+
 	drawioURL := fmt.Sprintf("%s/api/v1/labs/%s/graph/drawio", s.cfg.APIURL, s.labName)
 	bodyBytes, statusCode, err := s.doRequest("POST", drawioURL, s.apiUserHeaders, bytes.NewBuffer(s.mustMarshal(map[string]string{"layout": "diagonal"})), s.cfg.RequestTimeout)
 	s.Require().NoError(err)
 	s.Require().Equal(http.StatusBadRequest, statusCode, "Expected 400 for invalid drawio layout. Body: %s", string(bodyBytes))
 	s.assertJSONError(bodyBytes, "Invalid layout")
+}
+
+// The lab has no SR Linux nodes, so the engine may well exit: the port is what is looked at here.
+func (s *EndpointCoverageSuite) TestFclingEngineKeepsTheLabsGnmiPort() {
+	engineURL := fmt.Sprintf("%s/api/v1/labs/%s/fcling/engine", s.cfg.APIURL, s.labName)
+	engineStatus := func(method string, body io.Reader) (status struct {
+		State    string `json:"state"`
+		GnmiPort int    `json:"gnmiPort"`
+	}) {
+		bodyBytes, statusCode, err := s.doRequest(method, engineURL, s.apiUserHeaders, body, s.cfg.DeployTimeout)
+		s.Require().NoError(err)
+		s.Require().Equal(http.StatusOK, statusCode, "%s engine. Body: %s", method, string(bodyBytes))
+		s.Require().NoError(json.Unmarshal(bodyBytes, &status), "Body: %s", string(bodyBytes))
+		return status
+	}
+	defer engineStatus("DELETE", nil)
+
+	s.Require().Equal(57400, engineStatus("GET", nil).GnmiPort, "the default, until one is chosen")
+
+	started := engineStatus("POST", bytes.NewBuffer(s.mustMarshal(map[string]int{"gnmiPort": 57410})))
+	s.Require().Equal(57410, started.GnmiPort)
+	s.Require().Equal(57410, engineStatus("GET", nil).GnmiPort)
+
+	s.Require().Equal(57410, engineStatus("POST", nil).GnmiPort, "a start that names no port keeps the lab's")
+
+	engineStatus("DELETE", nil)
+	stopped := engineStatus("GET", nil)
+	s.Require().Equal("stopped", stopped.State)
+	s.Require().Equal(57410, stopped.GnmiPort, "stopping the engine keeps the lab's port")
 }
 
 func (s *EndpointCoverageSuite) TestLabOpsRoutesValidateInput() {

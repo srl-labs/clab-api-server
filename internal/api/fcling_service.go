@@ -29,11 +29,7 @@ func InitFclingManager() {
 	if fclingManager != nil || clab.IsLabRuntime() {
 		return
 	}
-	fclingManager = fcling.NewManager(fcling.Config{
-		Runtime:    config.AppConfig.ClabRuntime,
-		Image:      config.AppConfig.FclingDockerImage,
-		PullPolicy: config.AppConfig.FclingPullPolicy,
-	})
+	fclingManager = fcling.NewManager(config.FclingConfig())
 }
 
 // ShutdownFclingManager stops the manager. The labs' engines keep running.
