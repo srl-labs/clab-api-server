@@ -63,8 +63,18 @@ type FclingEngineStatus struct {
 	Image         string `json:"image,omitempty" example:"ghcr.io/srl-labs/fcling:0.9.0"`
 	ContainerName string `json:"containerName,omitempty" example:"clab-lab01-fcling"`
 	StartedAt     string `json:"startedAt,omitempty" example:"2026-11-05T14:08:47Z"`
+	// GnmiPort is the port the engine reaches the lab's nodes on, or will when it starts.
+	GnmiPort int `json:"gnmiPort,omitempty" example:"57400"`
 	// Error is the end of the engine's log, when it failed.
 	Error string `json:"error,omitempty"`
+}
+
+// FclingEngineStartRequest is how to start a lab's fcling engine. Its body is optional.
+type FclingEngineStartRequest struct {
+	// GnmiPort is a new port for the lab's nodes, used for its reports too and kept for the
+	// next start. An engine on another port is replaced; its history stays. Without it, the
+	// lab's port stays.
+	GnmiPort int `json:"gnmiPort,omitempty" example:"57410"`
 }
 
 type DrawioGenerateRequest struct {

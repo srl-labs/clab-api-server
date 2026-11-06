@@ -2988,7 +2988,10 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Starts the lab's fcling engine, which streams its SR Linux nodes and keeps a history of what changes. An engine that runs is left alone. The first start can take a while, since it pulls the image; poll the status until it says `ready`.",
+                "description": "Starts the lab's fcling engine, which streams its SR Linux nodes and keeps a history of what changes. An engine that runs is left alone, unless the request gives it another gNMI port: then it is replaced, and keeps its history. A port given is also used for the lab's reports and kept for the next start. The first start can take a while, since it pulls the image; poll the status until it says `ready`.",
+                "consumes": [
+                    "application/json"
+                ],
                 "produces": [
                     "application/json"
                 ],
@@ -3003,6 +3006,14 @@
                         "name": "labName",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "description": "How to start the engine",
+                        "name": "fcling_engine_request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/models.FclingEngineStartRequest"
+                        }
                     }
                 ],
                 "responses": {
@@ -8739,6 +8750,16 @@
                 }
             }
         },
+        "models.FclingEngineStartRequest": {
+            "type": "object",
+            "properties": {
+                "gnmiPort": {
+                    "description": "GnmiPort is a new port for the lab's nodes, used for its reports too and kept for the\nnext start. An engine on another port is replaced; its history stays. Without it, the\nlab's port stays.",
+                    "type": "integer",
+                    "example": 57410
+                }
+            }
+        },
         "models.FclingEngineStatus": {
             "type": "object",
             "properties": {
@@ -8749,6 +8770,11 @@
                 "error": {
                     "description": "Error is the end of the engine's log, when it failed.",
                     "type": "string"
+                },
+                "gnmiPort": {
+                    "description": "GnmiPort is the port the engine reaches the lab's nodes on, or will when it starts.",
+                    "type": "integer",
+                    "example": 57400
                 },
                 "image": {
                     "type": "string",

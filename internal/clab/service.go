@@ -448,6 +448,7 @@ type DrawioGenerateResult struct {
 
 type FclingRunOptions struct {
 	Runtime      string
+	LabName      string
 	TopologyPath string
 	CommandArgs  []string
 }
@@ -1435,10 +1436,8 @@ func (s *Service) RunFclingCommand(ctx context.Context, opts FclingRunOptions) (
 		return "", err
 	}
 
-	args := fcling.ReportArgs(fcling.Config{
-		Image:      config.AppConfig.FclingDockerImage,
-		PullPolicy: config.AppConfig.FclingPullPolicy,
-	}, networkArgs, topologyPath, opts.CommandArgs)
+	fclingConfig := config.FclingConfig()
+	args := fcling.ReportArgs(fclingConfig, networkArgs, topologyPath, fclingConfig.LabGnmiPort(opts.LabName), opts.CommandArgs)
 
 	return s.runCommand(ctx, runtimeName, args)
 }
