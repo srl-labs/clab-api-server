@@ -1894,7 +1894,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Lists the lab link interfaces of the lab's running nodes that packet capture accepts, with the far end of each link. Lab runtime c9s only; the management interface is not capturable. Runs as the signed-in user.",
+                "description": "Lists the lab link interfaces of the lab's running nodes that packet capture accepts, with the far end of each link. The management interface is not capturable. With Docker and Podman the links come from the topology file the lab was deployed from; on c9s this runs as the signed-in user.",
                 "produces": [
                     "application/json"
                 ],
@@ -1945,14 +1945,14 @@ const docTemplate = `{
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
                     },
-                    "500": {
-                        "description": "Internal server error",
+                    "409": {
+                        "description": "Docker or Podman lab whose topology file is gone",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
                     },
-                    "501": {
-                        "description": "The server's runtime is not c9s",
+                    "500": {
+                        "description": "Internal server error",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -2049,7 +2049,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Captures lab link interfaces of a lab runtime (c9s) lab, as the signed-in user, and streams one pcapng section as it is produced: chunked, flushed per block. The section has one interface per target, named \u003cnode\u003e:\u003cinterface\u003e, before any packet; packets are in timestamp order. The stream ends when the duration passed, the packet limit was reached, or the client disconnects, which stops the capture in the lab. Errors before the first byte are JSON; later ones end the stream. Captures longer than clabwire's 1 h limit are chained by containerlab without duplicates.",
+                "description": "Captures lab link interfaces of a lab without Edgeshark: on c9s as the signed-in user through clabwire, with Docker and Podman through packet sockets in the nodes' network namespaces. It streams one pcapng section as it is produced: chunked, flushed per block. The section has one interface per target, named \u003cnode\u003e:\u003cinterface\u003e, before any packet; packets are in timestamp order. The stream ends when the duration passed, the packet limit was reached, or the client disconnects, which stops the capture in the lab. Errors before the first byte are JSON; later ones end the stream. On c9s, captures longer than clabwire's 1 h limit are chained by containerlab without duplicates.",
                 "produces": [
                     "application/x-pcapng",
                     "application/json"
@@ -2137,19 +2137,13 @@ const docTemplate = `{
                         }
                     },
                     "409": {
-                        "description": "A target node is not running",
+                        "description": "A target node is not running, or a Docker or Podman lab's topology file is gone",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
                     },
                     "500": {
                         "description": "Internal server error",
-                        "schema": {
-                            "$ref": "#/definitions/models.ErrorResponse"
-                        }
-                    },
-                    "501": {
-                        "description": "The server's runtime is not c9s",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }

@@ -172,7 +172,9 @@ func (s *EventsSuite) TestEventsStreamJSONLifecycleMessages() {
 
 	labName := fmt.Sprintf("%s-events-life-%s", s.cfg.LabNamePrefix, s.randomSuffix(5))
 	topology := strings.ReplaceAll(s.cfg.SimpleTopologyContent, "{lab_name}", labName)
-	eventsURL := fmt.Sprintf("%s/api/v1/events", s.cfg.APIURL)
+	// Without initialState, an interface event needs a link to change after the server starts
+	// watching a node, and a lab's links can already be up by then.
+	eventsURL := fmt.Sprintf("%s/api/v1/events?initialState=true", s.cfg.APIURL)
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.lifecycleTimeout())
 	defer cancel()
@@ -184,55 +186,60 @@ func (s *EventsSuite) TestEventsStreamJSONLifecycleMessages() {
 	s.Require().NoError(err, "Failed to create lifecycle lab")
 	s.Require().Equal(http.StatusOK, statusCode, "Failed to create lifecycle lab. Body: %s", string(bodyBytes))
 
-	s.logDebug("Pausing for lab stabilization...")
-	time.Sleep(s.cfg.StabilizePause)
-
-	_, statusCode, err = s.destroyLab(s.apiUserHeaders, labName, true, s.cfg.CleanupTimeout)
-	s.Require().NoError(err, "Failed to destroy lifecycle lab")
-	s.Require().Equal(http.StatusOK, statusCode, "Failed to destroy lifecycle lab")
-
 	seenContainerCreate := false
 	seenContainerStart := false
 	seenContainerStop := false
 	seenInterfaceEvent := false
 
-	for !(seenContainerCreate && seenContainerStart && seenContainerStop && seenInterfaceEvent) {
-		select {
-		case line, ok := <-linesCh:
-			if !ok {
-				break
-			}
-			ev, parseErr := parseEventLine(line)
-			if parseErr != nil {
-				continue
-			}
-			if eventLabName(ev.Attributes) != labName {
-				continue
-			}
-			switch ev.Type {
-			case "container":
-				switch ev.Action {
-				case "create":
-					seenContainerCreate = true
-				case "start":
-					seenContainerStart = true
-				case "die", "destroy", "stop":
-					seenContainerStop = true
+	// readEventsUntil reads the stream until done reports true, the stream ends or ctx expires.
+	readEventsUntil := func(done func() bool) {
+		for !done() {
+			select {
+			case line, ok := <-linesCh:
+				if !ok {
+					return
 				}
-			case "interface":
-				seenInterfaceEvent = true
+				ev, parseErr := parseEventLine(line)
+				if parseErr != nil {
+					continue
+				}
+				if eventLabName(ev.Attributes) != labName {
+					continue
+				}
+				switch ev.Type {
+				case "container":
+					switch ev.Action {
+					case "create":
+						seenContainerCreate = true
+					case "start":
+						seenContainerStart = true
+					case "die", "destroy", "stop":
+						seenContainerStop = true
+					}
+				case "interface":
+					seenInterfaceEvent = true
+				}
+			case err := <-errCh:
+				if err != nil {
+					s.logWarning("Events stream error: %v", err)
+				}
+			case <-ctx.Done():
+				return
 			}
-		case err := <-errCh:
-			if err != nil {
-				s.logWarning("Events stream error: %v", err)
-			}
-		case <-ctx.Done():
-			break
-		}
-		if ctx.Err() != nil {
-			break
 		}
 	}
+
+	// The lab has to stay up until its interfaces are reported: the server stops watching a
+	// node once its container stops.
+	readEventsUntil(func() bool {
+		return seenContainerCreate && seenContainerStart && seenInterfaceEvent
+	})
+
+	_, statusCode, err = s.destroyLab(s.apiUserHeaders, labName, true, s.cfg.CleanupTimeout)
+	s.Require().NoError(err, "Failed to destroy lifecycle lab")
+	s.Require().Equal(http.StatusOK, statusCode, "Failed to destroy lifecycle lab")
+
+	readEventsUntil(func() bool { return seenContainerStop })
 
 	cancel()
 

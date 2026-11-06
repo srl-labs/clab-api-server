@@ -55,8 +55,8 @@ var serverFeatures = []string{
 	// lab-host-info: GET /api/v1/lab-host describes the lab runtime (on c9s the cluster
 	// and deploy defaults).
 	"lab-host-info",
-	// capture-stream: lab runtime packet capture: capture/interfaces and capture/stream
-	// (only with CLAB_RUNTIME=c9s).
+	// capture-stream: packet capture without Edgeshark: capture/interfaces and capture/stream,
+	// with every runtime.
 	"capture-stream",
 	// wireshark-vnc: Wireshark VNC capture sessions. With a lab runtime only when the server
 	// host runs Docker.
@@ -84,8 +84,7 @@ var containerRuntimeOnlyFeatures = map[string]bool{
 
 // labRuntimeOnlyFeatures need a lab runtime (c9s).
 var labRuntimeOnlyFeatures = map[string]bool{
-	"c9s-runtime":    true,
-	"capture-stream": true,
+	"c9s-runtime": true,
 }
 
 // nodeStatsAvailable reports whether the runtime can sample node CPU and memory. On c9s

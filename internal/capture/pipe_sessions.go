@@ -34,7 +34,7 @@ i=0
 while [ ! -p "$p" ]; do
 	i=$((i+1))
 	if [ "$i" -gt 300 ]; then
-		echo "Wireshark created no capture pipe $p; Wireshark VNC on this lab runtime needs a wireshark-vnc-docker image with ` + capturePipeEnv + `" >&2
+		echo "Wireshark created no capture pipe $p; Wireshark VNC without Edgeshark needs a wireshark-vnc-docker image with ` + capturePipeEnv + `" >&2
 		exit 3
 	fi
 	sleep 0.2
@@ -57,6 +57,8 @@ type WiresharkPipeSpec struct {
 	// ContainerName and InterfaceNames describe what the session captures.
 	ContainerName  string
 	InterfaceNames []string
+	// LabDirectory, when set, is mounted at /pcaps for the captures Wireshark saves.
+	LabDirectory string
 	// Capture writes the session's capture. It runs each time the session's Wireshark opens
 	// the pipe: when it starts, and when its capture is restarted. The session's end cancels
 	// it. A capture that fails ends the session's container.
@@ -94,6 +96,7 @@ func (m *Manager) CreatePipeWiresharkSessions(
 		launches = append(launches, sessionLaunch{
 			containerName:  spec.ContainerName,
 			interfaceNames: spec.InterfaceNames,
+			labDir:         spec.LabDirectory,
 			capture:        spec.Capture,
 		})
 	}

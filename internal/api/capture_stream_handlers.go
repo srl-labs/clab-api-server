@@ -22,9 +22,10 @@ import (
 	"github.com/srl-labs/clab-api-server/internal/models"
 )
 
-// Lab runtime packet capture (plan 3.3): the containerlab library captures lab link
-// interfaces through clabwire and writes one merged pcapng stream. The server delivers it as a
-// chunked HTTP response, and writes it into the pipe of a Wireshark VNC session.
+// Packet capture without Edgeshark: the containerlab library captures lab link interfaces,
+// through clabwire on c9s and packet sockets with Docker and Podman, and writes one merged
+// pcapng stream. The server delivers it as a chunked HTTP response, and writes it into the
+// pipe of a Wireshark VNC session.
 
 const (
 	// maxCaptureTargets bounds the interfaces of one capture.
@@ -42,20 +43,9 @@ var errInvalidCaptureTarget = errors.New("invalid capture target")
 // errNodeNotRunning marks a capture target on a node without a running pod (409).
 var errNodeNotRunning = errors.New("node is not running")
 
-// requireLabRuntimeCapture guards the lab runtime capture routes: they need a lab runtime
-// (c9s), which captures through clabwire. With Docker and Podman, captures go through
-// Edgeshark (the packetflix and wireshark-vnc-sessions routes).
-func requireLabRuntimeCapture() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if !clab.IsLabRuntime() {
-			c.AbortWithStatusJSON(http.StatusNotImplemented, models.ErrorResponse{
-				Error: fmt.Sprintf("packet capture streams need the lab runtime c9s; this server runs %s, use Edgeshark (capture/packetflix)", clab.RuntimeKind()),
-			})
-			return
-		}
-		c.Next()
-	}
-}
+// errCaptureTopologyMissing marks a Docker or Podman lab whose topology file is gone: capture
+// reads the lab's links from it (409).
+var errCaptureTopologyMissing = errors.New("capture needs the lab's topology file")
 
 // parseCaptureTarget parses "<node>:<interface>". The node ends at the first colon, so
 // interfaces such as 1/1/3 or ethernet-1/1 need no quoting.
@@ -206,14 +196,19 @@ func resolveCaptureTargets(ctx context.Context, svc *clab.Service, username, lab
 }
 
 // classifyLabCaptureError marks the library's errors for targets the lab cannot capture. The
-// library reports them as text: a node the lab does not have, and a node without a pod.
+// library reports them as text: a node the lab does not have, a node without a pod, a lab
+// without containers and a lab without its topology file.
 func classifyLabCaptureError(err error) error {
 	message := err.Error()
 	switch {
-	case strings.Contains(message, "was not found in c9s lab"):
+	case strings.Contains(message, "was not found in c9s lab"), strings.Contains(message, "is not part of lab"):
 		return fmt.Errorf("%w: %w", errInvalidCaptureTarget, err)
 	case strings.Contains(message, "has no pod"):
 		return fmt.Errorf("%w: %w", errNodeNotRunning, err)
+	case strings.Contains(message, "no running containers"):
+		return fmt.Errorf("%w: %w", clab.ErrLabNotFound, err)
+	case strings.Contains(message, "is not available; capture reads"):
+		return fmt.Errorf("%w: %w", errCaptureTopologyMissing, err)
 	}
 	return err
 }
@@ -231,7 +226,7 @@ func captureErrorStatus(err error) int {
 	switch {
 	case errors.Is(err, errInvalidCaptureTarget):
 		return http.StatusBadRequest
-	case errors.Is(err, errNodeNotRunning), errors.Is(err, kube.ErrAmbiguousLab):
+	case errors.Is(err, errNodeNotRunning), errors.Is(err, errCaptureTopologyMissing), errors.Is(err, kube.ErrAmbiguousLab):
 		return http.StatusConflict
 	case errors.Is(err, clab.ErrLabNotFound):
 		return http.StatusNotFound
@@ -259,9 +254,9 @@ func captureInterfaceNames(targets []capture.Target) []string {
 	return names
 }
 
-// ListCaptureInterfacesHandler lists the interfaces a lab runtime captures.
+// ListCaptureInterfacesHandler lists the interfaces a capture stream accepts.
 // @Summary List capturable interfaces
-// @Description Lists the lab link interfaces of the lab's running nodes that packet capture accepts, with the far end of each link. Lab runtime c9s only; the management interface is not capturable. Runs as the signed-in user.
+// @Description Lists the lab link interfaces of the lab's running nodes that packet capture accepts, with the far end of each link. The management interface is not capturable. With Docker and Podman the links come from the topology file the lab was deployed from; on c9s this runs as the signed-in user.
 // @Tags Capture
 // @Security BearerAuth
 // @Produce json
@@ -271,8 +266,8 @@ func captureInterfaceNames(targets []capture.Target) []string {
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
 // @Failure 403 {object} models.ErrorResponse "Forbidden by Kubernetes RBAC"
 // @Failure 404 {object} models.ErrorResponse "Lab not found"
+// @Failure 409 {object} models.ErrorResponse "Docker or Podman lab whose topology file is gone"
 // @Failure 500 {object} models.ErrorResponse "Internal server error"
-// @Failure 501 {object} models.ErrorResponse "The server's runtime is not c9s"
 // @Router /api/v1/labs/{labName}/capture/interfaces [get]
 func ListCaptureInterfacesHandler(c *gin.Context) {
 	username := c.GetString("username")
@@ -344,9 +339,9 @@ func captureFileName(labName string, now time.Time) string {
 	return fmt.Sprintf("%s-%s.pcapng", labName, now.UTC().Format("20060102T150405Z"))
 }
 
-// StreamCaptureHandler streams a lab runtime packet capture as pcapng.
+// StreamCaptureHandler streams a packet capture as pcapng.
 // @Summary Stream a packet capture
-// @Description Captures lab link interfaces of a lab runtime (c9s) lab, as the signed-in user, and streams one pcapng section as it is produced: chunked, flushed per block. The section has one interface per target, named <node>:<interface>, before any packet; packets are in timestamp order. The stream ends when the duration passed, the packet limit was reached, or the client disconnects, which stops the capture in the lab. Errors before the first byte are JSON; later ones end the stream. Captures longer than clabwire's 1 h limit are chained by containerlab without duplicates.
+// @Description Captures lab link interfaces of a lab without Edgeshark: on c9s as the signed-in user through clabwire, with Docker and Podman through packet sockets in the nodes' network namespaces. It streams one pcapng section as it is produced: chunked, flushed per block. The section has one interface per target, named <node>:<interface>, before any packet; packets are in timestamp order. The stream ends when the duration passed, the packet limit was reached, or the client disconnects, which stops the capture in the lab. Errors before the first byte are JSON; later ones end the stream. On c9s, captures longer than clabwire's 1 h limit are chained by containerlab without duplicates.
 // @Tags Capture
 // @Security BearerAuth
 // @Produce application/x-pcapng
@@ -362,9 +357,8 @@ func captureFileName(labName string, now time.Time) string {
 // @Failure 401 {object} models.ErrorResponse "Unauthorized"
 // @Failure 403 {object} models.ErrorResponse "Forbidden by Kubernetes RBAC"
 // @Failure 404 {object} models.ErrorResponse "Lab not found"
-// @Failure 409 {object} models.ErrorResponse "A target node is not running"
+// @Failure 409 {object} models.ErrorResponse "A target node is not running, or a Docker or Podman lab's topology file is gone"
 // @Failure 500 {object} models.ErrorResponse "Internal server error"
-// @Failure 501 {object} models.ErrorResponse "The server's runtime is not c9s"
 // @Router /api/v1/labs/{labName}/capture/stream [get]
 func StreamCaptureHandler(c *gin.Context) {
 	username := c.GetString("username")

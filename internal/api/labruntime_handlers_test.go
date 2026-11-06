@@ -141,7 +141,7 @@ func TestHealthReportsTheRuntimeAndItsFeatures(t *testing.T) {
 	require.Subset(t, docker.Features, []string{"snapshot-save", "deploy-restore", "sshx-readers", "gotty-options",
 		"node-stats", "node-logs-runtime", "interface-state", "terminal-resume", "lab-lifecycle-timeout"})
 	require.NotContains(t, docker.Features, "c9s-runtime")
-	require.NotContains(t, docker.Features, "capture-stream", "Docker captures go through Edgeshark")
+	require.Contains(t, docker.Features, "capture-stream", "Docker captures need no Edgeshark")
 	require.Contains(t, docker.Features, "wireshark-vnc")
 	require.Contains(t, docker.Features, "fcling")
 

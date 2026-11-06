@@ -115,11 +115,13 @@ func TestMatchCaptureTargets(t *testing.T) {
 
 func TestCaptureErrorStatus(t *testing.T) {
 	for err, want := range map[error]int{
-		fmt.Errorf("%w: x", errInvalidCaptureTarget):                                                              http.StatusBadRequest,
-		classifyLabCaptureError(errors.New(`node "n9" was not found in c9s lab ns/lab1`)):                         http.StatusBadRequest,
-		classifyLabCaptureError(errors.New("c9s node ns/lab1/n1 has no pod; is it running?")):                     http.StatusConflict,
-		errors.New(`pods "x" is forbidden: User "clab:bob" cannot create resource "pods/exec" in namespace "ns"`): http.StatusForbidden,
-		fmt.Errorf("x: %w", clablabruntime.ErrUnsupportedRuntimeVersion):                                          http.StatusNotImplemented,
+		fmt.Errorf("%w: x", errInvalidCaptureTarget):                                                                      http.StatusBadRequest,
+		classifyLabCaptureError(errors.New(`node "n9" was not found in c9s lab ns/lab1`)):                                 http.StatusBadRequest,
+		classifyLabCaptureError(errors.New("c9s node ns/lab1/n1 has no pod; is it running?")):                             http.StatusConflict,
+		errors.New(`pods "x" is forbidden: User "clab:bob" cannot create resource "pods/exec" in namespace "ns"`):         http.StatusForbidden,
+		fmt.Errorf("x: %w", clablabruntime.ErrUnsupportedRuntimeVersion):                                                  http.StatusNotImplemented,
+		classifyLabCaptureError(errors.New(`the topology of lab "lab1" is not available; capture reads the lab's links`)): http.StatusConflict,
+		classifyLabCaptureError(errors.New("lab 'lab1' not found - no running containers")):                               http.StatusNotFound,
 		errors.New("boom"): http.StatusInternalServerError,
 	} {
 		require.Equal(t, want, captureErrorStatus(err), err.Error())
@@ -144,16 +146,27 @@ func TestCaptureInterfacesOnC9s(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, api.do(http.MethodGet, "/api/v1/labs/other/capture/interfaces", nil).Code)
 }
 
-func TestCaptureRoutesNeedALabRuntime(t *testing.T) {
+func TestCaptureRoutesServeEveryRuntime(t *testing.T) {
 	api := newC9sAPI(t)
 	config.AppConfig.ClabRuntime = "docker"
-	for _, route := range []struct{ method, target string }{
-		{http.MethodGet, "/api/v1/labs/lab1/capture/interfaces"},
-		{http.MethodGet, "/api/v1/labs/lab1/capture/stream?target=n1:eth1"},
+	for _, target := range []string{
+		"/api/v1/labs/lab1/capture/interfaces",
+		"/api/v1/labs/lab1/capture/stream?target=n1:eth1",
 	} {
-		recorder := api.do(route.method, route.target, nil)
-		require.Equal(t, http.StatusNotImplemented, recorder.Code, route.target)
-		require.Contains(t, decodeError(t, recorder), "need the lab runtime c9s", route.target)
+		recorder := api.do(http.MethodGet, target, nil)
+		require.NotEqual(t, http.StatusNotImplemented, recorder.Code, target)
+	}
+}
+
+func TestCaptureNeedsEdgeshark(t *testing.T) {
+	for err, want := range map[error]bool{
+		fmt.Errorf("%w: eth0", errInvalidCaptureTarget): true,
+		classifyLabCaptureError(errors.New(`the topology of lab "lab1" is not available; capture reads the lab's links from it, pass it with --topo`)): true,
+		classifyLabCaptureError(errors.New(`node "n9" is not part of lab "lab1"; nodes: n1`)):                                                          true,
+		classifyLabCaptureError(errors.New("lab 'lab1' not found - no running containers")):                                                            false,
+		errors.New("boom"): false,
+	} {
+		require.Equal(t, want, captureNeedsEdgeshark(err), err.Error())
 	}
 }
 

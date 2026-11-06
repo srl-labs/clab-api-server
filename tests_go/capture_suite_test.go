@@ -6,7 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os/exec"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/suite"
 )
@@ -207,4 +211,138 @@ func (s *CaptureSuite) TestWiresharkVncSessionCreateIsEnvironmentTolerant() {
 	default:
 		s.Require().Failf("unexpected VNC capture create status", "status=%d body=%s", statusCode, string(bodyBytes))
 	}
+}
+
+// labExec runs a command in a node of the suite's lab.
+func (s *CaptureSuite) labExec(node, command string) []byte {
+	s.T().Helper()
+	bodyBytes, statusCode, err := s.doRequest(
+		http.MethodPost,
+		fmt.Sprintf("%s/api/v1/labs/%s/exec?nodeFilter=clab-%s-%s", s.cfg.APIURL, s.labName, s.labName, node),
+		s.apiUserHeaders,
+		bytes.NewBuffer(s.mustMarshal(map[string]string{"command": command})),
+		2*time.Minute,
+	)
+	s.Require().NoError(err)
+	s.Require().Equal(http.StatusOK, statusCode, "exec %q on %s: %s", command, node, string(bodyBytes))
+	return bodyBytes
+}
+
+// TestCaptureStreamNeedsNoEdgeshark captures a Docker or Podman lab's link through the server's
+// capture stream, whether or not Edgeshark runs: both ends of a link in one pcapng.
+func (s *CaptureSuite) TestCaptureStreamNeedsNoEdgeshark() {
+	s.Run("health advertises capture-stream", func() {
+		bodyBytes, statusCode, err := s.doRequest(http.MethodGet, s.cfg.APIURL+"/health", nil, nil, s.cfg.RequestTimeout)
+		s.Require().NoError(err)
+		s.Require().Equal(http.StatusOK, statusCode)
+		s.Require().Contains(string(bodyBytes), `"capture-stream"`)
+	})
+
+	s.Run("capturable interfaces with their peers", func() {
+		bodyBytes, statusCode, err := s.doRequest(http.MethodGet,
+			fmt.Sprintf("%s/api/v1/labs/%s/capture/interfaces", s.cfg.APIURL, s.labName),
+			s.apiUserHeaders, nil, 2*time.Minute)
+		s.Require().NoError(err)
+		s.Require().Equal(http.StatusOK, statusCode, string(bodyBytes))
+		s.Require().JSONEq(`[
+			{"node":"srl1","interface":"eth1","peerNode":"srl2","peerInterface":"eth1"},
+			{"node":"srl2","interface":"eth1","peerNode":"srl1","peerInterface":"eth1"}]`, string(bodyBytes))
+	})
+
+	s.Run("stream a 5 s capture of both ends of the link", func() {
+		s.labExec("srl1", "ip addr replace 10.97.0.1/24 dev eth1")
+		s.labExec("srl2", "ip addr replace 10.97.0.2/24 dev eth1")
+		var ping sync.WaitGroup
+		ping.Go(func() {
+			_, _, _ = s.doRequest(http.MethodPost,
+				fmt.Sprintf("%s/api/v1/labs/%s/exec?nodeFilter=clab-%s-srl1", s.cfg.APIURL, s.labName, s.labName), s.apiUserHeaders,
+				bytes.NewBuffer(s.mustMarshal(map[string]string{"command": "ping -c 30 -i 0.2 10.97.0.2"})), time.Minute)
+		})
+		defer ping.Wait()
+
+		started := time.Now()
+		bodyBytes, statusCode, err := s.doRequest(http.MethodGet,
+			fmt.Sprintf("%s/api/v1/labs/%s/capture/stream?target=srl1:eth1&target=srl2:eth1&duration=5s", s.cfg.APIURL, s.labName),
+			s.apiUserHeaders, nil, 2*time.Minute)
+		s.Require().NoError(err)
+		s.Require().Equal(http.StatusOK, statusCode, string(bodyBytes))
+		s.Require().GreaterOrEqual(time.Since(started), 5*time.Second)
+		summary, err := readPCAPNG(bodyBytes)
+		s.Require().NoError(err)
+		s.Require().Equal([]string{"srl1:eth1", "srl2:eth1"}, summary.interfaces)
+		s.Require().Positive(summary.icmp["srl1:eth1"], "ICMP on srl1:eth1: %+v", summary)
+		s.Require().Positive(summary.icmp["srl2:eth1"], "ICMP on srl2:eth1: %+v", summary)
+	})
+
+	s.Run("the management interface is refused with what can be captured", func() {
+		bodyBytes, statusCode, err := s.doRequest(http.MethodGet,
+			fmt.Sprintf("%s/api/v1/labs/%s/capture/stream?target=srl1:eth0&duration=1s", s.cfg.APIURL, s.labName),
+			s.apiUserHeaders, nil, 2*time.Minute)
+		s.Require().NoError(err)
+		s.Require().Equal(http.StatusBadRequest, statusCode, string(bodyBytes))
+		s.assertJSONError(bodyBytes, "capturable: eth1")
+	})
+}
+
+// wiresharkContainerEnv returns the environment of a Wireshark VNC session's container, from the
+// container runtime on this host; ok is false when the session's container cannot be seen.
+func (s *CaptureSuite) wiresharkContainerEnv(containerName string) (string, bool) {
+	s.T().Helper()
+	names, err := exec.Command("docker", "ps", "--filter", "name=clab_ws_vnc_", "--format", "{{.Names}}").Output()
+	if err != nil {
+		return "", false
+	}
+	for _, name := range strings.Fields(string(names)) {
+		if !strings.Contains(name, containerName) {
+			continue
+		}
+		env, err := exec.Command("docker", "inspect", "-f", "{{.Config.Env}}", name).Output()
+		if err == nil {
+			return string(env), true
+		}
+	}
+	return "", false
+}
+
+// TestWiresharkVncPrefersTheCaptureStream opens Wireshark VNC on a link, which needs no
+// Edgeshark, and on the management interface, which only Edgeshark captures.
+func (s *CaptureSuite) TestWiresharkVncPrefersTheCaptureStream() {
+	createURL := fmt.Sprintf("%s/api/v1/labs/%s/capture/wireshark-vnc-sessions", s.cfg.APIURL, s.labName)
+	create := func(containerName, iface string) ([]byte, int) {
+		bodyBytes, statusCode, err := s.doRequest(http.MethodPost, createURL, s.apiUserHeaders,
+			bytes.NewBuffer(s.mustMarshal(map[string]interface{}{
+				"targets": []map[string]string{{"containerName": containerName, "interfaceName": iface}},
+			})), 3*time.Minute)
+		s.Require().NoError(err)
+		return bodyBytes, statusCode
+	}
+	defer func() {
+		_, _, _ = s.doRequest(http.MethodDelete, s.cfg.APIURL+"/api/v1/capture/wireshark-vnc-sessions", s.superuserHeaders, nil, s.cfg.RequestTimeout)
+	}()
+
+	s.Run("a link reads the capture stream from a pipe", func() {
+		bodyBytes, statusCode := create(s.containerName, "eth1")
+		s.Require().Equal(http.StatusOK, statusCode, string(bodyBytes))
+		env, ok := s.wiresharkContainerEnv(s.containerName)
+		if !ok {
+			s.T().Skip("cannot inspect the session's container from here")
+		}
+		s.Require().Contains(env, "CLABWIRE_CAPTURE_PIPE=")
+		s.Require().NotContains(env, "PACKETFLIX_LINK")
+	})
+
+	s.Run("the name the apps send, <lab>-<node>, finds the node", func() {
+		bodyBytes, statusCode := create(s.labName+"-srl2", "eth1")
+		s.Require().Equal(http.StatusOK, statusCode, string(bodyBytes))
+		s.Require().Contains(string(bodyBytes), "clab-"+s.labName+"-srl2")
+	})
+
+	s.Run("the management interface goes through Edgeshark", func() {
+		bodyBytes, statusCode := create(s.containerName, "eth0")
+		if statusCode == http.StatusServiceUnavailable {
+			s.assertJSONError(bodyBytes, "Edgeshark is not running")
+			return
+		}
+		s.Require().Equal(http.StatusOK, statusCode, string(bodyBytes))
+	})
 }
