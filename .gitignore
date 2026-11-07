@@ -65,3 +65,10 @@ all_go_files.txt
 
 CLAUDE.md
 AGENTS.md
+# Documentation site (scripts/docs.sh)
+/site/
+/.venv/
+/docs-site/api/swagger.json
+/docs-site/api/swagger.yaml
+/docs-site/assets/viewer/
+__pycache__/

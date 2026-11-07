@@ -1,0 +1,16 @@
+# Diagram only: the API server provisions a namespace per lab and acts as the user. Not a deployable lab.
+name: kubernetes
+
+topology:
+  nodes:
+    alice: {kind: linux}
+    bob: {kind: linux}
+    api-server: {kind: linux}
+    srl1: {kind: linux}
+    srl2: {kind: linux}
+    ceos1: {kind: linux}
+    ceos2: {kind: linux}
+
+  links:
+    - endpoints: [srl1:e1-1, srl2:e1-1]
+    - endpoints: [ceos1:eth1, ceos2:eth1]

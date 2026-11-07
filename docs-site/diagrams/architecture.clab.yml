@@ -1,0 +1,17 @@
+# Diagram only: clients, the API server, and the labs it runs. Not a deployable lab.
+name: architecture
+
+topology:
+  nodes:
+    apps: {kind: linux}
+    scripts: {kind: linux}
+    ci: {kind: linux}
+    api-server: {kind: linux}
+    r1: {kind: linux}
+    r2: {kind: linux}
+    h1: {kind: linux}
+    h2: {kind: linux}
+
+  links:
+    - endpoints: [r1:eth1, r2:eth1]
+    - endpoints: [h1:eth1, h2:eth1]

@@ -1,4 +1,4 @@
-name: Publish API Docs
+name: Publish Docs
 
 on:
   push:
@@ -15,20 +15,27 @@ concurrency:
 
 jobs:
   deploy:
-    name: Publish ReDoc to gh-pages
+    name: Publish docs to gh-pages
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Build documentation
+        run: scripts/docs.sh build
+
       - name: Prepare static site
         run: |
           set -euo pipefail
           rm -rf public
-          mkdir -p public
-          cp docs-site/index.html public/index.html
-          cp docs/swagger.json public/swagger.json
-          cp docs/swagger.yaml public/swagger.yaml
+          cp -R site public
+          # Keep the spec at its old root URLs for existing links.
+          cp docs/swagger.json docs/swagger.yaml public/
           touch public/.nojekyll
 
       - name: Publish to gh-pages
@@ -48,14 +55,16 @@ jobs:
           git fetch origin gh-pages --depth=1
 
           git worktree add "$publish_dir" origin/gh-pages
+          # Replace the previous site entirely so removed pages do not linger.
+          find "$publish_dir" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp -a public/. "$publish_dir"/
 
           cd "$publish_dir"
           git add -A
           if git diff --cached --quiet; then
-            echo "No API docs changes to publish."
+            echo "No docs changes to publish."
             exit 0
           fi
 
-          git commit -m "publish api docs"
+          git commit -m "publish docs"
           git push origin HEAD:gh-pages

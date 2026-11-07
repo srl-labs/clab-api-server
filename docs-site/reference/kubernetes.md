@@ -1,47 +1,14 @@
-# Running on Kubernetes (clabernetes)
+---
+description: How the API server provisions, authorizes, reaches, and reports labs on Kubernetes.
+---
 
-With `CLAB_RUNTIME=c9s` the API server runs labs on a Kubernetes cluster through
-[clabernetes](https://containerlab.dev/manual/clabernetes/) (c9s) instead of Docker or Podman
-on its own host. It uses the c9s lab runtime of the containerlab library it links, so labs
-behave as `containerlab deploy -r c9s` labs do.
+# Kubernetes internals
 
-On c9s, **Kubernetes RBAC is the authority over labs.** The server acts as the signed-in user
-for every lab call, and uses its own identity only to provision lab namespaces.
-
-## Requirements
-
-- Kubernetes 1.31 or later.
-- clabernetes with node run state and the clabwire capture contract (0.11 or later). The
-  server refuses to start against an older clabernetes.
-- Lab namespaces run with the Pod Security level `privileged`: device containers and the
-  clabwire sidecar are privileged.
-- A default StorageClass that provisions volumes dynamically, unless
-  `CLAB_C9S_PERSISTENCE=false`.
-- For node stats: the resource metrics API (`metrics.k8s.io`, e.g. metrics-server).
-
-## Configuration
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `CLAB_RUNTIME` | `docker` | `c9s` runs labs on Kubernetes. |
-| `CLAB_KUBECONFIG` | (empty) | Kubeconfig file. Empty uses `KUBECONFIG`, `~/.kube/config`, or in a Pod the ServiceAccount. |
-| `CLAB_KUBE_CONTEXT` | (empty) | Kubeconfig context; empty uses the current context. |
-| `CLAB_KUBE_USER_PREFIX` | `clab:` | Prefix of the Kubernetes user and group names the server acts as, so they cannot collide with the cluster's own users. |
-| `CLAB_KUBE_NAMESPACE_TEMPLATE` | `c9s-{user}-{lab}` | Namespace of a user's lab. Needs `{user}` and `{lab}`. |
-| `CLAB_KUBE_LAB_QUOTA` | (empty) | Absolute path of a ResourceQuota manifest (YAML) created in every new lab namespace. |
-| `CLAB_C9S_EXPOSE_TYPE` | `None` | Service type of lab nodes: `None`, `ClusterIP`, `Headless` or `LoadBalancer`. With `None`, clients reach nodes through the server. |
-| `CLAB_C9S_PERSISTENCE` | `true` | Keep node storage (saved configuration) across Pod replacement and a plain destroy. |
-| `CLAB_C9S_IMAGE_PULL_SECRET` | (empty) | Docker-config Secret the device Pods pull images with, as `<namespace>/<name>` or a name in the server's own namespace. The server copies it into every lab namespace. |
-
-`CLAB_KUBE_NAMESPACE` cannot be used with c9s: every lab has its own namespace.
+The details behind [Labs on Kubernetes](../guides/kubernetes.md): what the server creates, whose
+identity each call uses, what clients see, and how nodes are reached.
+{ .lead }
 
 ## Users and their rights
-
-| Linux | Kubernetes |
-|---|---|
-| user `alice` | user `clab:alice`, group `clab:users` |
-| member of `SUPERUSER_GROUP` | additionally group `clab:admins` |
-| member of the Linux group that owns a shared lab's directory | additionally group `clab:shared-<group>` for that lab |
 
 **Provisioning (the server's identity).** On the first deploy of a lab the server creates its
 namespace (`c9s-<user>-<lab>`, or `c9s-shared-<lab>` for a topology under `@shared/`) with
@@ -86,20 +53,7 @@ operations that need the topology answer `404`. The events stream corrects the `
 `clab-topo-file` attributes of container events the same way, so they always match inspect; an
 event whose records the server cannot check (the cluster does not answer) is left out.
 
-## RBAC
-
-Apply both manifests once (adjust `clab:` if you change `CLAB_KUBE_USER_PREFIX`):
-
-- [`kubernetes/provisioner-rbac.yaml`](kubernetes/provisioner-rbac.yaml): the server's
-  ServiceAccount `clab-api-server` and the ClusterRole `clab-api-server-provisioner`.
-- [`kubernetes/admins-rbac.yaml`](kubernetes/admins-rbac.yaml): a ClusterRoleBinding of
-  `clabernetes-lab-editor` to the group `clab:admins`, so superusers see and manage every lab.
-  The server never creates cluster-wide bindings itself.
-
-Lab users need nothing besides `clabernetes-lab-editor`, which clabernetes ships
-(`labRoles.enabled`).
-
-`clab-api-server-provisioner` allows:
+The server's own ClusterRole, `clab-api-server-provisioner`:
 
 | Resource | Verbs | Why |
 |---|---|---|
@@ -113,34 +67,6 @@ Lab users need nothing besides `clabernetes-lab-editor`, which clabernetes ships
 
 It has no rights on clabernetes resources or Pods itself. The server can
 impersonate any user name, so treat its credentials like a cluster administrator's.
-
-Without a kubeconfig, run the server in a Pod with `serviceAccountName: clab-api-server`.
-Outside the cluster, give it a kubeconfig for that ServiceAccount:
-
-```bash
-kubectl apply -f docs/kubernetes/provisioner-rbac.yaml -f docs/kubernetes/admins-rbac.yaml
-TOKEN=$(kubectl -n clab-api-server create token clab-api-server --duration=8760h)
-# build a kubeconfig with that token and set CLAB_KUBECONFIG to it
-```
-
-Check a user's rights as the server will use them:
-
-```bash
-kubectl auth can-i create pods --subresource exec -n c9s-alice-lab1 --as clab:alice --as-group clab:users   # yes
-kubectl auth can-i get pods -n c9s-alice-lab1 --as clab:bob --as-group clab:users                           # no
-```
-
-## Trust model
-
-These roles isolate **users from each other**: a user can only reach labs in namespaces they
-are bound in, and every action is attributed to the user in the audit log.
-
-They do **not** isolate **the worker from the lab**: lab namespaces are PSA `privileged`,
-device containers and the `clabwire` sidecar run privileged, and RBAC cannot limit `pods/exec`
-to one container. Whoever can deploy a lab or exec into it can reach the worker. That is the
-same trust level as `clab_admins` on a Docker host. Clusters shared with other workloads should
-keep labs on dedicated, tainted workers (taints and a nodeSelector in the clabernetes
-NodeProfile).
 
 ## Startup checks
 
@@ -302,10 +228,53 @@ packets in timestamp order. Captures longer than clabwire's one-hour limit are c
 containerlab without gaps or duplicates. When the client goes away the capture stops in the pod
 (clabwire ends on stdin close).
 
-| Endpoint | Purpose |
+### List capturable interfaces
+
+```text
+GET /api/v1/labs/{lab}/capture/interfaces
+```
+
+Returns the lab link interfaces of the running nodes, with the far end of each link:
+
+```json
+[
+  {
+    "node": "srl1",
+    "interface": "e1-1",
+    "alias": "ethernet-1/1",
+    "peerNode": "srl2",
+    "peerInterface": "e1-1"
+  }
+]
+```
+
+`alias` appears only when the interface has one.
+
+### Stream a capture
+
+```text
+GET /api/v1/labs/{lab}/capture/stream?target=<node>:<interface>
+```
+
+Returns `application/x-pcapng`, chunked and flushed as packets arrive. The stream runs until
+the duration or packet limit is reached, or the client disconnects.
+
+| Parameter | Meaning |
 |---|---|
-| `GET /api/v1/labs/{lab}/capture/interfaces` | The capturable interfaces of the running nodes: `[{"node","interface","alias"?,"peerNode","peerInterface"}]`. |
-| `GET /api/v1/labs/{lab}/capture/stream?target=<node>:<iface>[&target=…][&duration=30s][&packetLimit=N][&snapLength=N][&download=1]` | The capture as `application/x-pcapng`, chunked and flushed as it is produced, until the duration or packet limit is reached or the client disconnects. `download=1` adds `Content-Disposition: attachment; filename="<lab>-<timestamp>.pcapng"`. Errors before the first byte are JSON: 400 for a target the lab cannot capture, 403 when Kubernetes refuses, 404 for a lab the user does not have, 409 for a node that is not running, 501 without c9s. |
+| `target` | `<node>:<interface>` to capture. Repeat it for several interfaces in one stream. Required. |
+| `duration` | Stop after this long, as a Go duration such as `30s`. Default: until the client disconnects. |
+| `packetLimit` | Stop after this many packets across all targets. |
+| `snapLength` | Bytes kept per packet, `64` to `1048576`. Default `262144`. |
+| `download` | `1` adds `Content-Disposition: attachment; filename="<lab>-<timestamp>.pcapng"`. |
+
+Errors before the first byte are JSON; later ones end the stream.
+
+| Status | When |
+|---|---|
+| `400` | A target the lab cannot capture, or an invalid duration or limit. |
+| `403` | Kubernetes refuses the user. |
+| `404` | The user has no lab of that name. |
+| `409` | A target node is not running. |
 
 A target names the node as the topology does (or its sanitized name) and the interface by name
 or alias, e.g. `srl1:ethernet-1/1`. The node ends at the first colon.
@@ -331,21 +300,3 @@ pipe. Closing the session, or its expiry (`CAPTURE_WIRESHARK_SESSION_TTL`), stop
 in the pods and the container. When the capture fails (for example when the node's pod is gone,
 or the lab was destroyed), the server stops the session's container and its `ready` and `vnc`
 routes answer `500` with the reason until the session is closed or expires.
-
-## Not supported on c9s
-
-These answer `501` with `<operation> is not supported by lab runtime c9s`:
-
-- image management (`/images`)
-- Edgeshark (`/tools/edgeshark/*`) and Edgeshark's Packetflix URIs (`/capture/packetflix`); use
-  [packet capture](#packet-capture) instead
-- Wireshark VNC sessions when the server host has no Docker
-- netem, veth, VxLAN and TX offload tools
-- VM snapshots (`/snapshots`) and deploys that restore them
-- SSHX and GoTTY sharing, fcli, Tailscale status
-- pause and unpause
-- link inspection (`/links`)
-- host metrics (`/health/metrics`)
-
-Deploy options that only local runtimes have (node filter, management network overrides,
-export templates, graceful destroy) also answer 501.

@@ -1,0 +1,326 @@
+{
+  "nodeAnnotations": [
+    {
+      "id": "alice",
+      "position": {
+        "x": 0,
+        "y": 40
+      },
+      "icon": "client",
+      "labelPosition": "bottom",
+      "labelBackgroundColor": "transparent",
+      "iconCornerRadius": 10,
+      "iconColor": "#3d9bd1"
+    },
+    {
+      "id": "bob",
+      "position": {
+        "x": 0,
+        "y": 220
+      },
+      "icon": "client",
+      "labelPosition": "bottom",
+      "labelBackgroundColor": "transparent",
+      "iconCornerRadius": 10,
+      "iconColor": "#8a72d6"
+    },
+    {
+      "id": "api-server",
+      "position": {
+        "x": 220,
+        "y": 130
+      },
+      "icon": "server",
+      "labelPosition": "bottom",
+      "labelBackgroundColor": "transparent",
+      "iconCornerRadius": 10,
+      "iconColor": "#3ba57e",
+      "groupId": "server"
+    },
+    {
+      "id": "srl1",
+      "position": {
+        "x": 540,
+        "y": 40
+      },
+      "icon": "router",
+      "labelPosition": "bottom",
+      "labelBackgroundColor": "transparent",
+      "iconCornerRadius": 10,
+      "iconColor": "#3d9bd1",
+      "groupId": "ns-alice"
+    },
+    {
+      "id": "srl2",
+      "position": {
+        "x": 660,
+        "y": 40
+      },
+      "icon": "router",
+      "labelPosition": "bottom",
+      "labelBackgroundColor": "transparent",
+      "iconCornerRadius": 10,
+      "iconColor": "#3d9bd1",
+      "groupId": "ns-alice"
+    },
+    {
+      "id": "ceos1",
+      "position": {
+        "x": 540,
+        "y": 220
+      },
+      "icon": "router",
+      "labelPosition": "bottom",
+      "labelBackgroundColor": "transparent",
+      "iconCornerRadius": 10,
+      "iconColor": "#8a72d6",
+      "groupId": "ns-bob"
+    },
+    {
+      "id": "ceos2",
+      "position": {
+        "x": 660,
+        "y": 220
+      },
+      "icon": "router",
+      "labelPosition": "bottom",
+      "labelBackgroundColor": "transparent",
+      "iconCornerRadius": 10,
+      "iconColor": "#8a72d6",
+      "groupId": "ns-bob"
+    }
+  ],
+  "groupStyleAnnotations": [
+    {
+      "id": "server",
+      "name": "API SERVER",
+      "level": "1",
+      "position": {
+        "x": 180,
+        "y": 90
+      },
+      "width": 120,
+      "height": 115,
+      "backgroundColor": "#3ba57e",
+      "backgroundOpacity": 7,
+      "borderColor": "#3ba57e",
+      "borderWidth": 1,
+      "borderStyle": "solid",
+      "borderRadius": 14,
+      "labelColor": "#3ba57e",
+      "labelPosition": "top-left",
+      "zIndex": -5
+    },
+    {
+      "id": "cluster",
+      "name": "KUBERNETES CLUSTER",
+      "level": "1",
+      "position": {
+        "x": 470,
+        "y": -40
+      },
+      "width": 300,
+      "height": 365,
+      "backgroundColor": "#d0913a",
+      "backgroundOpacity": 7,
+      "borderColor": "#d0913a",
+      "borderWidth": 1,
+      "borderStyle": "solid",
+      "borderRadius": 14,
+      "labelColor": "#d0913a",
+      "labelPosition": "top-left",
+      "zIndex": -5
+    },
+    {
+      "id": "ns-alice",
+      "name": "c9s-alice-lab1",
+      "level": "2",
+      "position": {
+        "x": 505,
+        "y": 5
+      },
+      "width": 230,
+      "height": 120,
+      "backgroundColor": "#3d9bd1",
+      "backgroundOpacity": 7,
+      "borderColor": "#3d9bd1",
+      "borderWidth": 1,
+      "borderStyle": "dashed",
+      "borderRadius": 14,
+      "labelColor": "#3d9bd1",
+      "labelPosition": "top-left",
+      "zIndex": -4,
+      "parentId": "cluster"
+    },
+    {
+      "id": "ns-bob",
+      "name": "c9s-bob-demo",
+      "level": "2",
+      "position": {
+        "x": 505,
+        "y": 185
+      },
+      "width": 230,
+      "height": 120,
+      "backgroundColor": "#8a72d6",
+      "backgroundOpacity": 7,
+      "borderColor": "#8a72d6",
+      "borderWidth": 1,
+      "borderStyle": "dashed",
+      "borderRadius": 14,
+      "labelColor": "#8a72d6",
+      "labelPosition": "top-left",
+      "zIndex": -4,
+      "parentId": "cluster"
+    }
+  ],
+  "freeTextAnnotations": [
+    {
+      "id": "text-0",
+      "text": "sign in",
+      "position": {
+        "x": 70,
+        "y": 70
+      },
+      "width": 80,
+      "height": 34,
+      "fontSize": 12,
+      "fontColor": "var(--vscode-descriptionForeground)",
+      "backgroundColor": "transparent",
+      "fontFamily": "sans-serif",
+      "textAlign": "left",
+      "roundedBackground": false
+    },
+    {
+      "id": "text-1",
+      "text": "sign in",
+      "position": {
+        "x": 70,
+        "y": 190
+      },
+      "width": 80,
+      "height": 34,
+      "fontSize": 12,
+      "fontColor": "var(--vscode-descriptionForeground)",
+      "backgroundColor": "transparent",
+      "fontFamily": "sans-serif",
+      "textAlign": "left",
+      "roundedBackground": false
+    },
+    {
+      "id": "text-2",
+      "text": "as clab:alice",
+      "position": {
+        "x": 330,
+        "y": 50
+      },
+      "width": 120,
+      "height": 34,
+      "fontSize": 12,
+      "fontColor": "var(--vscode-descriptionForeground)",
+      "backgroundColor": "transparent",
+      "fontFamily": "sans-serif",
+      "textAlign": "left",
+      "roundedBackground": false
+    },
+    {
+      "id": "text-3",
+      "text": "as clab:bob",
+      "position": {
+        "x": 330,
+        "y": 215
+      },
+      "width": 120,
+      "height": 34,
+      "fontSize": 12,
+      "fontColor": "var(--vscode-descriptionForeground)",
+      "backgroundColor": "transparent",
+      "fontFamily": "sans-serif",
+      "textAlign": "left",
+      "roundedBackground": false
+    }
+  ],
+  "freeShapeAnnotations": [
+    {
+      "id": "arrow-0",
+      "shapeType": "line",
+      "position": {
+        "x": 45,
+        "y": 62
+      },
+      "endPosition": {
+        "x": 215,
+        "y": 140
+      },
+      "borderColor": "#7d8fa5",
+      "borderWidth": 1.5,
+      "borderStyle": "solid",
+      "lineEndArrow": true,
+      "lineStartArrow": false,
+      "lineArrowSize": 8,
+      "zIndex": -2
+    },
+    {
+      "id": "arrow-1",
+      "shapeType": "line",
+      "position": {
+        "x": 45,
+        "y": 238
+      },
+      "endPosition": {
+        "x": 215,
+        "y": 160
+      },
+      "borderColor": "#7d8fa5",
+      "borderWidth": 1.5,
+      "borderStyle": "solid",
+      "lineEndArrow": true,
+      "lineStartArrow": false,
+      "lineArrowSize": 8,
+      "zIndex": -2
+    },
+    {
+      "id": "arrow-2",
+      "shapeType": "line",
+      "position": {
+        "x": 265,
+        "y": 140
+      },
+      "endPosition": {
+        "x": 500,
+        "y": 70
+      },
+      "borderColor": "#7d8fa5",
+      "borderWidth": 1.5,
+      "borderStyle": "dashed",
+      "lineEndArrow": true,
+      "lineStartArrow": false,
+      "lineArrowSize": 8,
+      "zIndex": -2
+    },
+    {
+      "id": "arrow-3",
+      "shapeType": "line",
+      "position": {
+        "x": 265,
+        "y": 160
+      },
+      "endPosition": {
+        "x": 500,
+        "y": 245
+      },
+      "borderColor": "#7d8fa5",
+      "borderWidth": 1.5,
+      "borderStyle": "dashed",
+      "lineEndArrow": true,
+      "lineStartArrow": false,
+      "lineArrowSize": 8,
+      "zIndex": -2
+    }
+  ],
+  "viewerSettings": {
+    "nodeStyle": "icon",
+    "linkLabelMode": "hide",
+    "linkStyle": "straight"
+  }
+}

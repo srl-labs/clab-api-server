@@ -1,0 +1,11 @@
+name: hello
+
+topology:
+  defaults:
+    kind: linux
+    image: alpine:3.23
+  nodes:
+    client: {}
+    server: {}
+  links:
+    - endpoints: [client:eth1, server:eth1]

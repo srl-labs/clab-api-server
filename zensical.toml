@@ -1,0 +1,87 @@
+[project]
+site_name = "Containerlab API Server"
+site_description = "Run containerlab labs on a Linux host and drive them over HTTPS: deploy, inspect, exec, capture, and share."
+site_url = "https://srl-labs.github.io/clab-api-server/"
+repo_url = "https://github.com/srl-labs/clab-api-server"
+repo_name = "srl-labs/clab-api-server"
+edit_uri = "edit/main/docs-site/"
+docs_dir = "docs-site"
+site_dir = "site"
+copyright = "Containerlab API Server · Open source. Built for network people."
+# External fence inputs must invalidate Markdown cached by Zensical.
+watch = ["docs-site/diagrams", "tools/clab_docs/topology.py"]
+extra_css = ["assets/stylesheets/site.css", "assets/viewer/component.css"]
+nav = [
+  { "Overview" = "index.md" },
+  { "Get started" = [
+    { "Quick start" = "getting-started/quick-start.md" },
+    { "How it works" = "getting-started/how-it-works.md" },
+  ] },
+  { "Install" = [
+    { "Choose a method" = "install/index.md" },
+    { "Systemd service" = "install/service.md" },
+    { "Container" = "install/container.md" },
+    { "Binary" = "install/binary.md" },
+    { "Upgrade and remove" = "install/upgrade.md" },
+  ] },
+  { "Guides" = [
+    { "Use the API" = "guides/api.md" },
+    { "Users and sign-in" = "guides/users.md" },
+    { "Workspaces and topology files" = "guides/workspaces.md" },
+    { "Topology templates" = "guides/templates.md" },
+    { "Deploy options" = "guides/deploy-options.md" },
+    { "Shared labs" = "guides/shared-labs.md" },
+    { "Labs on Kubernetes" = "guides/kubernetes.md" },
+  ] },
+  { "Reference" = [
+    { "Configuration" = "reference/configuration.md" },
+    { "Security model" = "reference/security.md" },
+    { "Kubernetes internals" = "reference/kubernetes.md" },
+    { "REST API" = "reference/api.md" },
+  ] },
+  { "Project" = [
+    { "Develop and test" = "contributing.md" },
+    { "Releases" = "https://github.com/srl-labs/clab-api-server/releases" },
+    { "Containerlab Apps" = "https://srl-labs.github.io/containerlab-app/docs/" },
+    { "Containerlab manual" = "https://containerlab.dev/" },
+    { "Discord" = "https://discord.gg/vAyddtaEV9" },
+  ] },
+]
+
+[project.theme]
+variant = "modern"
+custom_dir = "docs-overrides"
+logo = "assets/images/mark.svg"
+favicon = "assets/images/mark.svg"
+font = false
+features = ["navigation.path", "navigation.instant", "navigation.instant.progress", "navigation.top", "navigation.footer", "toc.follow", "content.code.copy", "content.tabs.link", "search.highlight", "search.suggest"]
+
+[[project.theme.palette]]
+scheme = "slate"
+primary = "custom"
+accent = "custom"
+toggle = { icon = "lucide/sun", name = "Switch to light mode" }
+
+[[project.theme.palette]]
+scheme = "default"
+primary = "custom"
+accent = "custom"
+toggle = { icon = "lucide/moon", name = "Switch to dark mode" }
+
+[project.markdown_extensions]
+admonition = {}
+attr_list = {}
+md_in_html = {}
+tables = {}
+toc = { permalink = true }
+"clab_docs.topology" = { docs_dir = "docs-site" }
+"pymdownx.highlight" = { anchor_linenums = true }
+"pymdownx.superfences" = {}
+"pymdownx.inlinehilite" = {}
+"pymdownx.details" = {}
+"pymdownx.tabbed" = { alternate_style = true }
+"pymdownx.blocks.admonition" = {}
+"pymdownx.blocks.details" = {}
+"pymdownx.blocks.tab" = { alternate_style = true }
+"pymdownx.keys" = {}
+"pymdownx.emoji" = { emoji_index = "zensical.extensions.emoji.twemoji", emoji_generator = "zensical.extensions.emoji.to_svg" }

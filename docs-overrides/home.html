@@ -1,0 +1,6 @@
+{% extends "main.html" %}
+{% block content %}
+{#- The hero names the product with the wordmark; Markdown cannot include the SVG itself. -#}
+{% set wordmark %}{% include ".icons/clab/wordmark.svg" %}{% endset %}
+<div class="clab-home">{{ page.content | replace('<span class="hero-wordmark"></span>', '<span class="hero-wordmark">' ~ wordmark ~ '</span>') }}</div>
+{% endblock %}
