@@ -1749,6 +1749,19 @@ func (s *Service) Exec(ctx context.Context, opts ExecOptions) (ExecResults, erro
 		return nil, err
 	}
 
+	containers, err := s.execContainers(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	// The commands run without containerlabMu: they can take as long as the command does,
+	// and holding the lock meanwhile would stall every other lab operation on the server.
+	return runContainerExecs(ctx, containers, execCmds), nil
+}
+
+// execContainers lists the containers an exec targets. It holds containerlabMu and the
+// user's working directory only while the topology is loaded and the containers listed.
+func (s *Service) execContainers(ctx context.Context, opts ExecOptions) ([]clabruntime.GenericContainer, error) {
 	// Prepare clab working directory
 	workDir, err := s.prepareWorkDir(opts.Username)
 	if err != nil {
@@ -1807,7 +1820,7 @@ func (s *Service) Exec(ctx context.Context, opts ExecOptions) (ExecResults, erro
 		return nil, fmt.Errorf("exec failed: filter did not match any containers")
 	}
 
-	return runContainerExecs(ctx, containers, execCmds), nil
+	return containers, nil
 }
 
 // SaveConfig saves the configuration of lab nodes.
