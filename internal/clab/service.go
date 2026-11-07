@@ -24,6 +24,7 @@ import (
 	"github.com/containernetworking/plugins/pkg/ns"
 	gotc "github.com/florianl/go-tc"
 	clabcert "github.com/srl-labs/containerlab/cert"
+	clabconst "github.com/srl-labs/containerlab/constants"
 	clabcore "github.com/srl-labs/containerlab/core"
 	clabgit "github.com/srl-labs/containerlab/git"
 	clablinks "github.com/srl-labs/containerlab/links"
@@ -775,6 +776,7 @@ func (s *Service) Deploy(ctx context.Context, opts DeployOptions) ([]clabruntime
 	deployResult, err := clab.Deploy(ctx, deployOpts)
 	var containers []clabruntime.GenericContainer
 	if deployResult != nil {
+		inheritNetnsHolderNetwork(deployResult.Containers, deployResult.Containers)
 		containers = withoutInternalContainers(deployResult.Containers)
 	}
 	if err != nil {
@@ -1118,11 +1120,51 @@ func (s *Service) ListContainers(ctx context.Context, opts ListOptions) ([]clabr
 	if err != nil {
 		return nil, fmt.Errorf("failed to list containers: %w", err)
 	}
+	withNetnsHolderNetwork(ctx, clab, containers, opts.ContainerName != "" || opts.NodeName != "")
 	if !opts.IncludeInternal {
 		containers = withoutInternalContainers(containers)
 	}
 
 	return containers, nil
+}
+
+// withNetnsHolderNetwork gives the nodes in containers the management network of the holder
+// containers that own their network namespace (see inheritNetnsHolderNetwork). A listing
+// filtered by container or node name leaves the holders out, so for it they are listed
+// separately, once per lab of a node that has no management address.
+func withNetnsHolderNetwork(
+	ctx context.Context,
+	clab *clabcore.CLab,
+	containers []clabruntime.GenericContainer,
+	filtered bool,
+) {
+	holders := containers
+	if filtered {
+		labs := map[string]struct{}{}
+		for _, container := range containers {
+			if lab := container.Labels[clabconst.Containerlab]; lab != "" && needsNetnsHolderNetwork(container) {
+				labs[lab] = struct{}{}
+			}
+		}
+		for lab := range labs {
+			labHolders, err := clab.ListContainers(ctx,
+				clabcore.WithListLabName(lab),
+				clabcore.WithListFilter([]*clabtypes.GenericFilter{{
+					FilterType: "label",
+					Field:      clabconst.InternalNode,
+					Operator:   "=",
+					Match:      "true",
+				}}),
+			)
+			if err != nil {
+				log.Debug("Failed to list the network namespace holders of a lab", "lab", lab, "error", err)
+				continue
+			}
+			holders = append(slices.Clip(holders), labHolders...)
+		}
+	}
+
+	inheritNetnsHolderNetwork(containers, holders)
 }
 
 func (s *Service) RunNodeLifecycleAction(ctx context.Context, opts NodeLifecycleOptions) error {

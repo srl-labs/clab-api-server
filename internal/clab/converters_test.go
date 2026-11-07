@@ -5,8 +5,11 @@ import (
 	"strings"
 	"testing"
 
+	clabconst "github.com/srl-labs/containerlab/constants"
 	clabcore "github.com/srl-labs/containerlab/core"
 	clabexec "github.com/srl-labs/containerlab/exec"
+	clabruntime "github.com/srl-labs/containerlab/runtime"
+	clabtypes "github.com/srl-labs/containerlab/types"
 
 	"github.com/srl-labs/clab-api-server/internal/models"
 )
@@ -151,5 +154,73 @@ func TestExecResultsToExecResponseKeepsCommandOrder(t *testing.T) {
 
 	if len(response["n1"]) != 2 || response["n1"][0].Cmd[0] != "first" || response["n1"][1].Cmd[0] != "second" {
 		t.Fatalf("unexpected results: %+v", response["n1"])
+	}
+}
+
+// netnsTestContainer returns a node container of lab "demo", or with holderOf set, the internal
+// container that holds the network namespace of node holderOf.
+func netnsTestContainer(name, holderOf string) clabruntime.GenericContainer {
+	labels := map[string]string{
+		clabconst.Containerlab: "demo",
+		clabconst.LongName:     name,
+	}
+	if holderOf != "" {
+		labels[clabconst.InternalNode] = "true"
+		labels[clabconst.RootNodeLongName] = holderOf
+	}
+	return clabruntime.GenericContainer{Names: []string{name}, Labels: labels, NetworkName: "unknown"}
+}
+
+func TestInheritNetnsHolderNetworkGivesNodesTheHolderAddresses(t *testing.T) {
+	srl := netnsTestContainer("clab-demo-srl1", "")
+	holder := netnsTestContainer("clab-demo-srl1-netns", "clab-demo-srl1")
+	holder.NetworkName = "clab"
+	holder.NetworkSettings = clabruntime.GenericMgmtIPs{
+		IPv4addr: "172.20.20.2", IPv4pLen: 24, IPv6addr: "3fff:172:20:20::2", IPv6pLen: 64,
+	}
+	holder.Ports = []*clabtypes.GenericPortBinding{{HostPort: 50022, ContainerPort: 22, Protocol: "tcp"}}
+	linux := netnsTestContainer("clab-demo-linux1", "")
+	linux.NetworkName = "clab"
+	linux.NetworkSettings = clabruntime.GenericMgmtIPs{IPv4addr: "172.20.20.3", IPv4pLen: 24}
+	stopped := netnsTestContainer("clab-demo-stopped", "")
+
+	containers := []clabruntime.GenericContainer{srl, holder, linux, stopped}
+	inheritNetnsHolderNetwork(containers, containers)
+	containers = withoutInternalContainers(containers)
+
+	if len(containers) != 3 {
+		t.Fatalf("got %d containers after hiding internal ones, want 3", len(containers))
+	}
+	got := ContainerToClabContainerInfo(containers[0])
+	if got.IPv4Address != "172.20.20.2/24" || got.IPv6Address != "3fff:172:20:20::2/64" {
+		t.Errorf("srl1 addresses = %q, %q; want the holder's", got.IPv4Address, got.IPv6Address)
+	}
+	if got.MgmtNetwork != "clab" {
+		t.Errorf("srl1 network = %q, want clab", got.MgmtNetwork)
+	}
+	if len(got.Ports) != 1 || got.Ports[0].HostPort != 50022 {
+		t.Errorf("srl1 ports = %+v, want the holder's", got.Ports)
+	}
+	if ip := containers[1].NetworkSettings.IPv4addr; ip != "172.20.20.3" {
+		t.Errorf("linux1 keeps its own address, got %q", ip)
+	}
+	if ip := containers[2].GetContainerIPv4(); ip != "N/A" {
+		t.Errorf("a node without a holder gets no address, got %q", ip)
+	}
+}
+
+func TestInheritNetnsHolderNetworkUsesSeparatelyListedHolders(t *testing.T) {
+	// a listing filtered by container name holds the node only
+	containers := []clabruntime.GenericContainer{netnsTestContainer("clab-demo-srl1", "")}
+	holder := netnsTestContainer("clab-demo-srl1-netns", "clab-demo-srl1")
+	holder.NetworkSettings = clabruntime.GenericMgmtIPs{IPv4addr: "172.20.20.2", IPv4pLen: 24}
+
+	if !needsNetnsHolderNetwork(containers[0]) {
+		t.Fatal("a node without addresses should need its holder's network")
+	}
+	inheritNetnsHolderNetwork(containers, []clabruntime.GenericContainer{holder})
+
+	if ip := containers[0].GetContainerIPv4(); ip != "172.20.20.2/24" {
+		t.Errorf("srl1 IPv4 = %q, want 172.20.20.2/24", ip)
 	}
 }

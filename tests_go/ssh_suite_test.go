@@ -114,7 +114,8 @@ func (s *SSHSuite) waitForFirstContainerWithIPv4(labName string, headers http.He
 			var containers []ClabContainerInfo
 			if json.Unmarshal(bodyBytes, &containers) == nil && len(containers) > 0 {
 				for _, c := range containers {
-					if c.Name != "" && c.IPv4Address != "" {
+					// containerlab reports a container without an address as "N/A"
+					if c.Name != "" && c.IPv4Address != "" && c.IPv4Address != "N/A" {
 						return c
 					}
 				}

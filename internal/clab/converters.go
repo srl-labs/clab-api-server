@@ -28,6 +28,66 @@ func withoutInternalContainers(containers []clabruntime.GenericContainer) []clab
 	return slices.DeleteFunc(containers, isInternalContainer)
 }
 
+// netnsHolderRoot returns the long name of the node whose network namespace an internal
+// holder container owns, or "" when c is no such holder.
+func netnsHolderRoot(c clabruntime.GenericContainer) string {
+	if !isInternalContainer(c) {
+		return ""
+	}
+	return c.Labels[clabconst.RootNodeLongName]
+}
+
+// containerLongName returns the node long name of a container, which is also its name.
+func containerLongName(c clabruntime.GenericContainer) string {
+	if name := c.Labels[clabconst.LongName]; name != "" {
+		return name
+	}
+	if len(c.Names) > 0 {
+		return c.Names[0]
+	}
+	return ""
+}
+
+// needsNetnsHolderNetwork reports whether c is a node container the runtime reports no
+// management address for, as is the case when it joined the network namespace of a holder.
+func needsNetnsHolderNetwork(c clabruntime.GenericContainer) bool {
+	return !isInternalContainer(c) && c.NetworkSettings.IPv4addr == "" && c.NetworkSettings.IPv6addr == ""
+}
+
+// inheritNetnsHolderNetwork gives each node that runs in the network namespace of an internal
+// holder container (SR Linux and SR-SIM nodes) the management addresses, network and published
+// ports of that holder. The runtime reports none of them for a container that joins the network
+// namespace of another one, so without this such nodes show no address once the holders are
+// hidden. holders may be containers itself.
+func inheritNetnsHolderNetwork(containers, holders []clabruntime.GenericContainer) {
+	byRoot := make(map[string]int, len(holders))
+	for idx := range holders {
+		if root := netnsHolderRoot(holders[idx]); root != "" {
+			byRoot[root] = idx
+		}
+	}
+	if len(byRoot) == 0 {
+		return
+	}
+
+	for idx := range containers {
+		node := &containers[idx]
+		if !needsNetnsHolderNetwork(*node) {
+			continue
+		}
+		holderIdx, ok := byRoot[containerLongName(*node)]
+		if !ok {
+			continue
+		}
+		holder := holders[holderIdx]
+		node.NetworkSettings = holder.NetworkSettings
+		node.NetworkName = holder.NetworkName
+		if len(node.Ports) == 0 {
+			node.Ports = holder.Ports
+		}
+	}
+}
+
 // ContainerToClabContainerInfo converts a containerlab GenericContainer to API ClabContainerInfo.
 func ContainerToClabContainerInfo(c clabruntime.GenericContainer) models.ClabContainerInfo {
 	name := ""
