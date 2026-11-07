@@ -2,12 +2,10 @@
 package clab
 
 import (
-	"encoding/json"
 	"slices"
 
 	clabconst "github.com/srl-labs/containerlab/constants"
 	clabcore "github.com/srl-labs/containerlab/core"
-	clabexec "github.com/srl-labs/containerlab/exec"
 	clabruntime "github.com/srl-labs/containerlab/runtime"
 	clabtypes "github.com/srl-labs/containerlab/types"
 
@@ -217,51 +215,23 @@ func ContainersInterfacesToInspectOutput(cis []*clabtypes.ContainerInterfaces) m
 	return result
 }
 
-// ExecCollectionToExecResponse converts containerlab exec results to API format.
-func ExecCollectionToExecResponse(ec *clabexec.ExecCollection) models.ExecResponse {
-	result := make(models.ExecResponse)
-
-	if ec == nil {
-		return result
-	}
-
-	// Use the Dump method to get JSON representation and unmarshal it
-	// This is the only way to access the private execEntries map
-	jsonStr, err := ec.Dump("json")
-	if err != nil || jsonStr == "" {
-		return result
-	}
-
-	// Define intermediate type matching ExecResult structure from containerlab
-	// Note: containerlab uses capital case in JSON output
-	type execResult struct {
-		Cmd        []string `json:"Cmd"`
-		ReturnCode int      `json:"ReturnCode"`
-		Stdout     string   `json:"Stdout"`
-		Stderr     string   `json:"Stderr"`
-	}
-
-	// Unmarshal JSON to map
-	var rawResults map[string][]*execResult
-	if err := json.Unmarshal([]byte(jsonStr), &rawResults); err != nil {
-		return result
-	}
-
-	// Convert to API format
-	for nodeName, execResults := range rawResults {
-		var nodeResults []models.ClabExecInternalResult
+// ExecResultsToExecResponse converts exec results to API format. Stdout and
+// stderr are passed on as the command printed them, JSON output included.
+func ExecResultsToExecResponse(results ExecResults) models.ExecResponse {
+	response := make(models.ExecResponse, len(results))
+	for name, execResults := range results {
+		nodeResults := make([]models.ClabExecInternalResult, 0, len(execResults))
 		for _, er := range execResults {
 			nodeResults = append(nodeResults, models.ClabExecInternalResult{
-				Cmd:        er.Cmd,
-				ReturnCode: er.ReturnCode,
-				Stdout:     er.Stdout,
-				Stderr:     er.Stderr,
+				Cmd:        er.GetCmd(),
+				ReturnCode: er.GetReturnCode(),
+				Stdout:     er.GetStdOutString(),
+				Stderr:     er.GetStdErrString(),
 			})
 		}
-		result[nodeName] = nodeResults
+		response[name] = nodeResults
 	}
-
-	return result
+	return response
 }
 
 // GetContainerName safely extracts the container name from a GenericContainer.

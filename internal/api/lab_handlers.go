@@ -1484,7 +1484,7 @@ func ExecCommandHandler(c *gin.Context) {
 	}
 
 	// Convert result to API format
-	response := clab.ExecCollectionToExecResponse(result)
+	response := clab.ExecResultsToExecResponse(result)
 
 	log.Infof("ExecCommand user '%s': Command executed successfully on lab '%s'.", username, labName)
 	c.JSON(http.StatusOK, response)

@@ -288,7 +288,7 @@ func TestNodeLifecycleExecAndSaveOnLabRuntime(t *testing.T) {
 
 	result, err := svc.Exec(ctx, ExecOptions{LabName: "lab1", Username: "alice", Commands: []string{"ip a"}})
 	require.NoError(t, err)
-	response := ExecCollectionToExecResponse(result)
+	response := ExecResultsToExecResponse(result)
 	require.Len(t, response, 2)
 	execs := fake.CallsOf("exec")
 	require.Len(t, execs, 2)
@@ -296,7 +296,7 @@ func TestNodeLifecycleExecAndSaveOnLabRuntime(t *testing.T) {
 
 	filtered, err := svc.ExecFiltered(ctx, ExecFilterOptions{LabName: "lab1", Username: "alice", NodeNames: []string{"n2"}, Commands: []string{"uname"}})
 	require.NoError(t, err)
-	filteredResponse := ExecCollectionToExecResponse(filtered)
+	filteredResponse := ExecResultsToExecResponse(filtered)
 	require.Len(t, filteredResponse, 1)
 	require.Contains(t, filteredResponse, "lab1-n2")
 	last := fake.CallsOf("exec")
