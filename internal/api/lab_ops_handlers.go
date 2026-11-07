@@ -144,7 +144,7 @@ func runFilteredExec(c *gin.Context, svc *clab.Service, username, labName, comma
 	}
 
 	log.Infof("ExecCommand user '%s': Command executed successfully on lab '%s'.", username, labName)
-	c.JSON(http.StatusOK, clab.ExecCollectionToExecResponse(result))
+	c.JSON(http.StatusOK, clab.ExecResultsToExecResponse(result))
 }
 
 // parseLifecycleNodeFilter reads the optional comma-separated `nodeFilter`

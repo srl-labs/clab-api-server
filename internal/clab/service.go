@@ -25,7 +25,6 @@ import (
 	gotc "github.com/florianl/go-tc"
 	clabcert "github.com/srl-labs/containerlab/cert"
 	clabcore "github.com/srl-labs/containerlab/core"
-	clabexec "github.com/srl-labs/containerlab/exec"
 	clabgit "github.com/srl-labs/containerlab/git"
 	clablinks "github.com/srl-labs/containerlab/links"
 	clabnetem "github.com/srl-labs/containerlab/netem"
@@ -1737,12 +1736,17 @@ func (s *Service) ListContainersInterfaces(ctx context.Context, containers []cla
 }
 
 // Exec executes commands on containers.
-func (s *Service) Exec(ctx context.Context, opts ExecOptions) (*clabexec.ExecCollection, error) {
+func (s *Service) Exec(ctx context.Context, opts ExecOptions) (ExecResults, error) {
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
 	if IsLabRuntime() {
 		return s.execWithLabRuntime(ctx, opts)
+	}
+
+	execCmds, err := parseExecCommands(opts.Commands)
+	if err != nil {
+		return nil, err
 	}
 
 	// Prepare clab working directory
@@ -1795,12 +1799,15 @@ func (s *Service) Exec(ctx context.Context, opts ExecOptions) (*clabexec.ExecCol
 		"containerName", opts.ContainerName,
 	)
 
-	result, err := clab.Exec(ctx, opts.Commands, listOpts...)
+	containers, err := clab.ListContainers(ctx, listOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("exec failed: %w", err)
 	}
+	if len(containers) == 0 {
+		return nil, fmt.Errorf("exec failed: filter did not match any containers")
+	}
 
-	return result, nil
+	return runContainerExecs(ctx, containers, execCmds), nil
 }
 
 // SaveConfig saves the configuration of lab nodes.

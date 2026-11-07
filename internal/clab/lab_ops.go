@@ -30,6 +30,49 @@ type LabelFilter struct {
 	Value string
 }
 
+// ExecResults holds the results of exec commands per container name, in the
+// order the commands ran. It replaces containerlab's ExecCollection, which only
+// hands its results out as a dump that writes JSON stdout as JSON instead of
+// as a string.
+type ExecResults map[string][]*clabexec.ExecResult
+
+// parseExecCommands splits each command string into its arguments.
+func parseExecCommands(commands []string) ([]*clabexec.ExecCmd, error) {
+	execCmds := make([]*clabexec.ExecCmd, 0, len(commands))
+	for _, command := range commands {
+		execCmd, err := clabexec.NewExecCmdFromString(command)
+		if err != nil {
+			return nil, err
+		}
+		execCmds = append(execCmds, execCmd)
+	}
+	return execCmds, nil
+}
+
+// runContainerExecs runs every command in every container. Containers whose kind
+// does not support exec are skipped, and failed execs are logged and skipped.
+func runContainerExecs(
+	ctx context.Context,
+	containers []clabruntime.GenericContainer,
+	execCmds []*clabexec.ExecCmd,
+) ExecResults {
+	results := ExecResults{}
+	for idx := range containers {
+		name := containers[idx].Names[0]
+		for _, execCmd := range execCmds {
+			result, err := containers[idx].RunExec(ctx, execCmd)
+			if err != nil {
+				if !errors.Is(err, clabexec.ErrRunExecNotSupported) {
+					log.Warnf("exec on %s failed: %v", name, err)
+				}
+				continue
+			}
+			results[name] = append(results[name], result)
+		}
+	}
+	return results
+}
+
 // ExecFilterOptions selects lab containers by topology node names and labels.
 // All filters combine with AND, and the lab name filter is always applied.
 type ExecFilterOptions struct {
@@ -97,7 +140,7 @@ func selectExecContainers(
 }
 
 // ExecFiltered runs commands on the lab containers selected by node names and labels.
-func (s *Service) ExecFiltered(ctx context.Context, opts ExecFilterOptions) (*clabexec.ExecCollection, error) {
+func (s *Service) ExecFiltered(ctx context.Context, opts ExecFilterOptions) (ExecResults, error) {
 	ctx, cancel := s.ensureTimeout(ctx)
 	defer cancel()
 
@@ -109,13 +152,9 @@ func (s *Service) ExecFiltered(ctx context.Context, opts ExecFilterOptions) (*cl
 		return nil, fmt.Errorf("at least one command is required")
 	}
 
-	execCmds := make([]*clabexec.ExecCmd, 0, len(opts.Commands))
-	for _, command := range opts.Commands {
-		execCmd, err := clabexec.NewExecCmdFromString(command)
-		if err != nil {
-			return nil, err
-		}
-		execCmds = append(execCmds, execCmd)
+	execCmds, err := parseExecCommands(opts.Commands)
+	if err != nil {
+		return nil, err
 	}
 
 	if IsLabRuntime() {
@@ -150,22 +189,7 @@ func (s *Service) ExecFiltered(ctx context.Context, opts ExecFilterOptions) (*cl
 		"containers", len(containers),
 	)
 
-	results := clabexec.NewExecCollection()
-	for idx := range containers {
-		for _, execCmd := range execCmds {
-			result, err := containers[idx].RunExec(ctx, execCmd)
-			if err != nil {
-				if errors.Is(err, clabexec.ErrRunExecNotSupported) {
-					continue
-				}
-				log.Warnf("exec on %s failed: %v", containers[idx].Names[0], err)
-				continue
-			}
-			results.Add(containers[idx].Names[0], result)
-		}
-	}
-
-	return results, nil
+	return runContainerExecs(ctx, containers, execCmds), nil
 }
 
 // MissingLabNodes returns the requested topology node names that have no

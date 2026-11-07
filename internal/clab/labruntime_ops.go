@@ -319,8 +319,12 @@ func (s *Service) labRuntimeNodeLifecycle(ctx context.Context, opts NodeLifecycl
 }
 
 // execWithLabRuntime runs commands in the lab's containers selected by the list options.
-func (s *Service) execWithLabRuntime(ctx context.Context, opts ExecOptions) (*clabexec.ExecCollection, error) {
-	clab, _, err := s.openLabRuntimeLab(ctx, opts.Username, opts.LabName, "")
+func (s *Service) execWithLabRuntime(ctx context.Context, opts ExecOptions) (ExecResults, error) {
+	execCmds, err := parseExecCommands(opts.Commands)
+	if err != nil {
+		return nil, err
+	}
+	clab, scope, err := s.openLabRuntimeLab(ctx, opts.Username, opts.LabName, "")
 	if err != nil {
 		return nil, err
 	}
@@ -331,11 +335,14 @@ func (s *Service) execWithLabRuntime(ctx context.Context, opts ExecOptions) (*cl
 	if opts.NodeName != "" {
 		listOpts = append(listOpts, clabcore.WithListNodeName(opts.NodeName))
 	}
-	result, err := clab.Exec(ctx, opts.Commands, listOpts...)
+	containers, err := clab.ListLabRuntimeContainers(ctx, false, listOpts...)
 	if err != nil {
-		return result, fmt.Errorf("exec failed: %w", err)
+		return nil, fmt.Errorf("exec failed: %w", err)
 	}
-	return result, nil
+	if len(containers) == 0 {
+		return nil, fmt.Errorf("exec failed: filter did not match any containers")
+	}
+	return runLabRuntimeExecs(ctx, clab, scope, opts.LabName, containers, execCmds), nil
 }
 
 // execFilteredWithLabRuntime runs commands on the lab's nodes selected by node names and
@@ -344,7 +351,7 @@ func (s *Service) execFilteredWithLabRuntime(
 	ctx context.Context,
 	opts ExecFilterOptions,
 	execCmds []*clabexec.ExecCmd,
-) (*clabexec.ExecCollection, error) {
+) (ExecResults, error) {
 	clab, scope, err := s.openLabRuntimeLab(ctx, opts.Username, opts.LabName, "")
 	if err != nil {
 		return nil, err
@@ -361,30 +368,43 @@ func (s *Service) execFilteredWithLabRuntime(
 	if len(containers) == 0 {
 		return nil, ErrNoMatchingContainers
 	}
+	return runLabRuntimeExecs(ctx, clab, scope, opts.LabName, containers, execCmds), nil
+}
 
-	results := clabexec.NewExecCollection()
+// runLabRuntimeExecs runs every command on every node of a lab on the lab runtime.
+// Failed execs are logged and skipped.
+func runLabRuntimeExecs(
+	ctx context.Context,
+	clab *clabcore.CLab,
+	scope *LabScope,
+	labName string,
+	containers []clabruntime.GenericContainer,
+	execCmds []*clabexec.ExecCmd,
+) ExecResults {
+	results := ExecResults{}
 	for idx := range containers {
 		container := containers[idx]
+		name := GetContainerName(&container)
 		namespace := scope.Namespace
 		if container.Workload != nil && container.Workload.Namespace != "" {
 			namespace = container.Workload.Namespace
 		}
 		for _, execCmd := range execCmds {
 			result, err := clab.LabRuntime.Exec(ctx, clablabruntime.ExecRequest{
-				Name:      opts.LabName,
+				Name:      labName,
 				Namespace: namespace,
 				NodeName:  container.Labels[clabconst.NodeName],
 				Command:   execCmd.GetCmd(),
 				Identity:  scope.Identity,
 			})
 			if err != nil {
-				log.Warnf("exec on %s failed: %v", GetContainerName(&container), err)
+				log.Warnf("exec on %s failed: %v", name, err)
 				continue
 			}
-			results.Add(GetContainerName(&container), result)
+			results[name] = append(results[name], result)
 		}
 	}
-	return results, nil
+	return results
 }
 
 // saveWithLabRuntime saves the running configuration of the lab's nodes on the lab
