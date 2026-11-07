@@ -83,6 +83,16 @@ tasks:
           exit 0
         fi
 
+  docs:
+    desc: Preview the documentation site on http://localhost:8000
+    cmds:
+      - scripts/docs.sh serve
+
+  docs:build:
+    desc: Build the documentation site into site/
+    cmds:
+      - scripts/docs.sh build
+
   default:
     desc: Run all key steps (tidy, swag, build)
     cmds:

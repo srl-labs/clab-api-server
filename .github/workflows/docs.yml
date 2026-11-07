@@ -1,0 +1,39 @@
+name: Documentation
+
+on:
+  pull_request:
+    paths:
+      - "docs-site/**"
+      - "docs-overrides/**"
+      - "docs/swagger.*"
+      - "tools/clab_docs/**"
+      - "scripts/docs.sh"
+      - "zensical.toml"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/docs.yml"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Build documentation
+        run: scripts/docs.sh build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: documentation-preview
+          path: site/
