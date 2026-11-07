@@ -1,0 +1,46 @@
+{
+  "gzipBytes": 227387,
+  "cssBytes": 19564,
+  "files": [
+    {
+      "name": "assets/viewer-DOAHIrmF.js",
+      "bytes": 3457,
+      "gzip": 1603
+    },
+    {
+      "name": "assets/mountViewer-QuEEYzuW.js",
+      "bytes": 333003,
+      "gzip": 104864
+    },
+    {
+      "name": "assets/rolldown-runtime-hePW80VL.js",
+      "bytes": 716,
+      "gzip": 428
+    },
+    {
+      "name": "assets/types-CblE_Dqm.js",
+      "bytes": 377229,
+      "gzip": 107331
+    },
+    {
+      "name": "assets/jsx-runtime-BNakU3Ej.js",
+      "bytes": 8243,
+      "gzip": 3113
+    },
+    {
+      "name": "assets/timeout-DVN2vp-7.js",
+      "bytes": 16090,
+      "gzip": 6481
+    },
+    {
+      "name": "index.js",
+      "bytes": 139,
+      "gzip": 129
+    },
+    {
+      "name": "styles.css",
+      "bytes": 19564,
+      "gzip": 3438
+    }
+  ]
+}

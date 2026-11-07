@@ -1,0 +1,1 @@
+import{t as e}from"./assets/mountViewer-QuEEYzuW.js";function t(t,n){let r=e(t,n);return{unmount:()=>r.unmount()}}export{t as mountViewer};
