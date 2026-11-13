@@ -453,6 +453,12 @@ definitions:
         items:
           $ref: '#/definitions/models.ClabPortBinding'
         type: array
+      rootNodeName:
+        description: |-
+          RootNodeName is the topology node a sub-container belongs to, e.g. the
+          node of a distributed SR-SIM's CPM and card containers. Empty otherwise.
+        example: sr1
+        type: string
       state:
         description: e.g., "running"
         type: string
