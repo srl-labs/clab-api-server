@@ -8357,6 +8357,11 @@
                         "$ref": "#/definitions/models.ClabPortBinding"
                     }
                 },
+                "rootNodeName": {
+                    "description": "RootNodeName is the topology node a sub-container belongs to, e.g. the\nnode of a distributed SR-SIM's CPM and card containers. Empty otherwise.",
+                    "type": "string",
+                    "example": "sr1"
+                },
                 "state": {
                     "description": "e.g., \"running\"",
                     "type": "string"

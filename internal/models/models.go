@@ -172,10 +172,13 @@ type ClabContainerInfo struct {
 	IPv6Address string `json:"ipv6_address"` // Management IPv6 Address/Mask
 	LabName     string `json:"lab_name"`     // Name of the lab this node belongs to (redundant with map key but present)
 	NodeName    string `json:"nodeName"`     // Topology node name from containerlab labels
-	LabPath     string `json:"labPath"`      // Path to the topology file used (relative)
-	AbsLabPath  string `json:"absLabPath"`   // Absolute path to topology file
-	Group       string `json:"group"`        // Group assigned in topology (Might not always be present)
-	Owner       string `json:"owner"`        // OS user from clab inspect output (Used for authorization)
+	// RootNodeName is the topology node a sub-container belongs to, e.g. the
+	// node of a distributed SR-SIM's CPM and card containers. Empty otherwise.
+	RootNodeName string `json:"rootNodeName,omitempty" example:"sr1"`
+	LabPath      string `json:"labPath"`    // Path to the topology file used (relative)
+	AbsLabPath   string `json:"absLabPath"` // Absolute path to topology file
+	Group        string `json:"group"`      // Group assigned in topology (Might not always be present)
+	Owner        string `json:"owner"`      // OS user from clab inspect output (Used for authorization)
 	// MgmtNetwork is the management network the node is attached to; with
 	// several management networks (mgmt list in the topology) it tells them apart.
 	MgmtNetwork string            `json:"mgmt_network,omitempty" example:"clab"`

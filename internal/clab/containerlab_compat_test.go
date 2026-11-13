@@ -150,6 +150,26 @@ func TestContainerToClabContainerInfoReportsMgmtNetworkAndPorts(t *testing.T) {
 	}
 }
 
+func TestContainerToClabContainerInfoReportsRootNodeName(t *testing.T) {
+	info := ContainerToClabContainerInfo(clabruntime.GenericContainer{
+		Names: []string{"clab-demo-sr1-1"},
+		Labels: map[string]string{
+			clabconst.Containerlab: "demo",
+			clabconst.NodeName:     "sr1-1",
+			clabconst.RootNodeName: "sr1",
+		},
+	})
+	if info.NodeName != "sr1-1" || info.RootNodeName != "sr1" {
+		t.Fatalf("node = %q, root node = %q, want sr1-1 and sr1", info.NodeName, info.RootNodeName)
+	}
+
+	if info := ContainerToClabContainerInfo(clabruntime.GenericContainer{
+		Labels: map[string]string{clabconst.NodeName: "n1"},
+	}); info.RootNodeName != "" {
+		t.Fatalf("root node of a plain node = %q, want none", info.RootNodeName)
+	}
+}
+
 func TestTailscaleDeviceClassification(t *testing.T) {
 	tests := []struct {
 		name     string
