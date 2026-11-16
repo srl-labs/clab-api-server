@@ -4,7 +4,7 @@ go 1.27.3
 
 require (
 	github.com/charmbracelet/log v1.0.0
-	github.com/containernetworking/plugins v1.9.1
+	github.com/containernetworking/plugins v1.10.0
 	github.com/creack/pty v1.1.24
 	github.com/florianl/go-tc v0.4.8
 	github.com/fsnotify/fsnotify v1.10.1
