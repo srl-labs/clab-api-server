@@ -16,7 +16,8 @@ require (
 	github.com/msteinert/pam v1.2.0
 	github.com/shirou/gopsutil/v4 v4.26.10
 	github.com/spf13/viper v1.21.0
-	github.com/srl-labs/containerlab v0.83.0
+	// Includes the SR Linux netns fallback absent from the cached v0.83.0 module.
+	github.com/srl-labs/containerlab v0.83.1-0.20261106201105-fb20edd45b64
 	github.com/stretchr/testify v1.12.1
 	github.com/swaggo/files v1.0.1
 	github.com/swaggo/gin-swagger v1.6.1
@@ -37,6 +38,8 @@ require (
 
 require (
 	al.essio.dev/pkg/shellescape v1.6.1 // indirect
+	charm.land/fang/v2 v2.0.1 // indirect
+	charm.land/lipgloss/v2 v2.0.6 // indirect
 	cyphar.com/go-pathrs v0.2.6 // indirect
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20261013165250-51075c6ea6bc // indirect
@@ -62,9 +65,13 @@ require (
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/harmonica v0.2.0 // indirect
 	github.com/charmbracelet/lipgloss v1.1.0 // indirect
+	github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886 // indirect
 	github.com/charmbracelet/x/ansi v0.11.9 // indirect
 	github.com/charmbracelet/x/cellbuf v0.0.15 // indirect
+	github.com/charmbracelet/x/exp/charmtone v0.0.0-20250603201427-c31516f43444 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
+	github.com/charmbracelet/x/termios v0.1.1 // indirect
+	github.com/charmbracelet/x/windows v0.2.2 // indirect
 	github.com/chzyer/readline v1.5.1 // indirect
 	github.com/cilium/ebpf v0.22.0 // indirect
 	github.com/clabernetes/clabernetes v0.11.0 // indirect
@@ -149,9 +156,11 @@ require (
 	github.com/gorilla/schema v1.4.1 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
+	github.com/hashicorp/go-version v1.9.0 // indirect
 	github.com/hellt/envsubst v0.2.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
+	github.com/jedib0t/go-pretty/v6 v6.8.3 // indirect
 	github.com/jinzhu/copier v0.4.0 // indirect
 	github.com/jlaffaye/ftp v0.2.4 // indirect
 	github.com/josharian/native v1.2.0 // indirect
@@ -198,6 +207,10 @@ require (
 	github.com/morikuni/aec v1.1.0 // indirect
 	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
+	github.com/muesli/mango v0.1.0 // indirect
+	github.com/muesli/mango-cobra v1.2.0 // indirect
+	github.com/muesli/mango-pflag v0.1.0 // indirect
+	github.com/muesli/roff v0.1.0 // indirect
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nxadm/tail v1.4.11 // indirect
