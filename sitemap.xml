@@ -4,28 +4,28 @@
         <loc>https://srl-labs.github.io/clab-api-server/</loc>
       </url>
       <url>
-        <loc>https://srl-labs.github.io/clab-api-server/getting-started/quick-start/</loc>
+        <loc>https://srl-labs.github.io/clab-api-server/contributing/</loc>
       </url>
       <url>
         <loc>https://srl-labs.github.io/clab-api-server/getting-started/how-it-works/</loc>
       </url>
       <url>
-        <loc>https://srl-labs.github.io/clab-api-server/install/</loc>
-      </url>
-      <url>
-        <loc>https://srl-labs.github.io/clab-api-server/install/service/</loc>
-      </url>
-      <url>
-        <loc>https://srl-labs.github.io/clab-api-server/install/container/</loc>
-      </url>
-      <url>
-        <loc>https://srl-labs.github.io/clab-api-server/install/binary/</loc>
-      </url>
-      <url>
-        <loc>https://srl-labs.github.io/clab-api-server/install/upgrade/</loc>
+        <loc>https://srl-labs.github.io/clab-api-server/getting-started/quick-start/</loc>
       </url>
       <url>
         <loc>https://srl-labs.github.io/clab-api-server/guides/api/</loc>
+      </url>
+      <url>
+        <loc>https://srl-labs.github.io/clab-api-server/guides/deploy-options/</loc>
+      </url>
+      <url>
+        <loc>https://srl-labs.github.io/clab-api-server/guides/kubernetes/</loc>
+      </url>
+      <url>
+        <loc>https://srl-labs.github.io/clab-api-server/guides/shared-labs/</loc>
+      </url>
+      <url>
+        <loc>https://srl-labs.github.io/clab-api-server/guides/templates/</loc>
       </url>
       <url>
         <loc>https://srl-labs.github.io/clab-api-server/guides/users/</loc>
@@ -34,30 +34,30 @@
         <loc>https://srl-labs.github.io/clab-api-server/guides/workspaces/</loc>
       </url>
       <url>
-        <loc>https://srl-labs.github.io/clab-api-server/guides/templates/</loc>
+        <loc>https://srl-labs.github.io/clab-api-server/install/</loc>
       </url>
       <url>
-        <loc>https://srl-labs.github.io/clab-api-server/guides/deploy-options/</loc>
+        <loc>https://srl-labs.github.io/clab-api-server/install/binary/</loc>
       </url>
       <url>
-        <loc>https://srl-labs.github.io/clab-api-server/guides/shared-labs/</loc>
+        <loc>https://srl-labs.github.io/clab-api-server/install/container/</loc>
       </url>
       <url>
-        <loc>https://srl-labs.github.io/clab-api-server/guides/kubernetes/</loc>
+        <loc>https://srl-labs.github.io/clab-api-server/install/service/</loc>
       </url>
       <url>
-        <loc>https://srl-labs.github.io/clab-api-server/reference/configuration/</loc>
-      </url>
-      <url>
-        <loc>https://srl-labs.github.io/clab-api-server/reference/security/</loc>
-      </url>
-      <url>
-        <loc>https://srl-labs.github.io/clab-api-server/reference/kubernetes/</loc>
+        <loc>https://srl-labs.github.io/clab-api-server/install/upgrade/</loc>
       </url>
       <url>
         <loc>https://srl-labs.github.io/clab-api-server/reference/api/</loc>
       </url>
       <url>
-        <loc>https://srl-labs.github.io/clab-api-server/contributing/</loc>
+        <loc>https://srl-labs.github.io/clab-api-server/reference/configuration/</loc>
+      </url>
+      <url>
+        <loc>https://srl-labs.github.io/clab-api-server/reference/kubernetes/</loc>
+      </url>
+      <url>
+        <loc>https://srl-labs.github.io/clab-api-server/reference/security/</loc>
       </url>
 </urlset>
