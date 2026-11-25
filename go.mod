@@ -16,7 +16,10 @@ require (
 	github.com/msteinert/pam v1.2.0
 	github.com/shirou/gopsutil/v4 v4.26.10
 	github.com/spf13/viper v1.21.0
-	github.com/srl-labs/containerlab v0.83.0
+	// Temporary pin: this is the commit the v0.83.0 release binaries were built from.
+	// The v0.83.0 tag was moved after the Go proxy cached it, so the v0.83.0 module
+	// lacks the SR Linux netns fallback. Switch back to v0.83.1 or v0.84.0 once tagged.
+	github.com/srl-labs/containerlab v0.83.1-0.20261106201105-fb20edd45b64
 	github.com/stretchr/testify v1.12.1
 	github.com/swaggo/files v1.0.1
 	github.com/swaggo/gin-swagger v1.6.1
